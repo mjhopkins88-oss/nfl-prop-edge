@@ -1,0 +1,17 @@
+# Python dependencies for the ingestion scripts.
+#
+# The current scaffold (`ingest-nfl-history.py`) uses only the standard
+# library — it writes schema-only CSVs so the downstream Prisma loader
+# can be developed against the expected file shape. Once the real
+# nflverse pulls are uncommented in the script, install one of the two
+# wrappers below. Both pull from the same nflverse-data GitHub releases
+# (no API keys required).
+
+# --- choose one ----------------------------------------------------------
+# nflreadpy>=0.2          # Polars-first, actively maintained (recommended)
+# nfl_data_py>=0.3.3      # Pandas-based legacy wrapper (alt)
+
+# --- common (uncomment alongside whichever wrapper above) ---------------
+# polars>=1.0             # used by nflreadpy
+# pandas>=2.2             # used by nfl_data_py and any custom aggregations
+# pyarrow>=15.0           # parquet IO for raw PBP frames
