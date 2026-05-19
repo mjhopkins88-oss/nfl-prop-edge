@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPropDetail, getProps } from "@/lib/mock-data";
+import { getAllPropIds, getPropDetail } from "@/lib/data/props";
 import {
   PROP_TYPE_LABEL,
   PROP_TYPE_UNIT,
@@ -11,14 +11,14 @@ import {
   formatLine,
   formatProjection,
 } from "@/lib/prop-utils";
-import type { GameLog, PropType } from "@/lib/types";
+import type { GameLog, PropType } from "@/lib/data/types";
 import TeamBadge from "@/components/TeamBadge";
 import EdgeBadge from "@/components/EdgeBadge";
 import RecommendationPill from "@/components/RecommendationPill";
 import ConfidenceMeter from "@/components/ConfidenceMeter";
 
 export function generateStaticParams() {
-  return getProps().map((p) => ({ id: p.id }));
+  return getAllPropIds().map((id) => ({ id }));
 }
 
 const STAT_KEY: Record<PropType, keyof GameLog> = {

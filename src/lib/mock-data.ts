@@ -1,4 +1,5 @@
 import type {
+  BacktestSummary,
   Game,
   GameLog,
   LineQuote,
@@ -837,6 +838,32 @@ const matchupNotesByProp: Record<string, string[]> = {
 export function getProps(): PropMarket[] {
   return propMarkets;
 }
+
+export function getRecentLogsFromMock(playerId: string): GameLog[] {
+  return recentLogsByPlayer[playerId] ?? [];
+}
+
+export const backtestMockSummary: BacktestSummary = {
+  windowLabel: "Weeks 1–10, 2025 season",
+  totalPlays: 247,
+  wins: 132,
+  losses: 107,
+  pushes: 8,
+  unitsStaked: 247,
+  unitsReturn: 265.4,
+  roiPct: 7.5,
+  byMarket: [
+    { propType: "PASSING_YARDS", plays: 38, hitRate: 0.605, roiUnits: 4.2, roiPct: 11.1 },
+    { propType: "PASSING_ATTEMPTS", plays: 24, hitRate: 0.583, roiUnits: 2.1, roiPct: 8.8 },
+    { propType: "PASSING_COMPLETIONS", plays: 22, hitRate: 0.591, roiUnits: 1.6, roiPct: 7.3 },
+    { propType: "RECEPTIONS", plays: 41, hitRate: 0.488, roiUnits: -0.9, roiPct: -2.2 },
+    { propType: "RECEIVING_YARDS", plays: 45, hitRate: 0.578, roiUnits: 3.4, roiPct: 7.6 },
+    { propType: "RUSHING_ATTEMPTS", plays: 33, hitRate: 0.545, roiUnits: 1.1, roiPct: 3.3 },
+    { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
+  ],
+  bestMarket: { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
+  worstMarket: { propType: "RECEPTIONS", plays: 41, hitRate: 0.488, roiUnits: -0.9, roiPct: -2.2 },
+};
 
 export function getPropById(id: string): PropMarket | undefined {
   return propMarkets.find((p) => p.id === id);

@@ -1,9 +1,16 @@
 import PropFilters from "@/components/PropFilters";
 import PropTable from "@/components/PropTable";
 import StatCard from "@/components/StatCard";
-import { getProps } from "@/lib/mock-data";
-import type { PropMarket, PropType, Position, Recommendation } from "@/lib/types";
-import { getPlayerById } from "@/lib/mock-data";
+import {
+  getDashboardSummary,
+  getPropOpportunities,
+} from "@/lib/data/props";
+import type {
+  Position,
+  PropOpportunitySort,
+  PropType,
+  Recommendation,
+} from "@/lib/data/types";
 
 const PROP_TYPE_VALUES = new Set<PropType>([
   "PASSING_ATTEMPTS",
@@ -16,6 +23,7 @@ const PROP_TYPE_VALUES = new Set<PropType>([
 ]);
 const POSITION_VALUES = new Set<Position>(["QB", "RB", "WR", "TE"]);
 const RECOMMENDATION_VALUES = new Set<Recommendation>(["OVER", "UNDER", "PASS"]);
+const SORT_VALUES = new Set<PropOpportunitySort>(["edge", "confidence", "player"]);
 
 type Search = {
   propType?: string;
@@ -37,37 +45,11 @@ function parseFilters(raw: Search) {
     raw.recommendation && RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
       ? (raw.recommendation as Recommendation)
       : undefined;
-  const sort = raw.sort === "confidence" || raw.sort === "player" ? raw.sort : "edge";
+  const sort: PropOpportunitySort =
+    raw.sort && SORT_VALUES.has(raw.sort as PropOpportunitySort)
+      ? (raw.sort as PropOpportunitySort)
+      : "edge";
   return { propType, position, recommendation, sort };
-}
-
-function applyFilters(
-  props: PropMarket[],
-  filters: ReturnType<typeof parseFilters>,
-): PropMarket[] {
-  let result = props;
-  if (filters.propType) result = result.filter((p) => p.propType === filters.propType);
-  if (filters.position) {
-    result = result.filter((p) => {
-      const player = getPlayerById(p.playerId);
-      return player?.position === filters.position;
-    });
-  }
-  if (filters.recommendation) {
-    result = result.filter((p) => p.recommendation === filters.recommendation);
-  }
-  if (filters.sort === "confidence") {
-    result = [...result].sort((a, b) => b.confidence - a.confidence);
-  } else if (filters.sort === "player") {
-    result = [...result].sort((a, b) => {
-      const pa = getPlayerById(a.playerId)?.fullName ?? "";
-      const pb = getPlayerById(b.playerId)?.fullName ?? "";
-      return pa.localeCompare(pb);
-    });
-  } else {
-    result = [...result].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
-  }
-  return result;
 }
 
 export default async function DashboardPage({
@@ -76,16 +58,13 @@ export default async function DashboardPage({
   searchParams: Promise<Search>;
 }) {
   const raw = await searchParams;
-  const filters = parseFilters(raw);
-  const all = getProps();
-  const filtered = applyFilters(all, filters);
+  const { propType, position, recommendation, sort } = parseFilters(raw);
 
-  const playable = all.filter((p) => p.recommendation !== "PASS");
-  const positiveEdges = playable.filter((p) => p.edge >= 0.04);
-  const avgEdge =
-    playable.reduce((acc, p) => acc + Math.abs(p.edge), 0) / Math.max(playable.length, 1);
-  const topEdgeProp = [...playable].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge))[0];
-  const topPlayer = topEdgeProp ? getPlayerById(topEdgeProp.playerId) : undefined;
+  const summary = getDashboardSummary();
+  const opportunities = getPropOpportunities({
+    filter: { propType, position, recommendation },
+    sort,
+  });
 
   return (
     <div className="space-y-6">
@@ -102,25 +81,25 @@ export default async function DashboardPage({
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Tracked markets"
-          value={`${all.length}`}
-          hint={`${playable.length} actionable`}
+          value={`${summary.trackedMarkets}`}
+          hint={`${summary.actionableMarkets} actionable`}
         />
         <StatCard
           label="Positive edges"
-          value={`${positiveEdges.length}`}
+          value={`${summary.positiveEdges}`}
           hint=">= +4.0% over market"
           tone="positive"
         />
         <StatCard
           label="Avg model edge"
-          value={`${(avgEdge * 100).toFixed(1)}%`}
+          value={`${(summary.averageEdge * 100).toFixed(1)}%`}
           hint="across actionable props"
         />
         <StatCard
           label="Top edge"
-          value={topEdgeProp ? `${(Math.abs(topEdgeProp.edge) * 100).toFixed(1)}%` : "—"}
-          hint={topPlayer?.fullName}
-          tone={topEdgeProp && topEdgeProp.edge > 0 ? "positive" : "negative"}
+          value={summary.topEdge ? `${(summary.topEdge.value * 100).toFixed(1)}%` : "—"}
+          hint={summary.topEdge?.playerName}
+          tone={summary.topEdge?.positive ? "positive" : "negative"}
         />
       </section>
 
@@ -131,9 +110,9 @@ export default async function DashboardPage({
           <h2 className="text-sm font-medium uppercase tracking-wider text-ink-400">
             Opportunities
           </h2>
-          <span className="text-xs text-ink-500">{filtered.length} shown</span>
+          <span className="text-xs text-ink-500">{opportunities.length} shown</span>
         </div>
-        <PropTable props={filtered} />
+        <PropTable opportunities={opportunities} />
       </section>
     </div>
   );

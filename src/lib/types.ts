@@ -87,3 +87,25 @@ export interface PropDetail extends PropMarket {
   altLines: LineQuote[];
   matchupNotes: string[];
 }
+
+export interface BacktestMarketSlice {
+  propType: PropType;
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export interface BacktestSummary {
+  windowLabel: string;
+  totalPlays: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  unitsStaked: number;
+  unitsReturn: number;
+  roiPct: number;
+  byMarket: BacktestMarketSlice[];
+  bestMarket: BacktestMarketSlice;
+  worstMarket: BacktestMarketSlice;
+}

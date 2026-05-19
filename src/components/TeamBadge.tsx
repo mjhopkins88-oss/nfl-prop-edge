@@ -1,4 +1,4 @@
-import { getTeam } from "@/lib/mock-data";
+import { getTeamByAbbr } from "@/lib/data/players";
 
 export default function TeamBadge({
   abbr,
@@ -7,7 +7,7 @@ export default function TeamBadge({
   abbr: string;
   size?: "sm" | "md" | "lg";
 }) {
-  const team = getTeam(abbr);
+  const team = getTeamByAbbr(abbr);
   const bg = team?.primary ?? "#272d3d";
   const fg = team?.secondary ?? "#ffffff";
 
