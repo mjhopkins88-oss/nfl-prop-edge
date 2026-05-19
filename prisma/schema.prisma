@@ -1,5 +1,11 @@
 // Prisma schema for NFL Prop Edge (V1).
 // V1 covers lower-variance player props only — see PropType enum.
+//
+// Shape: PropMarket is the canonical identity of a market (player + game +
+// propType + line). Each book or exchange contributes PropQuotes against
+// that market. Our model writes Projections, grouped by ModelRun for
+// versioning and history. BacktestResult stores per-model evaluation
+// aggregates by prop type / season / week.
 
 generator client {
   provider = "prisma-client-js"
@@ -31,6 +37,12 @@ enum Recommendation {
   OVER
   UNDER
   PASS
+}
+
+enum ModelRunType {
+  SCHEDULED
+  MANUAL
+  BACKTEST
 }
 
 model Team {
@@ -76,31 +88,120 @@ model Game {
   @@index([season, week])
 }
 
+/// One market = one (player, game, propType, line). Different lines for
+/// the same player/game/propType are separate markets (e.g. alt lines).
+/// Quotes attach to a market and let us track every book's price.
 model PropMarket {
-  id               String          @id @default(cuid())
-  playerId         String
-  gameId           String
-  propType         PropType
-  line             Float
-  overOdds         Int
-  underOdds        Int
-  sportsbook       String
-  projection       Float
-  projectionStdDev Float
-  modelHitRateOver Float
-  bookImpliedOver  Float
-  edge             Float
-  confidence       Float
-  recommendation   Recommendation
-  updatedAt        DateTime        @updatedAt
+  id           String   @id @default(cuid())
+  playerId     String
+  gameId       String
+  propType     PropType
+  line         Float
+  marketKey    String   @unique
+  source       String
+  snapshotTime DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  player           Player          @relation(fields: [playerId], references: [id])
-  game             Game            @relation(fields: [gameId], references: [id])
+  player       Player        @relation(fields: [playerId], references: [id])
+  game         Game          @relation(fields: [gameId], references: [id])
+  quotes       PropQuote[]
+  projections  Projection[]
 
+  @@unique([playerId, gameId, propType, line])
   @@index([propType])
-  @@index([playerId])
-  @@index([gameId])
-  @@index([edge])
+  @@index([snapshotTime])
+}
+
+/// One quote = one sportsbook (or Kalshi) pricing the over/under on a
+/// PropMarket at a point in time. Stores raw American odds plus both
+/// the per-side implied probability and the no-vig (de-juiced) version.
+model PropQuote {
+  id                      String     @id @default(cuid())
+  propMarketId            String
+  bookName                String
+  overPrice               Int
+  underPrice              Int
+  overImpliedProbability  Float
+  underImpliedProbability Float
+  noVigOverProbability    Float
+  noVigUnderProbability   Float
+  quoteTime               DateTime
+  createdAt               DateTime   @default(now())
+
+  propMarket              PropMarket @relation(fields: [propMarketId], references: [id])
+
+  @@index([propMarketId, quoteTime])
+  @@index([bookName])
+}
+
+/// One projection = one model's view of a PropMarket at a point in time.
+/// A market accumulates many Projections over its lifetime (line moves,
+/// new model versions, mid-week refreshes). modelRunId ties projections
+/// back to the run that produced them.
+model Projection {
+  id                    String         @id @default(cuid())
+  propMarketId          String
+  modelRunId            String
+  projectedMean         Float
+  projectedStdDev       Float
+  modelOverProbability  Float
+  modelUnderProbability Float
+  edge                  Float
+  expectedValue         Float
+  recommendation        Recommendation
+  confidence            Float
+  qualified             Boolean
+  reasons               Json
+  risks                 Json
+  createdAt             DateTime       @default(now())
+
+  propMarket            PropMarket     @relation(fields: [propMarketId], references: [id])
+  modelRun              ModelRun       @relation(fields: [modelRunId], references: [id])
+
+  @@index([propMarketId, createdAt])
+  @@index([modelRunId])
+  @@index([qualified, edge])
+}
+
+/// One ModelRun = one execution of the projection model. Groups every
+/// Projection (and Backtest aggregates) it produced.
+model ModelRun {
+  id        String       @id @default(cuid())
+  name      String
+  version   String
+  runType   ModelRunType
+  notes     String?
+  createdAt DateTime     @default(now())
+
+  projections     Projection[]
+  backtestResults BacktestResult[]
+
+  @@index([version])
+  @@index([createdAt])
+}
+
+/// Backtest aggregate: one row per (model run, prop type, season, week).
+model BacktestResult {
+  id          String   @id @default(cuid())
+  modelRunId  String
+  propType    PropType
+  season      Int
+  week        Int
+  plays       Int
+  wins        Int
+  losses      Int
+  pushes      Int
+  unitsStaked Float
+  unitsReturn Float
+  roiPct      Float
+  hitRate     Float
+  createdAt   DateTime @default(now())
+
+  modelRun    ModelRun @relation(fields: [modelRunId], references: [id])
+
+  @@unique([modelRunId, propType, season, week])
+  @@index([propType, season, week])
 }
 
 model GameLog {
