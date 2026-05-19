@@ -1,0 +1,123 @@
+// Prisma schema for NFL Prop Edge (V1).
+// V1 covers lower-variance player props only — see PropType enum.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Position {
+  QB
+  RB
+  WR
+  TE
+}
+
+enum PropType {
+  PASSING_ATTEMPTS
+  PASSING_COMPLETIONS
+  PASSING_YARDS
+  RECEPTIONS
+  RECEIVING_YARDS
+  RUSHING_ATTEMPTS
+  RUSHING_YARDS
+}
+
+enum Recommendation {
+  OVER
+  UNDER
+  PASS
+}
+
+model Team {
+  id           String   @id @default(cuid())
+  abbreviation String   @unique
+  name         String
+  city         String
+  conference   String
+  division     String
+
+  players      Player[]
+  homeGames    Game[]   @relation("HomeTeam")
+  awayGames    Game[]   @relation("AwayTeam")
+}
+
+model Player {
+  id        String   @id @default(cuid())
+  fullName  String
+  position  Position
+  jersey    Int?
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id])
+
+  props     PropMarket[]
+  gameLogs  GameLog[]
+
+  @@index([teamId])
+  @@index([position])
+}
+
+model Game {
+  id         String   @id @default(cuid())
+  season     Int
+  week       Int
+  kickoff    DateTime
+  homeTeamId String
+  awayTeamId String
+  homeTeam   Team     @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam   Team     @relation("AwayTeam", fields: [awayTeamId], references: [id])
+
+  props      PropMarket[]
+
+  @@index([season, week])
+}
+
+model PropMarket {
+  id               String          @id @default(cuid())
+  playerId         String
+  gameId           String
+  propType         PropType
+  line             Float
+  overOdds         Int
+  underOdds        Int
+  sportsbook       String
+  projection       Float
+  projectionStdDev Float
+  modelHitRateOver Float
+  bookImpliedOver  Float
+  edge             Float
+  confidence       Float
+  recommendation   Recommendation
+  updatedAt        DateTime        @updatedAt
+
+  player           Player          @relation(fields: [playerId], references: [id])
+  game             Game            @relation(fields: [gameId], references: [id])
+
+  @@index([propType])
+  @@index([playerId])
+  @@index([gameId])
+  @@index([edge])
+}
+
+model GameLog {
+  id                  String   @id @default(cuid())
+  playerId            String
+  season              Int
+  week                Int
+  opponentAbbr        String
+  passingAttempts     Int      @default(0)
+  passingCompletions  Int      @default(0)
+  passingYards        Int      @default(0)
+  receptions          Int      @default(0)
+  receivingYards      Int      @default(0)
+  rushingAttempts     Int      @default(0)
+  rushingYards        Int      @default(0)
+
+  player              Player   @relation(fields: [playerId], references: [id])
+
+  @@index([playerId, season, week])
+}

@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: theme("colors.ink.950");
+  color: #e7ecf3;
+  min-height: 100%;
+}
+
+body {
+  font-feature-settings: "ss01", "cv11";
+  background-image: radial-gradient(
+      circle at 0% 0%,
+      rgba(79, 140, 255, 0.08) 0%,
+      transparent 38%
+    ),
+    radial-gradient(
+      circle at 100% 0%,
+      rgba(22, 211, 148, 0.06) 0%,
+      transparent 35%
+    );
+  background-attachment: fixed;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
