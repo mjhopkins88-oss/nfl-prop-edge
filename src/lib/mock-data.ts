@@ -812,6 +812,26 @@ function alternateBook(current: string, offset: number): string {
   return filtered[offset % filtered.length];
 }
 
+const risksByProp: Record<string, string[]> = {
+  "mahomes-passyds-buf": [
+    "Bills can shorten the game with Cook on the ground if KC trails early.",
+    "Snow/wind reports could cap deep-shot rate.",
+  ],
+  "kelce-rec-buf": [
+    "Variance in 1H usage — KC has dialed Kelce back in low-leverage spots.",
+    "Possible game-script blowout reduces Q4 volume.",
+  ],
+  "saquon-rushyds-dal": [
+    "Negative-script worry if Eagles fall behind a wounded Dallas team unlikely but possible.",
+  ],
+  "henry-rushatt-cin": [
+    "Possible split with Justice Hill in passing situations.",
+  ],
+  "cmc-rec-sea": [
+    "Kittle red-zone usage trending up; could siphon underneath targets.",
+  ],
+};
+
 const matchupNotesByProp: Record<string, string[]> = {
   "mahomes-passyds-buf": [
     "Bills defense allowing 7.4 yards per attempt to QBs over last 4 weeks (28th).",
@@ -861,6 +881,17 @@ export const backtestMockSummary: BacktestSummary = {
     { propType: "RUSHING_ATTEMPTS", plays: 33, hitRate: 0.545, roiUnits: 1.1, roiPct: 3.3 },
     { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
   ],
+  byConfidence: [
+    { tier: "High", plays: 74, hitRate: 0.622, roiUnits: 11.1, roiPct: 15.0 },
+    { tier: "Medium", plays: 118, hitRate: 0.542, roiUnits: 5.9, roiPct: 5.0 },
+    { tier: "Low", plays: 55, hitRate: 0.491, roiUnits: 1.4, roiPct: 2.5 },
+  ],
+  byEdgeBucket: [
+    { bucket: "4–6%", plays: 92, hitRate: 0.522, roiUnits: 2.1, roiPct: 2.3 },
+    { bucket: "6–8%", plays: 78, hitRate: 0.564, roiUnits: 5.4, roiPct: 6.9 },
+    { bucket: "8–10%", plays: 49, hitRate: 0.612, roiUnits: 6.7, roiPct: 13.7 },
+    { bucket: "10%+", plays: 28, hitRate: 0.643, roiUnits: 4.2, roiPct: 15.0 },
+  ],
   bestMarket: { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
   worstMarket: { propType: "RECEPTIONS", plays: 41, hitRate: 0.488, roiUnits: -0.9, roiPct: -2.2 },
 };
@@ -894,6 +925,14 @@ export function getPropDetail(id: string): PropDetail | undefined {
     game.homeTeamAbbr === player.teamAbbr ? game.awayTeamAbbr : game.homeTeamAbbr;
   const opponent = getTeam(opponentAbbr);
   if (!opponent) return undefined;
+
+  const reasons =
+    matchupNotesByProp[prop.id] ??
+    defaultMatchupNotes(prop, player.fullName, opponent.abbreviation);
+  const risks = risksByProp[prop.id] ?? defaultRisks(prop);
+  const whatWouldChangeRec = computeWhatWouldChangeRec(prop);
+  const expectedValue = computeExpectedValue(prop);
+
   return {
     ...prop,
     player,
@@ -902,7 +941,10 @@ export function getPropDetail(id: string): PropDetail | undefined {
     game,
     recentLogs: recentLogsByPlayer[player.id] ?? [],
     altLines: altLinesByProp[prop.id] ?? defaultAltLines(prop),
-    matchupNotes: matchupNotesByProp[prop.id] ?? defaultMatchupNotes(prop, player.fullName, opponent.abbreviation),
+    reasons,
+    risks,
+    whatWouldChangeRec,
+    expectedValue,
   };
 }
 
@@ -912,4 +954,47 @@ function defaultMatchupNotes(prop: PropMarket, playerName: string, opponent: str
     `Model projection sits ${(((prop.projection - prop.line) / prop.line) * 100).toFixed(1)}% off market line.`,
     `Edge held since latest line refresh — confidence rated ${prop.confidence >= 0.7 ? "high" : prop.confidence >= 0.6 ? "medium" : "low"}.`,
   ];
+}
+
+function defaultRisks(prop: PropMarket): string[] {
+  if (prop.confidence < 0.6) {
+    return [
+      "Volatile usage profile — single-game variance can swing outcome.",
+      "Game-script uncertainty could compress projected volume.",
+    ];
+  }
+  if (prop.confidence < 0.7) {
+    return ["Some opponent-adjusted noise; watch for late inactives."];
+  }
+  return ["Standard variance — no major red flags flagged by the model."];
+}
+
+function computeWhatWouldChangeRec(prop: PropMarket): string[] {
+  const side = prop.recommendation;
+  const delta = Math.abs(prop.projection - prop.line);
+  if (side === "PASS") {
+    return [
+      "Edge expands beyond ±4%: market enters our actionable threshold.",
+      "Confidence climbs above 65%: lower-variance signal qualifies.",
+    ];
+  }
+  const direction = side === "OVER" ? "above" : "below";
+  const breakeven = prop.projection.toFixed(1);
+  const flipLine = (
+    side === "OVER" ? prop.line + delta : prop.line - delta
+  ).toFixed(1);
+  return [
+    `Line moves ${direction} ~${breakeven}: edge approaches zero.`,
+    `Our projection ${side === "OVER" ? "drops" : "rises"} past ${flipLine}: recommendation flips.`,
+    `${side === "OVER" ? "Over" : "Under"} price tightens by ~15 cents: EV evaporates.`,
+    `Confidence drops below ${Math.max(50, Math.round(prop.confidence * 100 - 15))}%: strategy filter marks as PASS.`,
+  ];
+}
+
+function computeExpectedValue(prop: PropMarket): number {
+  const odds = prop.recommendation === "UNDER" ? prop.underOdds : prop.overOdds;
+  const payout = odds > 0 ? odds / 100 : 100 / -odds;
+  const modelProb =
+    prop.recommendation === "UNDER" ? 1 - prop.modelHitRateOver : prop.modelHitRateOver;
+  return modelProb * payout - (1 - modelProb);
 }

@@ -85,11 +85,32 @@ export interface PropDetail extends PropMarket {
   game: Game;
   recentLogs: GameLog[];
   altLines: LineQuote[];
-  matchupNotes: string[];
+  reasons: string[];
+  risks: string[];
+  whatWouldChangeRec: string[];
+  expectedValue: number;
 }
 
 export interface BacktestMarketSlice {
   propType: PropType;
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export type ConfidenceTier = "High" | "Medium" | "Low";
+
+export interface BacktestConfidenceSlice {
+  tier: ConfidenceTier;
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export interface BacktestEdgeBucketSlice {
+  bucket: string; // e.g. "4–6%", "6–8%", "8–10%", "10%+"
   plays: number;
   hitRate: number;
   roiUnits: number;
@@ -106,6 +127,8 @@ export interface BacktestSummary {
   unitsReturn: number;
   roiPct: number;
   byMarket: BacktestMarketSlice[];
+  byConfidence: BacktestConfidenceSlice[];
+  byEdgeBucket: BacktestEdgeBucketSlice[];
   bestMarket: BacktestMarketSlice;
   worstMarket: BacktestMarketSlice;
 }

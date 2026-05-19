@@ -13,12 +13,12 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className="font-sans antialiased">
+      <body className="font-sans antialiased text-ink-900">
         <Header />
-        <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-6 sm:px-6 lg:px-8">
+        <main className="relative mx-auto w-full max-w-7xl px-4 pb-24 pt-8 sm:px-6 lg:px-8">
           {children}
         </main>
-        <footer className="border-t border-ink-800 px-6 py-6 text-center text-xs text-ink-400">
+        <footer className="mx-auto w-full max-w-7xl px-4 pb-10 text-center text-xs text-ink-500 sm:px-6 lg:px-8">
           NFL Prop Edge · V1 mock data · For research only. Not investment advice.
         </footer>
       </body>
