@@ -1,0 +1,20 @@
+[
+  {
+    "gameId": "fixture-kc-at-bal-w1",
+    "isDome": false,
+    "temperatureF": 78,
+    "windMph": 6,
+    "gustsMph": 9,
+    "precipitationMm": 0,
+    "snowfallCm": 0
+  },
+  {
+    "gameId": "fixture-buf-at-mia-w1",
+    "isDome": false,
+    "temperatureF": 88,
+    "windMph": 9,
+    "gustsMph": 14,
+    "precipitationMm": 0,
+    "snowfallCm": 0
+  }
+]

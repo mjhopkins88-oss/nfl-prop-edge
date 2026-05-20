@@ -2,11 +2,38 @@
 
 Snapshot as of branch `claude/review-project-state-OF2y7`.
 
+## Current focus — 2025 historical testing only
+
+The single goal right now is the **2025 historical backtest** —
+proving or disproving the model offline before any live 2026
+consideration. See `2025_BACKTEST_PLAN.md` for the scoped plan,
+success metrics, failure metrics, and the pre-live rule.
+
+In one paragraph: replay the 2025 NFL regular season week-by-week
+on stored data, on the four starter player prop markets
+(`player_pass_attempts`, `player_pass_completions`,
+`player_receptions`, `player_rush_attempts`). Yardage markets,
+live odds, Kalshi, real-time injuries, and any 2026 automation
+are all deferred until the 2025 test produces a clean,
+explainable edge.
+
+Working rules during this phase:
+
+- Do **not** add live-season complexity.
+- Do **not** add new APIs unless required for the 2025
+  historical test.
+- Protect Odds API credits — dry-run first, every time.
+- Run the smoke test before any larger historical Odds API
+  pull.
+- The backtest runner uses stored / fixture data only — never
+  calls a paid API directly.
+
 ## 1. Current product shape
 
-The app ships with **two independent decision tracks**. They share
-the same Next.js shell, header, and theme, but neither feeds into
-the other.
+The app ships with **three independent decision tracks**. They
+share the same Next.js shell, header, and theme, but **none feed
+into another** — Player Props, Game Edge, and Parlay Builder are
+separate research surfaces evaluated independently.
 
 ### 1.1 Player Props (`/`, `/props/[id]`)
 
@@ -41,7 +68,22 @@ Separate experimental model for game-level markets.
   spread path can recommend a play while the moneyline path
   passes (and vice versa); the highest confidence-adjusted edge
   wins between the two.
-- See §4 for the full Game Edge stack.
+- Out of scope for the 2025 historical backtest — Game Edge
+  needs its own historical backtest before any conclusion.
+
+### 1.3 Parlay Builder (`/parlays`, `/parlays/[id]`)
+
+Separate experimental model for correlated 2-leg parlays
+sourced from V1 player props.
+
+- Builds joint probability with capped correlation adjustments
+  (+15% relative lift / −20% relative drag).
+- Confidence-adjusted EV gate; high payout alone does not
+  qualify, correlation alone does not qualify.
+- Portfolio optimizer caps same-game / same-QB / same-correlation
+  exposure across qualified candidates.
+- Evaluated **separately** from the 2025 player prop backtest;
+  parlay success is **not** required for the V1 test to pass.
 
 ## 2. V1 player prop scope
 
@@ -55,6 +97,23 @@ Lower-variance volume markets only:
 - `RUSHING_ATTEMPTS`
 - `RUSHING_YARDS`
 
+### 2.1 Starter subset for the 2025 historical backtest
+
+The first historical evaluation runs against four starter
+markets only:
+
+- `PASSING_ATTEMPTS`
+- `PASSING_COMPLETIONS`
+- `RECEPTIONS`
+- `RUSHING_ATTEMPTS`
+
+Yardage markets stay in scope for V1 but are **deferred for the
+historical test** — their variance demands a more careful pass
+once the volume markets show a clean read.
+
+See `2025_BACKTEST_PLAN.md` for the full scope, success / failure
+criteria, and CLI command reference.
+
 Explicit exclusions:
 
 - **No touchdown props** in V1 (anytime scorer, first TD scorer,
@@ -62,6 +121,11 @@ Explicit exclusions:
   base-rate Bernoulli markets and the ingestion path drops TD
   columns.
 - **No live odds / no paid API calls** from the running app.
+- **No real-time injury APIs.** Pre-game injury context only.
+- **No Kalshi execution.** Kalshi remains a future research
+  surface; no contract is priced or placed.
+- **No live 2026 automation** until the 2025 historical test
+  produces a clean, explainable edge.
 - **No Railway dependency** for local algorithm work. Railway
   deploy config (`railway.json`) exists but is unused for
   day-to-day model iteration.

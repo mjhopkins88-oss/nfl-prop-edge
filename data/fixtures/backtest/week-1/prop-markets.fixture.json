@@ -1,0 +1,98 @@
+[
+  {
+    "id": "fixture-w1-pm-mahomes-passatt",
+    "gameId": "fixture-kc-at-bal-w1",
+    "playerId": "fixture-mahomes",
+    "propType": "PASSING_ATTEMPTS",
+    "line": 32.5,
+    "overOdds": -110,
+    "underOdds": -110,
+    "projectionMean": 37.0,
+    "projectionStdDev": 4.2,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-mahomes-passcomp",
+    "gameId": "fixture-kc-at-bal-w1",
+    "playerId": "fixture-mahomes",
+    "propType": "PASSING_COMPLETIONS",
+    "line": 22.5,
+    "overOdds": -115,
+    "underOdds": -105,
+    "projectionMean": 25.4,
+    "projectionStdDev": 3.0,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-kelce-receptions",
+    "gameId": "fixture-kc-at-bal-w1",
+    "playerId": "fixture-kelce",
+    "propType": "RECEPTIONS",
+    "line": 5.5,
+    "overOdds": -110,
+    "underOdds": -110,
+    "projectionMean": 6.2,
+    "projectionStdDev": 1.4,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-pacheco-rushatt",
+    "gameId": "fixture-kc-at-bal-w1",
+    "playerId": "fixture-pacheco",
+    "propType": "RUSHING_ATTEMPTS",
+    "line": 13.5,
+    "overOdds": -115,
+    "underOdds": -105,
+    "projectionMean": 15.5,
+    "projectionStdDev": 3.0,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-allen-passatt",
+    "gameId": "fixture-buf-at-mia-w1",
+    "playerId": "fixture-allen",
+    "propType": "PASSING_ATTEMPTS",
+    "line": 31.5,
+    "overOdds": -110,
+    "underOdds": -110,
+    "projectionMean": 34.0,
+    "projectionStdDev": 4.0,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-allen-passcomp",
+    "gameId": "fixture-buf-at-mia-w1",
+    "playerId": "fixture-allen",
+    "propType": "PASSING_COMPLETIONS",
+    "line": 20.5,
+    "overOdds": -110,
+    "underOdds": -110,
+    "projectionMean": 22.6,
+    "projectionStdDev": 3.0,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-diggs-receptions",
+    "gameId": "fixture-buf-at-mia-w1",
+    "playerId": "fixture-diggs",
+    "propType": "RECEPTIONS",
+    "line": 5.5,
+    "overOdds": -120,
+    "underOdds": -100,
+    "projectionMean": 6.5,
+    "projectionStdDev": 1.5,
+    "sportsbook": "DraftKings"
+  },
+  {
+    "id": "fixture-w1-pm-cook-rushatt",
+    "gameId": "fixture-buf-at-mia-w1",
+    "playerId": "fixture-cook",
+    "propType": "RUSHING_ATTEMPTS",
+    "line": 14.5,
+    "overOdds": -115,
+    "underOdds": -105,
+    "projectionMean": 17.0,
+    "projectionStdDev": 3.0,
+    "sportsbook": "DraftKings"
+  }
+]

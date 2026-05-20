@@ -1,0 +1,58 @@
+[
+  {
+    "marketId": "fixture-w1-pm-mahomes-passatt",
+    "sportsbook": "DraftKings",
+    "line": 32.5,
+    "overOdds": -110,
+    "underOdds": -110
+  },
+  {
+    "marketId": "fixture-w1-pm-mahomes-passcomp",
+    "sportsbook": "DraftKings",
+    "line": 22.5,
+    "overOdds": -115,
+    "underOdds": -105
+  },
+  {
+    "marketId": "fixture-w1-pm-kelce-receptions",
+    "sportsbook": "DraftKings",
+    "line": 5.5,
+    "overOdds": -110,
+    "underOdds": -110
+  },
+  {
+    "marketId": "fixture-w1-pm-pacheco-rushatt",
+    "sportsbook": "DraftKings",
+    "line": 13.5,
+    "overOdds": -115,
+    "underOdds": -105
+  },
+  {
+    "marketId": "fixture-w1-pm-allen-passatt",
+    "sportsbook": "DraftKings",
+    "line": 31.5,
+    "overOdds": -110,
+    "underOdds": -110
+  },
+  {
+    "marketId": "fixture-w1-pm-allen-passcomp",
+    "sportsbook": "DraftKings",
+    "line": 20.5,
+    "overOdds": -110,
+    "underOdds": -110
+  },
+  {
+    "marketId": "fixture-w1-pm-diggs-receptions",
+    "sportsbook": "DraftKings",
+    "line": 5.5,
+    "overOdds": -120,
+    "underOdds": -100
+  },
+  {
+    "marketId": "fixture-w1-pm-cook-rushatt",
+    "sportsbook": "DraftKings",
+    "line": 14.5,
+    "overOdds": -115,
+    "underOdds": -105
+  }
+]

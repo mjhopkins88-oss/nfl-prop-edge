@@ -12,6 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/game-edge", label: "Game Edge", experimental: true },
   { href: "/parlays", label: "Parlay Builder", experimental: true },
   { href: "/backtest", label: "Backtest" },
+  { href: "/monitor", label: "Monitor" },
 ];
 
 export default function Header() {
@@ -25,7 +26,7 @@ export default function Header() {
               NFL Prop Edge
             </div>
             <div className="text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              Props · Game Edge · Parlays · Backtest
+              Props · Game Edge · Parlays · Backtest · Monitor
             </div>
           </div>
         </Link>
