@@ -137,7 +137,7 @@ in. The Python NFL ingestion uses no keys.
 
 | Variable | Used by | Required when | Default |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `npm run build`, `npm run db:seed`, `--persist` on the backtest | always for builds and DB writes | — |
+| `DATABASE_URL` | `npm run db:seed`, `npm run db:migrate`, `npm run db:push`, `--persist` paths in ingestion scripts | only for DB-backed paths; **NOT** required for `npm run build`, `npm run start`, or the deployed V1 web app (audited — see "Deploying to Railway") | — |
 | `ODDS_API_KEY` | `scripts/ingest-historical-prop-lines.ts` | non-dry-run mode | — |
 | `ODDS_API_BASE_URL` | The Odds API client | override only | `https://api.the-odds-api.com/v4` |
 | `OPEN_METEO_BASE_URL` | Open-Meteo client | override only | `https://archive-api.open-meteo.com/v1/archive` |
@@ -1851,7 +1851,18 @@ deploys to Railway **without a database**. Postgres is only needed
 once you start running the ingestion scripts or the DB-backed backtest
 runner.
 
-### 1. Create the project
+### Postgres connection audit (current state)
+
+| Check | Status |
+|---|---|
+| `DATABASE_URL` required to deploy? | **No.** `npm run build` runs `prisma generate && next build`; `prisma generate` reads `env("DATABASE_URL")` from the schema but does not connect, so the env var can be unset. `npm run start` (`next start`) does not connect either — no page imports `@prisma/client`. Verified with `env -u DATABASE_URL npm run build`. |
+| `DATABASE_URL` documented? | **Yes.** `.env.example` marks it OPTIONAL with the exact list of scripts that need it. The required-env-vars table above echoes that. |
+| Prisma migrations committed? | **No** — `prisma/migrations/` does not exist. Only `schema.prisma` and `seed.ts` are committed. `prisma migrate deploy` would be a no-op until you've run `prisma migrate dev --name init` locally and committed the migration files. |
+| `package.json` scripts run `prisma generate` correctly? | **Yes.** `postinstall` and `build` both invoke it. `prisma generate` is the only Prisma step in the deploy path and works without `DATABASE_URL`. |
+| Pre-deploy `prisma migrate deploy` required on Railway? | **No** for V1. There are no migrations to apply, and the web app does not need any tables. Adding it later is optional and explicit (see step 2.3 below). |
+| Web app runs without database tables? | **Yes.** The dashboard (`/`), prop detail pages (`/props/[id]`), `/backtest`, `/game-edge`, `/game-edge/[id]`, `/parlays`, `/parlays/[id]` all render off `mock-data.ts` and committed fixture JSON. `src/lib/prisma.ts` is unused by the web bundle today. |
+
+### 1. Create the web service
 
 1. Push this repo to GitHub.
 2. In Railway, **New Project → Deploy from GitHub repo** and pick this repo.
@@ -1860,42 +1871,87 @@ runner.
    - **Build:** `npm install && npm run build`
    - **Start:** `npm run start`
 
-   `npm run build` runs `prisma generate && next build` — the Prisma
+   `npm run build` runs `prisma generate && next build`. The Prisma
    client generates from `schema.prisma` without needing a live DB
    connection.
+4. Open the deployed URL from **Settings → Domains**. The dashboard
+   at `/` should render immediately because V1 reads mock data.
+   `/backtest` renders the static summary plus the fixture summary if
+   `data/backtests/2025/backtest-summary.fixture.json` is committed.
 
-### 2. (Optional) Attach Postgres later
+That's it for the V1 deploy. No Postgres needed.
 
-Only do this if you intend to run the DB-backed paths (seed, migrate,
-backtest persistence, ingestion ApiUsageLog rows). The web app does
-NOT need it.
+### 2. (Optional) Attach Postgres
 
-1. **+ New → Database → PostgreSQL**.
-2. Railway injects `DATABASE_URL` into the service.
-3. Run migrations manually the first time:
-   ```bash
-   # locally, against the Railway connection string
-   npx prisma migrate dev --name init
-   git add prisma/migrations && git commit -m "init prisma migrations"
-   git push
-   # then on Railway (one-shot job or shell-in)
-   npx prisma migrate deploy
-   npm run db:seed
-   ```
+Only do this if you intend to run the DB-backed paths:
+- `npm run db:seed`
+- `npm run db:migrate`
+- `--persist` flags on ingestion scripts
+- Future DB-backed backtest runner
 
-We deliberately do NOT run `prisma migrate deploy` inside the start
-command — that would make every container restart depend on a healthy
-DB connection, which is fragile and unnecessary for V1.
+#### 2.1 Add the Postgres service
 
-### 3. Open the deployed app
+In your Railway project: **+ New → Database → PostgreSQL**. Wait for
+the service to become healthy.
 
-Railway will assign a public URL — share it from the service's
-**Settings → Domains** panel. The dashboard at `/` should render
-immediately because V1 reads mock data. The `/backtest` page renders
-the static performance summary plus a small "fixture not generated"
-hint card; commit a run of `npx tsx scripts/run-backtest-2025.ts
---fixtures` (or wire it into a release step) to populate the live
-fixture summary section.
+#### 2.2 Reference `DATABASE_URL` from the app service
+
+In your **web service → Variables**, add a *reference variable*:
+
+- **Name:** `DATABASE_URL`
+- **Value:** click the variable-picker, select your Postgres service's
+  `DATABASE_URL` (Railway exposes this automatically).
+
+Reference variables are preferred over copying the connection string —
+they stay in sync if Railway rotates the URL. The web service redeploys
+automatically when the variable changes.
+
+#### 2.3 Bootstrap the schema (one-time)
+
+Migrations are **not committed** to the repo yet, so neither
+`npx prisma migrate deploy` nor a Railway pre-deploy hook will do
+anything useful out of the box. Choose one path:
+
+**Path A — develop migrations locally (recommended).**
+
+```bash
+# locally, with DATABASE_URL pointing at the Railway DB
+npx prisma migrate dev --name init
+git add prisma/migrations && git commit -m "init prisma migrations"
+git push origin main
+
+# then once on Railway (one-shot job or shell into the service)
+npm run db:migrate    # = prisma migrate deploy
+npm run db:seed       # optional sample-data seed
+```
+
+After this you can opt in to running `npm run db:migrate` as a Railway
+**pre-deploy command** (Settings → Deploy → "Pre-Deploy Command") if
+you want migrations applied on every release. Until you do, releases
+will not touch the DB.
+
+**Path B — `prisma db push` (no migration history).**
+
+```bash
+npm run db:push       # = prisma db push
+```
+
+Faster but skips the migration history. Fine for spike work; commit
+real migrations before relying on the schema in production.
+
+#### 2.4 Re-deploy
+
+Pushing to `main` (or clicking **Redeploy** in Railway) picks up any
+new variables and config. The build step still does not require
+`DATABASE_URL` — it just becomes available at runtime when scripts run.
+
+### Why no `prisma migrate deploy` in the start command
+
+The start command does not run `prisma migrate deploy` deliberately.
+That would make every container restart depend on a healthy DB
+connection, which is fragile for a V1 deploy that doesn't need the
+database at all. Make migrations an explicit one-shot step (or a
+pre-deploy command once migrations exist).
 
 ## What's next (post-V1)
 
