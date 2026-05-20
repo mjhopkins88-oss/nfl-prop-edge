@@ -1,3 +1,4 @@
+import Link from "next/link";
 import PropFilters from "@/components/PropFilters";
 import OpportunityList from "@/components/OpportunityList";
 import StatCard from "@/components/StatCard";
@@ -199,6 +200,60 @@ export default async function DashboardPage({
           scored by the decision engine with full edge math, risk gates, and a
           plain-English explanation.
         </p>
+      </section>
+
+      <section
+        aria-label="Other sections"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
+        <Link
+          href="/game-edge"
+          className="group glass-strong flex items-start justify-between gap-4 rounded-2xl p-5 ring-1 ring-white/40 transition hover:ring-sea-300/60"
+        >
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-amber-100/80 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              Beta
+            </div>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-ink-900">
+              Explore Game Edge
+            </h2>
+            <p className="mt-1 text-xs text-ink-600">
+              Experimental moneyline, spread, and upset model — separate
+              from the player prop scorecard.
+            </p>
+          </div>
+          <span
+            aria-hidden="true"
+            className="self-center text-ink-400 transition group-hover:translate-x-0.5 group-hover:text-ink-700"
+          >
+            →
+          </span>
+        </Link>
+        <Link
+          href="/backtest"
+          className="group glass-strong flex items-start justify-between gap-4 rounded-2xl p-5 ring-1 ring-white/40 transition hover:ring-sea-300/60"
+        >
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-sea-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sea-800 ring-1 ring-sea-200/80">
+              <ChartBarIcon className="h-3 w-3" />
+              Backtest
+            </div>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-ink-900">
+              Open Backtest Performance
+            </h2>
+            <p className="mt-1 text-xs text-ink-600">
+              Fixture-driven historical performance and V1 vs V2
+              algorithm comparison.
+            </p>
+          </div>
+          <span
+            aria-hidden="true"
+            className="self-center text-ink-400 transition group-hover:translate-x-0.5 group-hover:text-ink-700"
+          >
+            →
+          </span>
+        </Link>
       </section>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
