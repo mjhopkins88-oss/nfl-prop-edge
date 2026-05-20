@@ -1342,6 +1342,120 @@ only.
   `scripts/test-parlay-model.ts`
 - UI: `/parlays` and `/parlays/[id]`
 
+## Parlay Algorithm Audit and Optimization
+
+After shipping the Correlated Parlay Model we audited the
+algorithm and added safe, additive improvements. The audit is in
+`PARLAY_ALGO_AUDIT.md`. Player Prop and Game Edge recommendations
+are unchanged.
+
+### What the audit confirmed
+
+- Math is sound. Conversions verified
+  (`americanToDecimal(+150) = 2.50`, `-120 = 1.833`).
+  Required-payout math at 10% ROI: 15% → 7.33x, 17.5% → 6.29x,
+  20% → 5.50x.
+- The correlation adjustment is a multiplicative simplifier
+  on independent joint probability — bounded, monotone, and
+  easy to backtest, but it understates correlation at small
+  joint probabilities and overstates at large. Worth replacing
+  with a proper joint Bernoulli / Gaussian copula once we have
+  historical joint outcomes.
+- The confidence-adjusted-EV shrinkage product stacks seven
+  multiplicative factors. Aggressive on paper — re-tune once
+  the backtest runner exists.
+- Same-team WR/TE overstacking, conflicting game scripts,
+  fragile yardage lines, and standalone-unqualified legs are
+  all hard disqualifiers.
+- No touchdown propTypes, no automated betting, no APIs at any
+  point in the parlay namespace.
+
+### What the audit added (safe, additive)
+
+- **Risk profile classification** (`parlay-risk-profile.ts`).
+  Every parlay gets one of `LOW_VARIANCE_CORRELATED`,
+  `MEDIUM_VARIANCE_CORRELATED`, `HIGH_VARIANCE_YARDAGE`,
+  `HIGH_PAYOUT_LONGSHOT`, `UNKNOWN_CORRELATION`, `OVERSTACKED`,
+  or `FRAGILE_LINES`. Variance / fragility / overstacking
+  scores are read-only and surfaced on the UI.
+- **Parlay-type strength** (`parlay-type-strength.ts`). Each
+  parlay type carries a strength score, a band
+  (STRONG / MODERATE / EXPLORATORY / RESEARCH_ONLY), risk
+  notes, and the data we still need to validate it. Useful
+  for explaining to a human why some structures are likely
+  already book-priced vs. genuinely novel.
+- **Target-batch math + simulator** (`parlay-target-math.ts`).
+  `calculateRequiredHitRateForROI`,
+  `calculateRequiredPayoutForTargetROI`,
+  `calculateProjectedROI`, `classifyPayoutHitRateFit`,
+  `simulateParlayBatch`, `simulateParlayCandidateBatch`.
+  Deterministic. Used by the strategy-health panel and the
+  audit tests.
+- **Portfolio optimizer** (`parlay-selection-optimizer.ts`).
+  Caps same-game / same-QB / same-correlation-story exposure
+  across the surviving qualified parlays. Removes duplicate-
+  leg exposure. Surfaces a `ParlayPortfolioSummary` with
+  strongest / weakest parlay type and the most common pass
+  reason.
+- **Postmortem tags** (`parlay-postmortem.ts`). Defines the
+  vocabulary (`GOOD_READ_BAD_VARIANCE`,
+  `CORRELATION_OVERESTIMATED`, `ONE_LEG_ANCHOR_FAILED`,
+  `GAME_SCRIPT_FAILED`, `WEATHER_READ_FAILED`,
+  `ROLE_ASSUMPTION_FAILED`, `LINE_TOO_FRAGILE`,
+  `PAYOUT_TOO_LOW`, `HIGH_PAYOUT_TRAP`, `OVERSTACKED_FAILURE`,
+  `FILTER_CORRECTLY_AVOIDED`, `FILTER_TOO_CONSERVATIVE`) +
+  a deterministic tagger that fires from a tag-input shape.
+  No caller yet; ready for the future backtest runner.
+- **New ParlayType enum entries** —
+  `QB_COMPLETIONS_RB_RECEPTIONS`,
+  `QB_ATTEMPTS_SHORT_AREA_RECEPTIONS`,
+  `QB_UNDER_RB_OVER_GAME_SCRIPT`,
+  `TE_FUNNEL_STACK`,
+  `PRESSURE_CHECKDOWN_STACK`,
+  `NON_CORRELATED_EV_PAIR`,
+  `ALT_LINE_CANDIDATE`,
+  `ANTI_PUBLIC_FADE_STACK`.
+  Types are surfaced through `parlayTypeLabel` and the
+  parlay-type strength bundle; logic-side classifier still
+  falls back to `CUSTOM` until the candidate is tagged
+  explicitly (or the data fixtures supply role / route /
+  pressure tags).
+- **Reserved backtest types** — `ParlayBatchSimulation`,
+  `ParlayPortfolioSummary`. `ParlayBacktestResult` extended
+  with optional `riskProfile` + `postmortemTags`.
+- **Strategy Health panel + "Why this could fail"** on the
+  `/parlays` dashboard. Per-card variance / fragility /
+  payout-fit / projected-ROI / type-strength chips. No
+  changes to Player Props or Game Edge UI.
+
+### Operating principles
+
+- Parlays are higher variance than straight props. Treat them
+  as a separate budget.
+- Judge parlays by joint probability, confidence-adjusted EV,
+  hit-rate vs payout, and drawdown — not by gross payout.
+- Obvious correlations may already be in the book's SGP price.
+  The strongest edges may come from less obvious correlation
+  stories where the book is still treating the legs as
+  independent.
+- Parlay selection should be portfolio-based, not "bet every
+  qualified parlay." The portfolio optimizer enforces this.
+- Everything here is experimental. Backtest it before any
+  live use. The app does not place bets automatically and
+  never will without explicit user permission.
+
+### Where to find it
+
+- Audit document: `PARLAY_ALGO_AUDIT.md`
+- Risk profile: `src/lib/model/parlay-risk-profile.ts`
+- Type strength: `src/lib/model/parlay-type-strength.ts`
+- Target math + simulator: `src/lib/model/parlay-target-math.ts`
+- Portfolio optimizer:
+  `src/lib/model/parlay-selection-optimizer.ts`
+- Postmortem tags: `src/lib/model/parlay-postmortem.ts`
+- Audit test runner: `scripts/test-parlay-algo-audit.ts`
+- UI: `/parlays` (Strategy Health + Why-could-fail panels).
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

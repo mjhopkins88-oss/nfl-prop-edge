@@ -21,6 +21,18 @@ export type ParlayType =
   | "NEGATIVE_PASSING_STACK"
   | "WEATHER_UNDER_STACK"
   | "PRESSURE_QUICK_GAME_STACK"
+  /** Opportunity types added after the parlay algo audit. Currently
+   *  set manually via candidate specs / future enrichment paths —
+   *  the auto-classifier still falls back to CUSTOM if it can't
+   *  identify a structural match. */
+  | "QB_COMPLETIONS_RB_RECEPTIONS"
+  | "QB_ATTEMPTS_SHORT_AREA_RECEPTIONS"
+  | "QB_UNDER_RB_OVER_GAME_SCRIPT"
+  | "TE_FUNNEL_STACK"
+  | "PRESSURE_CHECKDOWN_STACK"
+  | "NON_CORRELATED_EV_PAIR"
+  | "ALT_LINE_CANDIDATE"
+  | "ANTI_PUBLIC_FADE_STACK"
   | "CUSTOM";
 
 export type CorrelationType =
@@ -217,6 +229,71 @@ export interface ParlayScorecard {
 }
 
 /**
+ * Risk profile classifications produced by `parlay-risk-profile.ts`.
+ * Surfaces on the UI to communicate the variance / fragility /
+ * correlation posture of each parlay at a glance.
+ */
+export type ParlayRiskProfile =
+  | "LOW_VARIANCE_CORRELATED"
+  | "MEDIUM_VARIANCE_CORRELATED"
+  | "HIGH_VARIANCE_YARDAGE"
+  | "HIGH_PAYOUT_LONGSHOT"
+  | "UNKNOWN_CORRELATION"
+  | "OVERSTACKED"
+  | "FRAGILE_LINES";
+
+/**
+ * Postmortem tags for parlay outcomes. Defined now so the future
+ * backtest runner can attach them; not yet consumed.
+ */
+export type ParlayPostmortemTag =
+  | "GOOD_READ_BAD_VARIANCE"
+  | "CORRELATION_OVERESTIMATED"
+  | "ONE_LEG_ANCHOR_FAILED"
+  | "GAME_SCRIPT_FAILED"
+  | "WEATHER_READ_FAILED"
+  | "ROLE_ASSUMPTION_FAILED"
+  | "LINE_TOO_FRAGILE"
+  | "PAYOUT_TOO_LOW"
+  | "HIGH_PAYOUT_TRAP"
+  | "OVERSTACKED_FAILURE"
+  | "FILTER_CORRECTLY_AVOIDED"
+  | "FILTER_TOO_CONSERVATIVE";
+
+/**
+ * Deterministic simulation of a parlay batch — used by the
+ * dashboard's strategy-health panel and by the audit test runner.
+ */
+export interface ParlayBatchSimulation {
+  batchSize: number;
+  projectedHitRate: number;
+  averagePayoutMultiplier: number;
+  expectedHits: number;
+  expectedReturnUnits: number;
+  expectedProfitUnits: number;
+  expectedROI: number;
+  breakEvenHitRate: number;
+}
+
+/**
+ * Aggregate portfolio summary returned by the selection optimizer.
+ * Strict — same-game / same-QB exposure caps are visible here.
+ */
+export interface ParlayPortfolioSummary {
+  selectedCount: number;
+  filteredCount: number;
+  averagePayoutMultiplier: number;
+  averageProjectedHitRate: number;
+  averageRequiredHitRate: number;
+  averageConfidenceAdjustedEV: number;
+  highRiskFilteredOut: number;
+  mostCommonPassReason?: string;
+  strongestParlayType?: ParlayType;
+  weakestParlayType?: ParlayType;
+  riskProfileCounts: Record<ParlayRiskProfile, number>;
+}
+
+/**
  * Reserved backtest row shape — defined now so backtesting can land
  * later without a schema change. Not yet consumed.
  */
@@ -248,4 +325,6 @@ export interface ParlayBacktestResult {
   result: "WIN" | "LOSS" | "PUSH" | "NO_RESULT";
   correlationType: CorrelationType;
   parlayType: ParlayType;
+  riskProfile?: ParlayRiskProfile;
+  postmortemTags?: ParlayPostmortemTag[];
 }
