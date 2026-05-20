@@ -1,5 +1,12 @@
 import type { PropType, Recommendation } from "../types";
 import { americanOddsToImpliedProb } from "../prop-utils";
+import {
+  buildCoachingTransitionScorecard,
+  applyCoachingAdjustmentToProp,
+  type CoachHistoricalTendencyProfile,
+  type CoachingContinuityInput,
+  type CoachingTransitionScorecard,
+} from "./coaching-transition";
 
 export type Side = "OVER" | "UNDER";
 
@@ -52,6 +59,9 @@ export interface ScorecardInput {
   injuryContextScore: number;
   correlationExposureScore: number;
   edgeThreshold?: number;
+  coachingContext?: CoachingContinuityInput;
+  coachProfile?: CoachHistoricalTendencyProfile;
+  teamProfile?: CoachHistoricalTendencyProfile;
 }
 
 export interface PropDecisionScorecard {
@@ -93,6 +103,7 @@ export interface PropDecisionScorecard {
   risks: string[];
   disqualifiers: string[];
   finalExplanation: string;
+  coachingTransition?: CoachingTransitionScorecard;
 }
 
 export interface ScorecardSummary {
@@ -207,8 +218,30 @@ export function buildPropDecisionScorecard(
     overround > 0 ? marketOverProbability / overround : 0.5;
   const noVigUnderProbability = 1 - noVigOverProbability;
 
-  const std = Math.max(input.projectedStdDev, 1e-6);
-  const z = (input.marketLine - input.projectedMean) / std;
+  const coachingTransition = input.coachingContext
+    ? buildCoachingTransitionScorecard(
+        input.coachingContext,
+        input.coachProfile,
+        input.teamProfile,
+      )
+    : undefined;
+  const coachingAdjustment = coachingTransition
+    ? applyCoachingAdjustmentToProp(
+        input.propType,
+        coachingTransition,
+        input.coachProfile,
+      )
+    : undefined;
+
+  const adjustedMean = coachingAdjustment
+    ? input.projectedMean * coachingAdjustment.meanMultiplier
+    : input.projectedMean;
+  const adjustedStdDev = coachingAdjustment
+    ? input.projectedStdDev * coachingAdjustment.stdDevMultiplier
+    : input.projectedStdDev;
+
+  const std = Math.max(adjustedStdDev, 1e-6);
+  const z = (input.marketLine - adjustedMean) / std;
   const modelUnderProbability = clamp(normalCdf(z), 0, 1);
   const modelOverProbability = 1 - modelUnderProbability;
 
@@ -284,23 +317,36 @@ export function buildPropDecisionScorecard(
     );
   }
 
-  const volatilityLevel = classifyVolatility(
-    input.projectedMean,
-    input.projectedStdDev,
-  );
+  const volatilityLevel = classifyVolatility(adjustedMean, adjustedStdDev);
   if (volatilityLevel === "high") {
     risks.push(
       `High projection variance (σ ${input.projectedStdDev.toFixed(1)} on μ ${input.projectedMean.toFixed(1)})`,
     );
   }
 
+  if (coachingTransition) {
+    for (const r of coachingTransition.reasons) passReasons.push(r);
+    for (const r of coachingTransition.risks) risks.push(r);
+  }
+
   const reasons = qualified ? [...passReasons] : [...failReasons];
 
   const edgeMagnitude = Math.abs(selectedEdge);
   const edgeStrength = clamp(edgeMagnitude / 0.2, 0, 1);
+  const coachingConfidenceDrag = coachingTransition
+    ? coachingTransition.coachingUncertaintyPenalty * 0.5
+    : 0;
   const confidence = qualified
-    ? clamp(0.5 + 0.3 * edgeStrength + 0.2 * riskScore, 0.5, 0.98)
-    : clamp(0.15 + 0.2 * edgeStrength + 0.2 * riskScore, 0.05, 0.55);
+    ? clamp(
+        0.5 + 0.3 * edgeStrength + 0.2 * riskScore - coachingConfidenceDrag,
+        0.5,
+        0.98,
+      )
+    : clamp(
+        0.15 + 0.2 * edgeStrength + 0.2 * riskScore - coachingConfidenceDrag,
+        0.05,
+        0.55,
+      );
 
   const finalExplanation = buildFinalExplanation({
     qualified,
@@ -354,6 +400,7 @@ export function buildPropDecisionScorecard(
     risks,
     disqualifiers,
     finalExplanation,
+    coachingTransition,
   };
 }
 

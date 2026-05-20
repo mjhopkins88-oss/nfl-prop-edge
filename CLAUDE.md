@@ -58,7 +58,9 @@ Read before making changes.
   npx tsx scripts/test-synthetic-model.ts
   npm run build
   ```
-  All four must pass. The synthetic runner must report **20/20**.
+  All four must pass. The synthetic runner must report **N/N** (every
+  scenario passing). New scenarios may be appended; the count today
+  is 22.
 
 ## When in doubt
 

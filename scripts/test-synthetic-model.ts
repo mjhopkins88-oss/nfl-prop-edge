@@ -3,6 +3,11 @@ import {
   getPrimaryDisqualifier,
   type ScorecardInput,
 } from "../src/lib/model/model-scorecard";
+import {
+  SAMPLE_NEW_HC_OC_QB,
+  SAMPLE_SAME_STAFF,
+  type CoachingContinuityInput,
+} from "../src/lib/model/coaching-transition";
 import type { PropType, Recommendation } from "../src/lib/types";
 
 interface Scenario {
@@ -12,6 +17,7 @@ interface Scenario {
   marketLine: number;
   overOdds: number;
   underOdds: number;
+  coachingContext?: CoachingContinuityInput;
   projectedMean: number;
   projectedStdDev: number;
   dataQualityScore: number;
@@ -527,6 +533,41 @@ const scenarios: Scenario[] = [
       primaryDisqualifierIncludes: "edge",
     },
   },
+  // 21. QUALIFY OVER — coaching context provided, full continuity does
+  // not degrade the projection. Coaching transition scorecard attaches
+  // but adds no uncertainty penalty worth flagging.
+  {
+    scenarioName: "PY-OVER-coaching-continuity",
+    playerName: "Patrick Mahomes",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 268,
+    projectedStdDev: 45,
+    ...risks(),
+    coachingContext: SAMPLE_SAME_STAFF,
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 22. PASS — coaching chaos (new HC + new OC + new QB) inflates σ
+  // enough to drag a thin OVER edge under the 4.0% threshold.
+  {
+    scenarioName: "PY-coaching-uncertainty-flips-to-pass",
+    playerName: "Bryce Young",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 254,
+    projectedStdDev: 45,
+    ...risks(),
+    coachingContext: SAMPLE_NEW_HC_OC_QB,
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
 ];
 
 function pad(value: string, width: number): string {
@@ -560,6 +601,7 @@ for (let i = 0; i < scenarios.length; i++) {
     weatherEnvironmentScore: s.weatherEnvironmentScore,
     injuryContextScore: s.injuryContextScore,
     correlationExposureScore: s.correlationExposureScore,
+    coachingContext: s.coachingContext,
   };
 
   const sc = buildPropDecisionScorecard(input);
