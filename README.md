@@ -171,21 +171,89 @@ the full CSV-to-Prisma mapping.
 ### Player props (The Odds API)
 
 ```bash
-# preview — no API calls, key only used for plan printing
+# preview — no API calls (dry-run is the default)
 ODDS_API_KEY=demo npx tsx scripts/ingest-historical-prop-lines.ts \
-  --season 2025 --weeks 1-10 --source mock --dry-run
+  --season 2025 --scope smoke-test --source mock
 
-# live
-ODDS_API_KEY=$ODDS_API_KEY npx tsx scripts/ingest-historical-prop-lines.ts \
-  --season 2025 --weeks 1-10 --budget 200
+# live (requires BOTH --execute AND the kill-switch env var)
+ALLOW_REAL_ODDS_API_CALLS=true \
+ODDS_API_KEY=$ODDS_API_KEY \
+  npx tsx scripts/ingest-historical-prop-lines.ts \
+    --season 2025 --scope smoke-test --execute --budget 200
 ```
 
 Pulls one pregame snapshot per game, ~3.5h before kickoff (rounded to the
-5-minute grid). Hard-capped at 7 markets (all lower-variance, no TDs) and
-`regions=us`. Writes raw events + per-event-odds JSON to
-`data/raw/odds-api/` and normalized rows to
-`data/processed/prop_markets.csv` + `prop_quotes.csv`. The script aborts
-**before any HTTP call** if the estimate exceeds `--budget` (default 200).
+5-minute grid). The first staged version is hard-pinned to **4 markets**
+(`player_pass_attempts`, `player_pass_completions`, `player_receptions`,
+`player_rush_attempts`) and `regions=us`. Writes raw events + per-event
+odds JSON to `data/raw/odds-api/`, runs them through the on-disk cache
+under `data/cache/odds-api/`, and emits normalized rows to
+`data/processed/prop_markets.csv` + `prop_quotes.csv`. Each call adds a
+row to `ApiUsageLog` (Postgres, when `DATABASE_URL` is set) and the
+per-run JSONL audit log at `data/raw/api-usage/<runId>.jsonl`. See the
+two sections below for the staging plan and the cost-protection rules.
+
+## Historical Odds Ingestion Staging Plan
+
+Pull 2025 historical prop lines from The Odds API in graduated scopes —
+prove the pipeline on the cheapest meaningful run first, ratchet up
+only after each step validates. Every step is opt-in via `--execute`,
+runs against the on-disk cache so reruns cost nothing, and is bounded
+by `MAX_ODDS_API_CREDITS_PER_RUN`.
+
+| Stage | Flag | Coverage | Approx credits | Purpose |
+| --- | --- | --- | --- | --- |
+| 1 | `--scope smoke-test` | Week 1 of season | ≤ 70 | Prove the pipeline end-to-end against one slate. Verify event matching, market normalization, cache writes, ApiUsageLog. |
+| 2 | `--scope week --week N` | One specific week | ≤ 70 | Spot-check a different week (e.g. a divisional Sunday) once the smoke test is green. |
+| 3 | `--scope four-weeks` | Weeks 1–4 | ~280 (raise `--budget`) | Builds a first multi-week sample for backtest sanity checks. Requires a budget bump above the 200-credit default. |
+| 4 | `--scope half-season` | Weeks 1–9 | ~600 (raise `--budget`) | Half-season corpus, big enough to fit projection / risk models. Run only after step 3 has been audited. |
+| 5 | `--scope full-season` | Weeks 1–18 | ~1300 (raise `--budget`) | Complete season backtest dataset. Plan + budget approval required before kicking this off. |
+
+Selection flags (use any one; explicit beats `--scope`):
+
+- `--weeks 1-9,12` — comma/range list
+- `--week 7` — single week shorthand
+- `--start-week 1 --end-week 4` — closed range
+
+Reruns are safe by design — the cache key hashes `(snapshot, eventId,
+markets, regions)`, so a second run of the same scope is a no-op for
+credits.
+
+## API Cost Protection Rules
+
+Every paid Odds-API path obeys these rules, enforced in
+`src/config/api-budget.ts` and `src/lib/ingestion/credit-estimator.ts`:
+
+1. **Default is dry-run.** `scripts/ingest-historical-prop-lines.ts`
+   only spends credits when both `--execute` is passed **and** the
+   env var `ALLOW_REAL_ODDS_API_CALLS=true` is set. Either alone is
+   refused.
+2. **Cache first.** Before any HTTP call the script checks
+   `data/cache/odds-api/<hash>.json`. Cached responses never re-hit
+   the API. Cache is gitignored and reused across runs.
+3. **Estimate before spending.** A plan summary prints **before** any
+   call: scope, games requested, markets requested, region,
+   estimated credits, cached responses found, new API calls required,
+   max allowed credits.
+4. **Hard per-run ceiling.** The script aborts if estimated credits
+   exceed `--budget` (default `MAX_ODDS_API_CREDITS_PER_RUN = 200`).
+   Bump the flag explicitly to run larger scopes.
+5. **Minimum reserve floor.** The script aborts mid-run if
+   `x-requests-remaining` from any response drops below
+   `MIN_ODDS_API_CREDITS_REMAINING = 1000`.
+6. **Overage circuit-breaker.** If actual credits used exceed the
+   estimate by more than `CREDIT_OVERAGE_ABORT_RATIO = 1.10` (10%),
+   the script halts before the next request.
+7. **Market cap.** The first version requests only the 4 V1 volume
+   markets. Yardage markets unlock once this version is verified.
+8. **Region cap.** `ALLOWED_ODDS_REGIONS = ["us"]`. No EU or AU pulls.
+9. **Header logging.** `x-requests-used`, `x-requests-remaining`, and
+   `x-requests-last` from every live response are written to the
+   per-run JSONL audit log and (when `DATABASE_URL` is set) to the
+   `ApiUsageLog` Postgres table.
+10. **Raw before normalization.** Raw responses are saved to
+    `data/raw/odds-api/<snapshot>-<eventId>-odds.json` before any
+    normalization, so a regenerated CSV never costs new credits.
 
 ### Weather (Open-Meteo)
 

@@ -157,11 +157,26 @@ export interface OddsApiEventOdds {
 }
 
 /** All historical endpoints wrap the payload with snapshot metadata. */
+export interface OddsApiUsage {
+  /** From `x-requests-used` header. */
+  used: number | null;
+  /** From `x-requests-remaining` header. */
+  remaining: number | null;
+  /** From `x-requests-last` header (credits this request cost). */
+  last: number | null;
+}
+
 export interface OddsApiHistoricalResponse<T> {
   timestamp: string;
   previous_timestamp: string | null;
   next_timestamp: string | null;
   data: T;
+  /**
+   * Populated when the Odds-API response includes the
+   * `x-requests-used` / `x-requests-remaining` / `x-requests-last`
+   * headers. Absent on cached or dry-run paths.
+   */
+  usage?: OddsApiUsage;
 }
 
 // --- snapshot timing helpers ------------------------------------------
@@ -261,7 +276,21 @@ class OddsApiError extends Error {
   }
 }
 
-async function getJSON<T>(url: string): Promise<T> {
+function parseUsageHeaders(res: Response): OddsApiUsage {
+  const read = (name: string): number | null => {
+    const raw = res.headers.get(name);
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    used: read("x-requests-used"),
+    remaining: read("x-requests-remaining"),
+    last: read("x-requests-last"),
+  };
+}
+
+async function getJSON<T>(url: string): Promise<{ body: T; usage: OddsApiUsage }> {
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -271,21 +300,24 @@ async function getJSON<T>(url: string): Promise<T> {
       body,
     );
   }
-  return (await res.json()) as T;
+  const body = (await res.json()) as T;
+  return { body, usage: parseUsageHeaders(res) };
 }
 
 export async function listHistoricalEvents(
   args: EventsUrlArgs,
 ): Promise<OddsApiHistoricalResponse<OddsApiEvent[]>> {
   const url = buildEventsUrl(args);
-  return getJSON<OddsApiHistoricalResponse<OddsApiEvent[]>>(url);
+  const { body, usage } = await getJSON<OddsApiHistoricalResponse<OddsApiEvent[]>>(url);
+  return { ...body, usage };
 }
 
 export async function getHistoricalEventOdds(
   args: EventOddsUrlArgs,
 ): Promise<OddsApiHistoricalResponse<OddsApiEventOdds>> {
   const url = buildEventOddsUrl(args);
-  return getJSON<OddsApiHistoricalResponse<OddsApiEventOdds>>(url);
+  const { body, usage } = await getJSON<OddsApiHistoricalResponse<OddsApiEventOdds>>(url);
+  return { ...body, usage };
 }
 
 // --- planner / credit estimator ---------------------------------------

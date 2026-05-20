@@ -43,16 +43,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { createHash } from "node:crypto";
 import {
   ALLOW_REAL_ODDS_API_CALLS,
   ALLOWED_ODDS_REGIONS,
+  CREDIT_OVERAGE_ABORT_RATIO,
   MAX_ODDS_API_CREDITS_PER_RUN,
+  MIN_ODDS_API_CREDITS_REMAINING,
+  V1_INGESTION_MARKETS,
+  type V1IngestionMarket,
 } from "../src/config/api-budget";
 import {
   MAX_MARKETS_PER_REQUEST,
   NFL_TEAM_NAMES_BY_ABBR,
   ODDS_API_BASE_URL,
-  SUPPORTED_MARKETS,
   SUPPORTED_REGION,
   buildEventOddsUrl,
   buildEventsUrl,
@@ -65,8 +69,34 @@ import {
   type NormalizedPropMarket,
   type NormalizedPropQuote,
   type OddsApiEvent,
+  type OddsApiMarketKey,
+  type OddsApiUsage,
 } from "../src/lib/ingestion/odds-api";
 import { validateCreditBudget } from "../src/lib/ingestion/credit-estimator";
+import {
+  buildCacheKey,
+  getCachedResponse,
+  hasCachedResponse,
+  saveCachedResponse,
+} from "../src/lib/ingestion/cache";
+
+/** V1 ingestion runs use only the 4 lower-variance volume markets. */
+const INGESTION_MARKETS: readonly V1IngestionMarket[] = V1_INGESTION_MARKETS;
+
+type ScopeKind =
+  | "smoke-test"
+  | "week"
+  | "four-weeks"
+  | "half-season"
+  | "full-season";
+
+const SCOPE_VALUES: ScopeKind[] = [
+  "smoke-test",
+  "week",
+  "four-weeks",
+  "half-season",
+  "full-season",
+];
 
 // --- types ------------------------------------------------------------
 
@@ -84,6 +114,7 @@ type SourceKind = "csv" | "db" | "mock";
 interface CliArgs {
   season: number;
   weeks?: Set<number>;
+  scope?: ScopeKind;
   source: SourceKind;
   input: string;
   out: string;
@@ -207,7 +238,12 @@ function writeCsv(p: string, columns: string[], rows: Record<string, unknown>[])
 function parseArgs(argv: string[]): CliArgs {
   // Default to dry-run. The script REQUIRES --execute (and the
   // ALLOW_REAL_ODDS_API_CALLS env var) to spend credits.
-  const args: Partial<CliArgs> & { weeksSpec?: string } = {
+  const args: Partial<CliArgs> & {
+    weeksSpec?: string;
+    singleWeek?: number;
+    startWeek?: number;
+    endWeek?: number;
+  } = {
     source: "csv",
     input: "data/processed/games.csv",
     out: "data",
@@ -228,6 +264,25 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--weeks":
         args.weeksSpec = eatValue();
+        break;
+      case "--scope": {
+        const raw = eatValue();
+        if (!SCOPE_VALUES.includes(raw as ScopeKind)) {
+          throw new Error(
+            `--scope must be one of ${SCOPE_VALUES.join("|")} (got "${raw}")`,
+          );
+        }
+        args.scope = raw as ScopeKind;
+        break;
+      }
+      case "--week":
+        args.singleWeek = Number(eatValue());
+        break;
+      case "--start-week":
+        args.startWeek = Number(eatValue());
+        break;
+      case "--end-week":
+        args.endWeek = Number(eatValue());
         break;
       case "--source":
         args.source = eatValue() as SourceKind;
@@ -264,8 +319,62 @@ function parseArgs(argv: string[]): CliArgs {
   if (args.season === undefined) {
     throw new Error("--season is required");
   }
-  const weeks = args.weeksSpec ? parseWeeks(args.weeksSpec) : undefined;
-  return { ...(args as Required<Omit<CliArgs, "weeks">>), weeks };
+  const weeks = resolveWeeks({
+    weeksSpec: args.weeksSpec,
+    scope: args.scope,
+    singleWeek: args.singleWeek,
+    startWeek: args.startWeek,
+    endWeek: args.endWeek,
+  });
+  return {
+    ...(args as Required<Omit<CliArgs, "weeks" | "scope">>),
+    scope: args.scope,
+    weeks,
+  };
+}
+
+function resolveWeeks(opts: {
+  weeksSpec?: string;
+  scope?: ScopeKind;
+  singleWeek?: number;
+  startWeek?: number;
+  endWeek?: number;
+}): Set<number> | undefined {
+  // Explicit --weeks wins outright (most precise).
+  if (opts.weeksSpec) return parseWeeks(opts.weeksSpec);
+  // --week N is shorthand for --weeks N.
+  if (opts.singleWeek !== undefined) return new Set([opts.singleWeek]);
+  // --start-week / --end-week describe a closed range.
+  if (opts.startWeek !== undefined || opts.endWeek !== undefined) {
+    const lo = opts.startWeek ?? 1;
+    const hi = opts.endWeek ?? 18;
+    const set = new Set<number>();
+    for (let w = lo; w <= hi; w++) set.add(w);
+    return set;
+  }
+  // --scope is the convenience flag — preselects a range.
+  if (opts.scope) return resolveScope(opts.scope);
+  return undefined;
+}
+
+function resolveScope(scope: ScopeKind): Set<number> {
+  switch (scope) {
+    case "smoke-test":
+      // Just week 1; combined with the runner's per-snapshot grouping
+      // this is the single cheapest meaningful exercise of the pipeline.
+      return new Set([1]);
+    case "week":
+      // Default to opening week if --week was not also passed.
+      return new Set([1]);
+    case "four-weeks":
+      return new Set([1, 2, 3, 4]);
+    case "half-season":
+      return new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    case "full-season":
+      return new Set(
+        Array.from({ length: 18 }, (_, i) => i + 1),
+      );
+  }
 }
 
 function parseWeeks(spec: string): Set<number> {
@@ -288,22 +397,40 @@ function printHelp(): void {
   console.log(`Usage:
   npx tsx scripts/ingest-historical-prop-lines.ts --season YYYY [options]
 
-Options:
-  --season N            (required) NFL season year
+Scope (one of, presets a week range):
+  --scope smoke-test    week 1 only (cheapest meaningful run)
+  --scope week          one week (use --week N to pick which; default 1)
+  --scope four-weeks    weeks 1-4
+  --scope half-season   weeks 1-9
+  --scope full-season   weeks 1-18
+
+Week selection (any one of, overrides --scope):
   --weeks SPEC          comma/dash list, e.g. "1-10,12"
+  --week N              single week shorthand
+  --start-week N        inclusive lower bound
+  --end-week N          inclusive upper bound
+
+Data source / output:
   --source csv|db|mock  where to load games from (default: csv)
   --input PATH          path to games.csv when --source=csv (default: data/processed/games.csv)
   --out DIR             root output dir (default: data)
-  --budget N            max estimated credits before aborting (default: 200)
+
+Cost controls:
+  --budget N            max estimated credits before aborting (default: ${MAX_ODDS_API_CREDITS_PER_RUN})
   --hours-before N      hours before kickoff for snapshot (default: 3.5)
+
+Mode:
   --dry-run             plan + URLs, no API calls (this is the default)
   --execute             actually call the API (also requires
                         ALLOW_REAL_ODDS_API_CALLS=true in env)
+
+V1 markets pulled by this script (fixed): ${INGESTION_MARKETS.join(", ")}
 
 Env:
   ODDS_API_KEY                  required for --execute
   ODDS_API_BASE_URL             override base URL (default: ${ODDS_API_BASE_URL})
   ALLOW_REAL_ODDS_API_CALLS     master kill-switch; must be "true" to --execute
+  DATABASE_URL                  optional — Prisma ApiUsageLog rows written when set
 `);
 }
 
@@ -429,6 +556,296 @@ function matchEvent(
   );
 }
 
+// --- cache pre-flight + cache-aware fetchers --------------------------
+
+interface CacheReport {
+  hits: number;
+  eventsMisses: number;
+  oddsMisses: number;
+}
+
+function eventsCacheKey(snapshotISO: string): string {
+  return buildCacheKey({
+    source: "odds-api",
+    endpoint: "historical-events",
+    params: { snapshotISO },
+  });
+}
+
+function oddsCacheKey(
+  eventId: string,
+  snapshotISO: string,
+  markets: readonly string[],
+): string {
+  return buildCacheKey({
+    source: "odds-api",
+    endpoint: "historical-event-odds",
+    params: {
+      eventId,
+      snapshotISO,
+      markets: [...markets].sort(),
+      regions: "us",
+    },
+  });
+}
+
+/**
+ * Walk the planned request list, count how many would already be served
+ * from `data/cache/odds-api/`. Used to refine the summary block before
+ * any paid call. The odds-level cache lookup needs an `eventId` — at
+ * planning time we don't have it yet, so we under-count oddsMisses
+ * (treat every game as a miss). The actual cache check on the live path
+ * is what guarantees no double-spend.
+ */
+function inspectCacheCoverage(
+  snapshots: SnapshotGroup[],
+  games: GameRow[],
+  _markets: readonly string[],
+): CacheReport {
+  let hits = 0;
+  let eventsMisses = 0;
+  for (const snap of snapshots) {
+    if (hasCachedResponse(eventsCacheKey(snap.snapshotISO))) hits++;
+    else eventsMisses++;
+  }
+  // Odds-level keys depend on the event id that comes back from the
+  // events list, so we can't introspect them here without making the
+  // call. Treat every game as a probable miss for budget purposes.
+  const oddsMisses = games.length;
+  return { hits, eventsMisses, oddsMisses };
+}
+
+interface CachedResult<T> {
+  response: T;
+  fromCache: boolean;
+  url: string;
+  status: number | null;
+  usage?: OddsApiUsage;
+}
+
+async function fetchEventsCached(args: {
+  apiKey: string;
+  snapshotISO: string;
+}): Promise<CachedResult<Awaited<ReturnType<typeof listHistoricalEvents>>>> {
+  const url = buildEventsUrl({
+    apiKey: args.apiKey,
+    snapshotISO: args.snapshotISO,
+  });
+  const key = eventsCacheKey(args.snapshotISO);
+  type R = Awaited<ReturnType<typeof listHistoricalEvents>>;
+  if (hasCachedResponse(key)) {
+    const cached = getCachedResponse<R>(key);
+    if (cached) {
+      return {
+        response: cached,
+        fromCache: true,
+        url: maskApiKey(url),
+        status: null,
+      };
+    }
+  }
+  const live = await listHistoricalEvents({
+    apiKey: args.apiKey,
+    snapshotISO: args.snapshotISO,
+  });
+  saveCachedResponse<R>(key, live, { url });
+  return {
+    response: live,
+    fromCache: false,
+    url: maskApiKey(url),
+    status: 200,
+    usage: live.usage,
+  };
+}
+
+async function fetchOddsCached(args: {
+  apiKey: string;
+  eventId: string;
+  snapshotISO: string;
+  markets: readonly OddsApiMarketKey[];
+}): Promise<CachedResult<Awaited<ReturnType<typeof getHistoricalEventOdds>>>> {
+  const marketsArr: OddsApiMarketKey[] = [...args.markets];
+  const url = buildEventOddsUrl({
+    apiKey: args.apiKey,
+    eventId: args.eventId,
+    snapshotISO: args.snapshotISO,
+    markets: marketsArr,
+  });
+  const key = oddsCacheKey(args.eventId, args.snapshotISO, args.markets);
+  type R = Awaited<ReturnType<typeof getHistoricalEventOdds>>;
+  if (hasCachedResponse(key)) {
+    const cached = getCachedResponse<R>(key);
+    if (cached) {
+      return {
+        response: cached,
+        fromCache: true,
+        url: maskApiKey(url),
+        status: null,
+      };
+    }
+  }
+  const live = await getHistoricalEventOdds({
+    apiKey: args.apiKey,
+    eventId: args.eventId,
+    snapshotISO: args.snapshotISO,
+    markets: marketsArr,
+  });
+  saveCachedResponse<R>(key, live, { url });
+  return {
+    response: live,
+    fromCache: false,
+    url: maskApiKey(url),
+    status: 200,
+    usage: live.usage,
+  };
+}
+
+// --- plan summary -----------------------------------------------------
+
+interface PlanSummaryArgs {
+  scope?: ScopeKind;
+  weeks?: Set<number>;
+  gamesRequested: number;
+  markets: readonly string[];
+  region: string;
+  estimatedCredits: number;
+  creditsForUncachedCalls: number;
+  cachedResponses: number;
+  plannedRequests: number;
+  newApiCalls: number;
+  maxAllowedCredits: number;
+}
+
+function printPlanSummary(args: PlanSummaryArgs): void {
+  const weeks = args.weeks
+    ? Array.from(args.weeks).sort((a, b) => a - b).join(",")
+    : "(all)";
+  const lines = [
+    "",
+    "===== Historical Odds Ingestion — Run Plan =====",
+    `  scope                  : ${args.scope ?? "(none)"}`,
+    `  weeks                  : ${weeks}`,
+    `  games requested        : ${args.gamesRequested}`,
+    `  markets requested      : ${args.markets.length} (${args.markets.join(", ")})`,
+    `  region                 : ${args.region}`,
+    `  estimated credits      : ${args.estimatedCredits}`,
+    `  cached responses found : ${args.cachedResponses}`,
+    `  new API calls required : ${args.newApiCalls}`,
+    `  credits for new calls  : ${args.creditsForUncachedCalls}`,
+    `  max allowed credits    : ${args.maxAllowedCredits}`,
+    `  min remaining floor    : ${MIN_ODDS_API_CREDITS_REMAINING}`,
+    "================================================",
+    "",
+  ];
+  for (const l of lines) {
+    // eslint-disable-next-line no-console
+    console.log(l);
+  }
+}
+
+// --- runtime credit safety -------------------------------------------
+
+function checkOverageOrFloor(args: {
+  estimated: number;
+  actual: number;
+  remaining: number | null;
+}): string | null {
+  if (
+    args.estimated > 0 &&
+    args.actual > args.estimated * CREDIT_OVERAGE_ABORT_RATIO
+  ) {
+    return `actual credits ${args.actual} exceed estimate ${args.estimated} by >${Math.round((CREDIT_OVERAGE_ABORT_RATIO - 1) * 100)}% (cap ${args.estimated * CREDIT_OVERAGE_ABORT_RATIO})`;
+  }
+  if (
+    args.remaining != null &&
+    args.remaining < MIN_ODDS_API_CREDITS_REMAINING
+  ) {
+    return `x-requests-remaining=${args.remaining} below MIN_ODDS_API_CREDITS_REMAINING=${MIN_ODDS_API_CREDITS_REMAINING}`;
+  }
+  return null;
+}
+
+// --- ApiUsageLog persistence -----------------------------------------
+
+interface UsageRecord {
+  endpoint: string;
+  url: string;
+  fromCache: boolean;
+  estimatedCredits: number;
+  usage?: OddsApiUsage;
+  status: number | null;
+}
+
+interface UsageLog {
+  record(args: UsageRecord): Promise<void>;
+  close(): Promise<void>;
+}
+
+async function openUsageLog(jsonlPath: string): Promise<UsageLog> {
+  ensureDir(path.dirname(jsonlPath));
+  const stream = fs.createWriteStream(jsonlPath, { flags: "a" });
+
+  // Best-effort Prisma writer. Only enabled if DATABASE_URL is set; on
+  // any failure we silently fall back to JSONL only.
+  interface MinimalPrisma {
+    apiUsageLog: {
+      create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+    };
+    $disconnect: () => Promise<void>;
+  }
+  let prisma: MinimalPrisma | null = null;
+  if (process.env.DATABASE_URL) {
+    try {
+      const { PrismaClient } = await import("@prisma/client");
+      prisma = new PrismaClient() as unknown as MinimalPrisma;
+    } catch {
+      prisma = null;
+    }
+  }
+
+  return {
+    async record(args: UsageRecord): Promise<void> {
+      const urlHash = createHash("sha256").update(args.url).digest("hex");
+      const entry = {
+        source: "odds-api",
+        endpoint: args.endpoint,
+        requestUrlHash: urlHash,
+        estimatedCredits: args.estimatedCredits,
+        actualCredits: args.usage?.last ?? (args.fromCache ? 0 : args.estimatedCredits),
+        creditsRemaining: args.usage?.remaining ?? null,
+        creditsUsed: args.usage?.used ?? null,
+        creditsLast: args.usage?.last ?? null,
+        status: args.status,
+        message: args.fromCache ? "cache-hit" : null,
+        createdAt: new Date().toISOString(),
+      };
+      stream.write(JSON.stringify(entry) + "\n");
+      if (prisma) {
+        try {
+          await prisma.apiUsageLog.create({
+            data: { ...entry, createdAt: new Date(entry.createdAt) },
+          });
+        } catch (err) {
+          log(
+            "warn",
+            `ApiUsageLog Prisma write failed (continuing to JSONL only): ${(err as Error).message}`,
+          );
+        }
+      }
+    },
+    async close(): Promise<void> {
+      await new Promise<void>((resolve) => stream.end(resolve));
+      if (prisma) {
+        try {
+          await prisma.$disconnect();
+        } catch {
+          // ignore
+        }
+      }
+    },
+  };
+}
+
 // --- main flow --------------------------------------------------------
 
 async function main(argv: string[]): Promise<number> {
@@ -443,14 +860,21 @@ async function main(argv: string[]): Promise<number> {
 
   log(
     "info",
-    `Season=${args.season} weeks=${args.weeks ? Array.from(args.weeks).sort((a, b) => a - b).join(",") : "ALL"} source=${args.source} budget=${args.budget} dryRun=${args.dryRun}`,
+    `Season=${args.season} scope=${args.scope ?? "(none)"} weeks=${args.weeks ? Array.from(args.weeks).sort((a, b) => a - b).join(",") : "ALL"} source=${args.source} budget=${args.budget} dryRun=${args.dryRun}`,
   );
 
   // --- safeguards
-  if (SUPPORTED_MARKETS.length > MAX_MARKETS_PER_REQUEST) {
+  if (INGESTION_MARKETS.length > MAX_MARKETS_PER_REQUEST) {
     log(
       "error",
-      `SUPPORTED_MARKETS (${SUPPORTED_MARKETS.length}) exceeds MAX_MARKETS_PER_REQUEST (${MAX_MARKETS_PER_REQUEST}).`,
+      `V1_INGESTION_MARKETS (${INGESTION_MARKETS.length}) exceeds MAX_MARKETS_PER_REQUEST (${MAX_MARKETS_PER_REQUEST}).`,
+    );
+    return 1;
+  }
+  if (INGESTION_MARKETS.length > 4) {
+    log(
+      "error",
+      `Refusing to run: ingestion is pinned to ≤4 markets in the first version (got ${INGESTION_MARKETS.length}).`,
     );
     return 1;
   }
@@ -491,29 +915,43 @@ async function main(argv: string[]): Promise<number> {
   const plan = estimateCredits({
     uniqueSnapshots: snapshots.length,
     totalEvents: games.length,
-    marketsPerEvent: SUPPORTED_MARKETS.length,
+    marketsPerEvent: INGESTION_MARKETS.length,
   });
 
   // Planned request count = one /events per unique snapshot + one
-  // /events/{id}/odds per game.
+  // /events/{id}/odds per game. The cache lookup below tells us how
+  // many of those would actually hit the network.
   const plannedRequestCount = snapshots.length + games.length;
 
-  log(
-    "info",
-    `Plan: ${games.length} games across ${snapshots.length} unique snapshots × ${plan.marketsPerEvent} markets (region=${SUPPORTED_REGION}).`,
+  // Cache pre-flight — count what we'd skip vs what we'd actually call.
+  const cacheReport = inspectCacheCoverage(
+    snapshots,
+    games,
+    INGESTION_MARKETS,
   );
-  log(
-    "info",
-    `Planned HTTP requests: ${plannedRequestCount} (${snapshots.length} events-list + ${games.length} per-event odds).`,
-  );
-  log(
-    "info",
-    `Estimated credits: ${plan.estimatedCredits} (snapshots=${plan.uniqueSnapshots}, events=${plan.totalEvents}). Budget: ${args.budget}.`,
-  );
+  const newApiCalls =
+    cacheReport.eventsMisses + cacheReport.oddsMisses;
+  const creditsForUncachedCalls =
+    cacheReport.eventsMisses * 1 +
+    cacheReport.oddsMisses * INGESTION_MARKETS.length;
+
+  printPlanSummary({
+    scope: args.scope,
+    weeks: args.weeks,
+    gamesRequested: games.length,
+    markets: INGESTION_MARKETS,
+    region: SUPPORTED_REGION,
+    estimatedCredits: plan.estimatedCredits,
+    creditsForUncachedCalls,
+    cachedResponses: cacheReport.hits,
+    plannedRequests: plannedRequestCount,
+    newApiCalls,
+    maxAllowedCredits: args.budget,
+  });
 
   // Hard policy check from src/config/api-budget.ts.
   const validation = validateCreditBudget({
-    markets: SUPPORTED_MARKETS.length,
+    markets: INGESTION_MARKETS.length,
     regions: [...ALLOWED_ODDS_REGIONS],
     estimatedCredits: plan.estimatedCredits,
   });
@@ -546,7 +984,7 @@ async function main(argv: string[]): Promise<number> {
           apiKey: keyForUrl,
           eventId: `<EVENT_FOR_${g.awayTeamAbbr}_AT_${g.homeTeamAbbr}>`,
           snapshotISO: group.snapshotISO,
-          markets: SUPPORTED_MARKETS,
+          markets: [...INGESTION_MARKETS],
         });
         log("info", `[dry] odds   game=${g.gameId}  url=${maskApiKey(oddsUrl)}`);
       }
@@ -575,24 +1013,54 @@ async function main(argv: string[]): Promise<number> {
   ensureDir(rawRoot);
   ensureDir(processedRoot);
 
+  const runId = new Date().toISOString().replace(/[:.]/g, "-");
+  const usageLogPath = path.join(args.out, "raw", "api-usage", `${runId}.jsonl`);
+  ensureDir(path.dirname(usageLogPath));
+  const usageLog = await openUsageLog(usageLogPath);
+
   const allMarkets: NormalizedPropMarket[] = [];
   const allQuotes: NormalizedPropQuote[] = [];
-  let creditsUsed = 0;
+  let creditsUsedActual = 0;
+  let creditsUsedEstimated = 0;
+  let lastRemaining: number | null = null;
 
   for (const group of snapshots) {
     log("info", `Snapshot ${group.snapshotISO}: fetching events list (${group.games.length} games target)`);
-    const eventsResp = await listHistoricalEvents({
+    const eventsRes = await fetchEventsCached({
       apiKey: apiKey!,
       snapshotISO: group.snapshotISO,
     });
-    creditsUsed += 1; // events list per snapshot
+    creditsUsedEstimated += eventsRes.fromCache ? 0 : 1;
+    creditsUsedActual += eventsRes.fromCache ? 0 : eventsRes.usage?.last ?? 1;
+    if (eventsRes.usage?.remaining != null)
+      lastRemaining = eventsRes.usage.remaining;
+    await usageLog.record({
+      endpoint: "historical-events",
+      url: eventsRes.url,
+      fromCache: eventsRes.fromCache,
+      estimatedCredits: eventsRes.fromCache ? 0 : 1,
+      usage: eventsRes.usage,
+      status: eventsRes.status,
+    });
+
     writeJSON(
       path.join(rawRoot, `${safeName(group.snapshotISO)}-events.json`),
-      eventsResp,
+      eventsRes.response,
     );
 
+    const overage = checkOverageOrFloor({
+      estimated: creditsUsedEstimated,
+      actual: creditsUsedActual,
+      remaining: lastRemaining,
+    });
+    if (overage) {
+      log("error", `ABORT mid-run: ${overage}`);
+      await usageLog.close();
+      return 4;
+    }
+
     for (const game of group.games) {
-      const event = matchEvent(eventsResp.data, game);
+      const event = matchEvent(eventsRes.response.data, game);
       if (!event) {
         log(
           "warn",
@@ -602,29 +1070,56 @@ async function main(argv: string[]): Promise<number> {
       }
       log(
         "info",
-        `  ${game.awayTeamAbbr}@${game.homeTeamAbbr}  event=${event.id}  fetching odds for ${SUPPORTED_MARKETS.length} markets`,
+        `  ${game.awayTeamAbbr}@${game.homeTeamAbbr}  event=${event.id}  fetching odds for ${INGESTION_MARKETS.length} markets`,
       );
-      const oddsResp = await getHistoricalEventOdds({
+      const oddsRes = await fetchOddsCached({
         apiKey: apiKey!,
         eventId: event.id,
         snapshotISO: group.snapshotISO,
-        markets: SUPPORTED_MARKETS,
+        markets: INGESTION_MARKETS,
       });
-      creditsUsed += SUPPORTED_MARKETS.length; // 1 per market per region; region=1
+      const estCost = INGESTION_MARKETS.length;
+      const actCost = oddsRes.fromCache
+        ? 0
+        : oddsRes.usage?.last ?? estCost;
+      creditsUsedEstimated += oddsRes.fromCache ? 0 : estCost;
+      creditsUsedActual += actCost;
+      if (oddsRes.usage?.remaining != null)
+        lastRemaining = oddsRes.usage.remaining;
+      await usageLog.record({
+        endpoint: "historical-event-odds",
+        url: oddsRes.url,
+        fromCache: oddsRes.fromCache,
+        estimatedCredits: oddsRes.fromCache ? 0 : estCost,
+        usage: oddsRes.usage,
+        status: oddsRes.status,
+      });
+
       writeJSON(
         path.join(
           rawRoot,
           `${safeName(group.snapshotISO)}-${event.id}-odds.json`,
         ),
-        oddsResp,
+        oddsRes.response,
       );
 
-      const norm = normalizeEventOdds(oddsResp.data, {
+      const norm = normalizeEventOdds(oddsRes.response.data, {
         gameId: game.gameId,
         snapshotISO: group.snapshotISO,
       });
       allMarkets.push(...norm.markets);
       allQuotes.push(...norm.quotes);
+
+      const overage2 = checkOverageOrFloor({
+        estimated: creditsUsedEstimated,
+        actual: creditsUsedActual,
+        remaining: lastRemaining,
+      });
+      if (overage2) {
+        log("error", `ABORT mid-run: ${overage2}`);
+        await usageLog.close();
+        return 4;
+      }
     }
   }
 
@@ -646,8 +1141,10 @@ async function main(argv: string[]): Promise<number> {
   log("info", `Wrote ${quotesPath} (${nQuotes} rows)`);
   log(
     "info",
-    `Done. Credits used (estimated): ${creditsUsed} / budget ${args.budget}.`,
+    `Done. Credits estimated=${creditsUsedEstimated} actual=${creditsUsedActual} remaining=${lastRemaining ?? "?"} budget=${args.budget}. ` +
+      `Usage log: ${usageLogPath}`,
   );
+  await usageLog.close();
   return 0;
 }
 
