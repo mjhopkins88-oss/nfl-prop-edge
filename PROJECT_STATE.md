@@ -1,21 +1,49 @@
 # Project State — NFL Prop Edge
 
-Snapshot as of branch `claude/review-project-state-OF2y7` @ `20f80a5`.
+Snapshot as of branch `claude/review-project-state-OF2y7`.
 
-## 1. Current product goal
+## 1. Current product shape
 
-A player-prop opportunity finder for the NFL. The app:
+The app ships with **two independent decision tracks**. They share
+the same Next.js shell, header, and theme, but neither feeds into
+the other.
 
-- Projects player stats with a transparent model.
-- Compares the model's no-vig probability to each sportsbook price.
-- Surfaces a recommendation (`OVER` / `UNDER` / `PASS`) with a full
-  decision scorecard — every prop comes with explicit pass reasons,
-  fail reasons, risk-gate scores, and a one-sentence explanation.
+### 1.1 Player Props (`/`, `/props/[id]`)
 
-V1 ships with mock data so the modeling story and UX can be validated
-before any real odds / projection feeds are wired in.
+The original lower-variance prop opportunity finder.
 
-## 2. V1 scope
+- Restricted to the 7 V1 markets only (no touchdown props).
+- Decision authority is the **scorecard model**
+  (`src/lib/model/model-scorecard.ts`) via
+  `src/lib/model/prop-opportunity.ts`. Every prop renders a full
+  decision scorecard — pass reasons, fail reasons, risk-gate
+  scores, primary disqualifier, one-sentence explanation.
+- Backtesting foundation lives under `src/lib/backtest/` and
+  `scripts/run-backtest-2025.ts`; reads stored data only.
+- See §3 for the full Player Props stack.
+
+### 1.2 Game Edge (`/game-edge`, `/game-edge/[id]`)
+
+Separate experimental model for game-level markets.
+
+- Evaluates **moneyline + spread + upset score** for each game.
+- Treats market win probability as the baseline, applies capped
+  football-context adjustments around it (no proxy-only runaway).
+- **Does not affect player prop logic.** Game Edge has its own
+  types, its own scorecard, its own UI surface. Player prop
+  recommendations are unchanged whether Game Edge is consumed or
+  not.
+- **Upset score is descriptive (0–100), not prescriptive.** A
+  high upset score never forces a bet. The only way the model
+  recommends a play is if the confidence-adjusted edge clears its
+  threshold.
+- **Moneyline and spread are evaluated independently.** The
+  spread path can recommend a play while the moneyline path
+  passes (and vice versa); the highest confidence-adjusted edge
+  wins between the two.
+- See §4 for the full Game Edge stack.
+
+## 2. V1 player prop scope
 
 Lower-variance volume markets only:
 
@@ -27,151 +55,195 @@ Lower-variance volume markets only:
 - `RUSHING_ATTEMPTS`
 - `RUSHING_YARDS`
 
-Two pages currently shipping:
-
-- `/` — dashboard. Filterable, sortable list of every opportunity, each
-  rendered as a scorecard card.
-- `/props/[id]` — full prop detail page with the model decision
-  scorecard panel, recent game logs, line shopping, matchup notes.
-
-A third page (`/backtest`) renders a mock backtest summary; the
-real backtest runner is wired up but not yet producing output here.
-
-## 3. Explicit exclusions
+Explicit exclusions:
 
 - **No touchdown props** in V1 (anytime scorer, first TD scorer,
-  rush/rec/pass TD overs). The model is not calibrated for low-base-
-  rate Bernoulli markets and the ingestion path drops TD columns.
+  rush/rec/pass TD overs). The model is not calibrated for low-
+  base-rate Bernoulli markets and the ingestion path drops TD
+  columns.
 - **No live odds / no paid API calls** from the running app.
-- **No Railway dependency** for local algorithm work. Railway deploy
-  config (`railway.json`) exists but is unused for day-to-day model
-  iteration.
+- **No Railway dependency** for local algorithm work. Railway
+  deploy config (`railway.json`) exists but is unused for
+  day-to-day model iteration.
 - **No real money interface.** No bet placement, no bankroll
-  management, no account system.
+  management, no account system, no automated betting.
 
-## 4. Current architecture
+## 3. Player Props — architecture and status
 
-Stack: Next.js 15 (App Router) + React 19 + TypeScript + Tailwind +
-Prisma 5 + Postgres. Deploy target: Railway (optional).
+Stack: Next.js 15 (App Router) + React 19 + TypeScript + Tailwind
++ Prisma 5 + Postgres. Deploy target: Railway (optional).
+
+### 3.1 Routes and components
 
 ```
 src/
   app/
-    page.tsx                # Dashboard (server component, URL-driven filters)
+    page.tsx                # Dashboard (server, URL-driven filters)
     props/[id]/page.tsx     # Prop detail page with scorecard panel
-    backtest/page.tsx       # Mock backtest summary
+    backtest/page.tsx       # Backtest performance dashboard
     layout.tsx              # Header + footer + theme
     globals.css
 
   components/
     OpportunityCard.tsx     # Scorecard-driven prop card (dashboard)
     OpportunityList.tsx     # Card list wrapper
-    ScorecardBadges.tsx     # Qualified / Edge Below Threshold / Role Risk / etc.
+    ScorecardBadges.tsx     # Qualified / Edge Below Threshold / etc.
     ScorecardDetailPanel.tsx# Full scorecard section for detail page
-    PropCard.tsx            # Legacy feature-framework card (unused by current pages)
-    PropFilters.tsx         # Filter chips (writes to URL)
-    StatCard.tsx, Header.tsx, TeamBadge.tsx,
-    EdgeBadge.tsx, RecommendationPill.tsx, ConfidenceMeter.tsx,
-    DashboardSidebar.tsx, icons.tsx
-
-  lib/
-    types.ts                # Domain types (Team, Player, Game, PropMarket, PropDetail, …)
-    prop-utils.ts           # Label, format, odds-math helpers
-    mock-data.ts            # All V1 data: teams, players, games, props, logs, alt lines
-    prisma.ts               # Prisma singleton
-
-    model/                  # Two model systems coexist (see §5)
-      model-scorecard.ts        # Scorecard engine — drives the UI
-      prop-opportunity.ts       # Data accessor: PropOpportunity (prop + scorecard)
-      risk-inputs.ts            # Per-prop risk-input mock + defaults
-      feature-framework.ts      # Feature-framework engine
-      feature-scoring.ts        # Feature gate qualifier
-      prop-projection-engine.ts # Projection from raw inputs
-      prop-projection-rules.ts  # Per-prop-type projection rules
-      synthetic-scenarios.ts    # 23 hand-tuned scenarios for the feature engine
-      validation.ts             # Cross-engine sanity checks
-
-    data/                   # Feature-framework data accessors
-      props.ts, types.ts, games.ts, players.ts, backtest.ts
-
-    backtest/               # Backtest engine modules
-      feature-builder.ts, grading.ts, metrics.ts,
-      probability-engine.ts, projection-engine.ts
-
-    ingestion/              # External-API client scaffolds (dry-run by default)
-      odds-api.ts           # The Odds API client (paid)
-      kalshi.ts             # Kalshi event-contracts client
-      weather.ts            # Open-Meteo (free)
-      injuries.ts           # Injury report ingestion
-      cache.ts, credit-estimator.ts
-
-prisma/
-  schema.prisma             # Postgres schema (17 models / 5 enums — see §7)
-  seed.ts                   # Loads mock-data into Postgres
-
-scripts/
-  test-synthetic-model.ts   # Scorecard runner — 20 scenarios, all green
-  run-backtest-2025.ts      # 2025 backtest runner against stored data
-  ingest-historical-prop-lines.ts  # Odds API historical (dry-run default)
-  ingest-kalshi-markets.ts         # Kalshi (dry-run default)
-  ingest-weather-history.ts        # Open-Meteo (dry-run default)
-  ingest-injury-flags.ts           # Injury CSV ingest
-  ingest-nfl-history.py            # nflverse stats (Python stub)
-  requirements.txt, README.md
-
-data/                       # Ingestion output land — empty except manual CSVs
-  raw/, processed/, backtests/, cache/, manual/
+    MatchupIntelligencePanel.tsx
+    PropCard.tsx, PropFilters.tsx, StatCard.tsx, Header.tsx,
+    TeamBadge.tsx, EdgeBadge.tsx, RecommendationPill.tsx,
+    ConfidenceMeter.tsx, DashboardSidebar.tsx, icons.tsx
 ```
 
-## 5. Current model / scorecard status
+### 3.2 Model layers (player prop only)
 
-**Two model systems live in `src/lib/model/` after the recent merge:**
+All under `src/lib/model/`:
 
-1. **Scorecard engine** (`model-scorecard.ts`) — drives every page in
-   the app today.
-   - Inputs: market line, odds, projected mean / σ, eight risk scores
-     (data quality, role stability, game script, pace, market context,
-     weather, injury, correlation).
-   - Outputs: model probabilities, no-vig market probabilities, edge
-     over/under, selected side, recommendation, qualified flag, gate
-     breakdown, pass/fail/disqualifier lists, final one-sentence
-     explanation.
-   - Helpers: `buildPropDecisionScorecard`, `summarizeScorecardForUI`,
-     `getPrimaryDisqualifier`, `getTopReasons`, `getTopRisks`.
-   - Edge threshold: `0.04`. Risk gates per dimension are encoded in
-     the engine.
+- `model-scorecard.ts` — scorecard engine (decision authority).
+- `prop-opportunity.ts` — UI data accessor: prop + scorecard.
+- `risk-inputs.ts` — per-prop risk-input mock + defaults.
+- `feature-framework.ts` + `feature-scoring.ts` — feature gate
+  engine that enriches mock data.
+- `prop-projection-engine.ts` + `prop-projection-rules.ts` —
+  projection pipeline.
+- `coaching-transition.ts` (+ types + data) — coaching-uncertainty
+  framework (threshold bump + confidence drag).
+- `matchup-intelligence.ts` (+ types + data) — capped σ widening
+  and reasons/risks; mean multiplier is reported but not applied.
+- `proxy-football-features.ts` (+ types + calibration) — 12
+  confidence-scored football proxies.
+- `market-anchored-probability.ts` — market-baseline +
+  confidence-adjusted-edge primitives. Consumed by the Game
+  Edge model; provided to the prop scorecard as passthrough
+  metadata.
+- `synthetic-scenarios.ts` — historical 23-scenario set for the
+  feature engine (not exercised by the current synthetic runner).
+- `validation.ts` — cross-engine sanity checks.
 
-2. **Feature-framework engine** (`feature-framework.ts` +
-   `feature-scoring.ts` + `prop-projection-engine.ts`) — richer
-   feature scoring + projection pipeline; powers `mock-data.ts`'s
-   per-prop enrichment and the `/backtest` page summary.
-   - Not currently displayed in the dashboard / detail UI.
-   - Has its own 23-scenario set in `synthetic-scenarios.ts`.
+### 3.3 v2 algorithm pipeline (opt-in)
 
-The scorecard system is the **decision authority for the UI**. The
-feature-framework system is reference / backtest infrastructure.
-Future work should pick one or define a clean handoff.
+After the audit in `PLAYER_PROP_ALGO_AUDIT.md`, an opt-in v2
+pipeline was added alongside the scorecard:
 
-## 6. Current synthetic test status
+- `prop-model-config.ts`, `role-change-detector.ts`,
+  `line-sensitivity.ts`, `confidence-adjusted-edge.ts`,
+  `market-disagreement.ts`, `signal-deduplication.ts`,
+  `prop-qualification.ts`, `player-prop-pipeline.ts`.
 
-`scripts/test-synthetic-model.ts`:
+The v2 pipeline is consumed by `scripts/test-player-prop-algo-audit.ts`
+and is available for future backtest integration. **It does not
+replace the scorecard**; the dashboard still routes through
+`buildPropDecisionScorecard`. Backtesting will decide which v2
+thresholds graduate into the dashboard's decision path.
 
-- 20 hand-tuned scenarios covering every V1 prop type and every gate
-  failure mode (clean qualifying OVER/UNDER, edge-below-threshold,
-  role / injury / weather / correlation / data-quality / game-script /
-  pace / market-context blockers, volatility checks).
-- Runs the full scorecard pipeline and asserts on
-  `(qualified, recommendation, primaryDisqualifier-substring)`.
-- TTY-aware ANSI color output, non-zero exit on any failure.
-- **20 / 20 scenarios pass** as of `20f80a5`.
+### 3.4 Backtest engine (player prop only)
 
-`synthetic-scenarios.ts` carries a separate 23-scenario set for the
-feature-framework engine; that one is not exercised by the current
-test runner.
+Under `src/lib/backtest/`:
 
-## 7. Current schema / data status
+- `runner.ts`, `data-loader.ts`, `feature-builder.ts`,
+  `grading.ts`, `metrics.ts`, `reporting.ts`,
+  `market-adapter.ts`, `projection-adapter.ts`,
+  `postmortem.ts`, `line-buckets.ts`, `fixture-summary.ts`,
+  `fixture-proxy-summary.ts`, `proxy-validation.ts`, `types.ts`.
 
-Prisma models (`prisma/schema.prisma`):
+`scripts/run-backtest-2025.ts` builds features from stored
+historical data, runs the projection engine, grades plays, and
+writes summary + per-result outputs. It does **not** call paid
+APIs.
+
+### 3.5 Player prop test status
+
+- `scripts/test-synthetic-model.ts` — 22 / 22 scorecard scenarios
+  passing.
+- `scripts/test-coaching-transition-model.ts` — 68 / 68.
+- `scripts/test-matchup-intelligence-model.ts` — 78 / 78.
+- `scripts/test-proxy-football-features.ts` — 59 / 59.
+- `scripts/test-proxy-football-calibration.ts` — 147 / 147.
+- `scripts/test-proxy-validation.ts` — 127 / 127.
+- `scripts/test-market-anchored-probability.ts` — 101 / 101.
+- `scripts/test-backtest-fixtures.ts` — 22 / 22.
+- `scripts/test-backtest-tracking.ts` — 38 / 38.
+- `scripts/test-player-prop-algo-audit.ts` — 22 / 22 (v2 pipeline).
+- `scripts/run-backtest-2025.ts --fixtures` — produces summary +
+  results CSV.
+
+## 4. Game Edge — architecture and status
+
+A separate experimental model. Lives entirely under its own
+files; never crosses into player prop logic.
+
+### 4.1 Routes and components
+
+```
+src/
+  app/
+    game-edge/
+      page.tsx              # Game Edge dashboard (filter tabs)
+      [id]/page.tsx         # Per-game detail page
+```
+
+The header (`src/components/Header.tsx`) adds a "Game Edge" nav
+item alongside "Opportunities" and "Backtest".
+
+### 4.2 Model layers
+
+All under `src/lib/model/`:
+
+- `game-edge-types.ts` — `GameEdgeInput`, `GameEdgeOutput`,
+  `GameEdgeScorecard`, recommendation / market / side enums.
+- `game-edge-model.ts` — `buildGameEdge(input)`. Reuses
+  `buildMarketAnchoredProbability` for moneyline cap discipline.
+  Evaluates moneyline and spread independently, computes upset
+  score (0–100, descriptive only), handles key-number spread
+  fragility (2.5, 3, 3.5, 6.5, 7, 7.5, 9.5, 10, 10.5, 13.5, 14,
+  14.5), and applies hard PASS gates when data quality or
+  composite risk drops below 0.45.
+- `game-edge-scorecard.ts` — display helpers (label color
+  classes, side-to-team, format helpers).
+- `game-edge-data.ts` — 12 hand-tuned fixtures, one per
+  recommendation path (Strong ML Value / Playable ML Value /
+  Upset Watch / Spread Value / Cover Watch / Pass / No Edge /
+  Pass / Too Much Uncertainty).
+
+### 4.3 Recommendation labels
+
+- `Strong ML Value` (≥ 8pp confidence-adjusted ML edge)
+- `Playable ML Value`
+- `Upset Watch` (upset score ≥ 55 but no price clears threshold)
+- `Spread Value`
+- `Cover Watch` (positive spread edge below threshold)
+- `Pass / No Edge`
+- `Pass / Too Much Uncertainty` (DQ < 0.45 or risk < 0.45)
+
+### 4.4 Discipline guarantees
+
+- Moneyline and spread are evaluated as independent candidates;
+  the highest confidence-adjusted edge wins between them.
+- The upset score is descriptive — a high score never forces a
+  bet. It can drive an `Upset Watch` label only when no price
+  clears the edge gate.
+- Edge gates: ML favorite 3pp, ML underdog 5pp, ML longshot
+  (<30%) 7pp, spread 4pp (6pp when uncertainty elevated). All
+  thresholds are hypotheses to be refined by backtesting.
+
+### 4.5 Test status
+
+- `scripts/test-game-edge-model.ts` — 12 / 12 scenarios. Asserts
+  universal invariants: no forced recommendations, ML / spread
+  evaluated independently, confidence-adjusted edge gates plays,
+  PASS labels on high uncertainty, upset score is descriptive.
+
+### 4.6 No backtest yet
+
+The Game Edge model has no historical backtest. **Do not use for
+real bets until the model is validated against historical game
+data** — and even then, this remains a research project, not
+investment advice.
+
+## 5. Current schema / data status
+
+Prisma models (`prisma/schema.prisma`) still live under the
+Player Props track:
 
 ```
 Team, Player, Game, GameLog
@@ -184,112 +256,104 @@ ApiUsageLog
 Enums: `Position`, `PropType` (7 lower-variance markets, no TDs),
 `Recommendation`, `ModelRunType`, `BetResult`.
 
-`prisma/seed.ts` loads mock data plus a sample `ModelRun`,
-`PropQuote`, `Projection`, and `BacktestResult` row so the schema is
-exercised end-to-end against a real DB.
+The Game Edge model is fixture-only today — no schema, no
+ingestion. When/if it graduates to live data, it will live in its
+own schema namespace.
 
 Mock data layer (`src/lib/mock-data.ts`):
 
 - 25 props across 5 games (Week 11 / 2025).
-- 24 players with 5-game logs.
-- Every prop is enriched at module-load time with feature-framework
-  outputs (reasons, risks, featureSet, dataQualityScore, riskScore).
-- The dashboard then re-derives its decision through the scorecard
-  engine — the scorecard is the single source of truth for the UI.
+- Player prop scorecard is the single source of truth for the
+  player prop UI.
 
 Manual data files (committed):
 
 - `data/manual/injury_flags.csv`
 - `data/manual/stadiums.csv`
+- Backtest fixtures under `data/fixtures/backtest/`.
 
-All `data/raw|processed|backtests|cache/` directories exist but are
-empty pending real ingestion runs.
+## 6. Current UI status
 
-## 8. Current UI status
+### 6.1 Player Props
 
-Dashboard (`/`):
+- `/` — dashboard. Hero stats, filter chips, one
+  `OpportunityCard` per prop with recommendation, scorecard
+  badges, probability + edge readouts, top reasons / risks,
+  final explanation.
+- `/props/[id]` — prop detail. Hero header, 4-metric strip, full
+  `ScorecardDetailPanel`, matchup intelligence panel, recent
+  game logs, line shopping.
+- `/backtest` — backtest performance dashboard. Tile metrics,
+  per-market and per-confidence breakdowns, proxy accuracy panel
+  when the fixture summary is generated.
 
-- Hero stats: tracked markets, positive edges, avg qualified edge,
-  top edge.
-- Filter chips: prop type, position, side, sort (edge / confidence /
-  player).
-- One `OpportunityCard` per prop showing recommendation, qualified /
-  not-qualified status, model probability, no-vig market probability,
-  edge vs threshold, confidence meter, top 2 reasons, top 2 risks,
-  final explanation, and badge strip (Qualified / Edge Below
-  Threshold / Role Risk / Injury Risk / Weather Risk / Correlation
-  Risk / Low Data Quality).
-- Today: 19 qualified plays + 6 PASS demos (2 thin-edge, 4 gate-
-  blocked — one for each of injury, correlation, weather, market
-  context).
+### 6.2 Game Edge
 
-Prop detail (`/props/[id]`):
+- `/game-edge` — Experimental Game Edge dashboard. Hero card
+  marked "Experimental — separate from player prop model", five
+  summary tiles (games evaluated / moneyline value / spread
+  value / upset watch / pass), filter tabs (all / moneyline /
+  spread / upset watch / pass), per-game cards with
+  recommendation label, selected market, upset score badge, and
+  matchup metrics.
+- `/game-edge/[id]` — per-game detail. Market baseline / model
+  probability / moneyline path / spread path / upset analysis /
+  reasons + risks + disqualifiers / what would change the
+  recommendation / final explanation.
 
-- Hero header with team / matchup / line / recommendation pill / edge
-  badge / confidence meter.
-- 4-metric strip (market line, projection, model hit rate, selected
-  side edge).
-- Full `ScorecardDetailPanel`: probability + edge grid (model O/U,
-  no-vig O/U, edge O/U, selected edge, threshold), projection grid,
-  8 risk-score rows with gate markers and OK / WARN / FAIL pills,
-  pass / fail / disqualifier lists, final explanation card, badge
-  strip.
-- Recent game log table with distribution bars.
-- Line shopping table.
-- Matchup notes.
+Visual style: light glassmorphism, `ink` palette + `amber` /
+`coral` / `sea` accent tones. Game Edge surfaces use the same
+theme but are clearly labeled "Experimental" so the user can
+tell at a glance they're not on the player prop dashboard.
 
-Backtest (`/backtest`):
+## 7. Current backtest / API status
 
-- Renders a mock summary from `getBacktestSummary()` (currently
-  static). Not yet wired to real backtest output.
+**Player prop backtest runner** (`scripts/run-backtest-2025.ts`):
 
-Visual style: light glassmorphism, dark `ink` palette + `amber` /
-`coral` / `sea` accent tones; design tokens defined in
-`tailwind.config.ts` and used across components.
+- Builds features from stored historical data, runs the
+  projection engine, grades plays, writes summary + result CSV.
+- Designed to read from Postgres or committed CSV fixtures only
+  — it does not call paid APIs directly. Ingestion happens
+  out-of-band into the DB.
 
-## 9. Current backtest / API status
-
-**Backtest runner** (`scripts/run-backtest-2025.ts`):
-
-- Builds features from stored historical data, runs the projection
-  engine, grades plays, writes a `BacktestResult` row.
-- Designed to read from Postgres only — it does not call paid APIs
-  directly. Ingestion happens out-of-band into the DB.
-- Not yet executed against a real seeded historical dataset.
+**Game Edge backtest**: not yet built. Fixture-driven only.
 
 **Ingestion scaffolds** (`src/lib/ingestion/` + `scripts/ingest-*`):
 
 - `odds-api.ts` — paid. Real calls are gated by
   `ALLOW_REAL_ODDS_API_CALLS=true` and a credit estimator. Default
   mode is dry-run.
-- `kalshi.ts` — `KALSHI_API_KEY` + environment selector; demo env by
-  default.
+- `kalshi.ts` — `KALSHI_API_KEY` + environment selector; demo env
+  by default.
 - `weather.ts` — free (Open-Meteo); still dry-run by default.
-- `injuries.ts` — reads `data/manual/injury_flags.csv`; no external
-  call.
-- `ingest-nfl-history.py` — nflverse scaffold; writes empty schema-
-  only CSVs unless the `nflreadpy` / `nfl_data_py` wrappers are
-  uncommented. No API key required.
+- `injuries.ts` — reads `data/manual/injury_flags.csv`; no
+  external call.
+- `ingest-nfl-history.py` — nflverse scaffold; writes empty
+  schema-only CSVs unless the `nflreadpy` / `nfl_data_py`
+  wrappers are uncommented. No API key required.
 
-`src/config/api-budget.ts` defines monthly call ceilings; the credit
-estimator inspects each batch before any network call. The running
-app does **not** make any external calls.
+`src/config/api-budget.ts` defines monthly call ceilings; the
+credit estimator inspects each batch before any network call.
+The running app does **not** make any external calls.
 
-## 10. Next recommended steps
+## 8. Next recommended steps
 
-See `NEXT_STEPS.md` for the prioritized punch list (top 5).
+See `NEXT_STEPS.md` for the prioritized punch list.
 
 In broad strokes:
 
-1. Reconcile the two model systems so the scorecard is the only
-   decision authority and the feature-framework feeds it (or remove
-   the unused half).
-2. Wire `/backtest` to consume real `BacktestResult` rows produced by
-   the backtest runner against seeded historical data.
-3. Stand up a one-week historical seed (Odds API + nflverse) end-to-
-   end with the dry-run / credit-budget guardrails actually
-   exercised.
-4. Replace `mock-data.ts` reads in the pages with Prisma queries once
-   the DB has real data.
-5. Add unit tests for the scorecard engine's branch coverage (gate
-   selection, primary-disqualifier ordering, no-vig math).
+1. Wire the v2 player prop pipeline into the backtest runner so
+   we can compare its qualification decisions against the
+   existing scorecard on real historical data, then graduate the
+   thresholds that prove out.
+2. Build a Game Edge backtest — historical game-level data,
+   per-recommendation P/L tracking, key-number sensitivity
+   analysis. The Game Edge model is fixture-only until this lands.
+3. Stand up a one-week historical seed (Odds API + nflverse)
+   end-to-end with the dry-run / credit-budget guardrails
+   actually exercised.
+4. Replace `mock-data.ts` reads in the pages with Prisma queries
+   once the DB has real data.
+5. Keep enforcing the two-section separation: no Game Edge logic
+   in player prop components, no player prop logic in Game Edge
+   components.

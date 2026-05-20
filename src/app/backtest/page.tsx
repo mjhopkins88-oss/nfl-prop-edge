@@ -12,12 +12,18 @@ import {
 import { getBacktestSummary } from "@/lib/data/backtest";
 import { loadFixtureBacktestSummary } from "@/lib/backtest/fixture-summary";
 import { loadFixtureProxySummary } from "@/lib/backtest/fixture-proxy-summary";
+import {
+  loadFixtureComparisonSummary,
+  loadFixtureRecommendationChanges,
+} from "@/lib/backtest/fixture-comparison-summary";
 import { PROP_TYPE_SHORT } from "@/lib/prop-utils";
 
 export default function BacktestPage() {
   const s = getBacktestSummary();
   const fixture = loadFixtureBacktestSummary();
   const proxySummary = loadFixtureProxySummary();
+  const compare = loadFixtureComparisonSummary();
+  const changes = loadFixtureRecommendationChanges();
 
   const winRate = s.wins / Math.max(1, s.totalPlays);
   const profit = s.unitsReturn - s.unitsStaked;
@@ -298,6 +304,125 @@ export default function BacktestPage() {
               </ul>
             )}
           </div>
+        </section>
+      )}
+
+      {compare && (
+        <section className="glass-strong rounded-3xl p-6 sm:p-8">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-800">
+                Algorithm comparison (V1 vs V2)
+              </div>
+              <h2 className="mt-1 text-xl font-semibold text-ink-900">
+                Player Prop Algorithm v2 — disciplined pipeline
+              </h2>
+              <p className="mt-1 max-w-2xl text-xs text-ink-600">
+                Same fixtures, two algorithms. V2 is opt-in and not yet
+                the dashboard default — backtesting will decide whether
+                it graduates.
+              </p>
+            </div>
+            <div className="text-[11px] text-ink-500">
+              {compare.scope.season} · Weeks {compare.scope.startWeek}–
+              {compare.scope.endWeek} · generated{" "}
+              {new Date(compare.generatedAt).toLocaleString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <ComparisonMetric
+              label="Qualified bets"
+              v1={`${compare.v1.qualifiedBets}`}
+              v2={`${compare.v2.qualifiedBets}`}
+              delta={compare.deltaSummary.qualifiedBetsDelta}
+              deltaSuffix=" bets"
+              betterWhen="lower"
+            />
+            <ComparisonMetric
+              label="Hit rate"
+              v1={`${(compare.v1.hitRate * 100).toFixed(1)}%`}
+              v2={`${(compare.v2.hitRate * 100).toFixed(1)}%`}
+              delta={compare.deltaSummary.hitRateDelta * 100}
+              deltaSuffix="pp"
+              betterWhen="higher"
+            />
+            <ComparisonMetric
+              label="ROI"
+              v1={`${compare.v1.roiPct.toFixed(1)}%`}
+              v2={`${compare.v2.roiPct.toFixed(1)}%`}
+              delta={compare.deltaSummary.roiPctDelta}
+              deltaSuffix="pp"
+              betterWhen="higher"
+            />
+            <ComparisonMetric
+              label="Profit (units)"
+              v1={`${compare.v1.profitUnits.toFixed(2)}`}
+              v2={`${compare.v2.profitUnits.toFixed(2)}`}
+              delta={compare.deltaSummary.profitUnitsDelta}
+              deltaSuffix=" units"
+              betterWhen="higher"
+            />
+          </div>
+
+          {changes && (
+            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl bg-white/60 p-4 ring-1 ring-white/40">
+                <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-600">
+                  Recommendation changes
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-ink-800">
+                  <div>Same bet</div>
+                  <div className="text-right tabular-nums">
+                    {changes.counts.SAME_BET ?? 0}
+                  </div>
+                  <div>V1 bet → V2 PASS</div>
+                  <div className="text-right tabular-nums">
+                    {changes.counts.V1_BET_V2_PASS ?? 0}
+                  </div>
+                  <div>V1 PASS → V2 bet</div>
+                  <div className="text-right tabular-nums">
+                    {changes.counts.V1_PASS_V2_BET ?? 0}
+                  </div>
+                  <div>Opposite side</div>
+                  <div className="text-right tabular-nums">
+                    {changes.counts.OPPOSITE_SIDE ?? 0}
+                  </div>
+                  <div>Same PASS, diff reason</div>
+                  <div className="text-right tabular-nums">
+                    {changes.counts.SAME_PASS_DIFFERENT_REASON ?? 0}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-2xl bg-white/60 p-4 ring-1 ring-white/40">
+                <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-600">
+                  Top V2 disqualifiers (new vs V1)
+                </div>
+                {changes.topNewV2Disqualifiers.length === 0 && (
+                  <div className="mt-2 text-xs text-ink-500">
+                    No new V2 disqualifiers — every V1 bet still qualified
+                    under V2.
+                  </div>
+                )}
+                {changes.topNewV2Disqualifiers.slice(0, 5).map((d) => (
+                  <div
+                    key={d.disqualifier}
+                    className="mt-2 flex items-baseline justify-between gap-3 text-xs text-ink-800"
+                  >
+                    <div className="truncate">{d.disqualifier}</div>
+                    <div className="shrink-0 tabular-nums text-ink-600">
+                      × {d.count}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -1047,4 +1172,50 @@ function prettyProxyName(name: string): string {
     .split(" ")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+function ComparisonMetric({
+  label,
+  v1,
+  v2,
+  delta,
+  deltaSuffix,
+  betterWhen,
+}: {
+  label: string;
+  v1: string;
+  v2: string;
+  delta: number;
+  deltaSuffix: string;
+  betterWhen: "higher" | "lower";
+}) {
+  const isImprovement =
+    betterWhen === "higher" ? delta > 0 : delta < 0;
+  const tone =
+    Math.abs(delta) < 0.01
+      ? "text-ink-500"
+      : isImprovement
+        ? "text-sea-700"
+        : "text-coral-700";
+  const sign = delta > 0 ? "+" : "";
+  return (
+    <div className="rounded-2xl bg-white/65 p-4 ring-1 ring-white/40">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {label}
+      </div>
+      <div className="mt-1 flex items-baseline justify-between gap-2 text-sm text-ink-700">
+        <span>V1</span>
+        <span className="tabular-nums">{v1}</span>
+      </div>
+      <div className="flex items-baseline justify-between gap-2 text-sm text-ink-900">
+        <span>V2</span>
+        <span className="font-semibold tabular-nums">{v2}</span>
+      </div>
+      <div className={`mt-1 text-[11px] font-medium tabular-nums ${tone}`}>
+        Δ {sign}
+        {delta.toFixed(deltaSuffix.includes("pp") ? 1 : 2)}
+        {deltaSuffix}
+      </div>
+    </div>
+  );
 }

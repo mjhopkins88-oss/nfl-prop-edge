@@ -995,6 +995,216 @@ real bets until the model has been validated against historical
 game data** — and even then, this remains a research project, not
 investment advice.
 
+## Player Prop Algorithm v2
+
+After auditing the V1 scorecard (see `PLAYER_PROP_ALGO_AUDIT.md`)
+we added an opt-in v2 pipeline that closes the gaps the audit
+found. **It does not replace the existing scorecard.** The
+dashboard still routes through `buildPropDecisionScorecard` while
+v2 is being validated against the local backtest. The two paths
+run side-by-side; v2 is consumed by the new test runner and by
+future backtest analysis.
+
+### Main principle
+
+Market is the baseline. Football intelligence creates capped,
+explainable adjustments around the no-vig market probability. The
+model is designed to **pass on most props**.
+
+### What's wired in v2
+
+- **Market-anchored probability.** Model probability =
+  no-vig market + capped Σ(confidence-weighted signal deltas).
+  Per-prop cap (`maxMarketAdjustmentPp` from
+  `prop-model-config.ts`) prevents a thin-evidence projection
+  from running off into 30pp lifts.
+- **Confidence-adjusted edge.** Raw edge alone is not enough.
+  Pipeline gates on `confidenceAdjustedEdge = rawEdge × clamp(confidence / 0.7)`
+  with a floor of 60% of the prop's base threshold.
+- **Risk-adjusted edge.** Further multiplies by data quality,
+  role stability, and prop-type volatility to expose
+  overconfidence in the trace (the gate uses the conf-adj edge;
+  the risk-adj edge is for diagnostics).
+- **Role-trend detection.** `role-change-detector.ts` classifies
+  the role as `STABLE_ROLE`, `EXPANDING_ROLE`, `DECLINING_ROLE`,
+  `VOLATILE_ROLE`, or `UNKNOWN_ROLE`. Tiny but flat usage is
+  `UNKNOWN_ROLE`, not "stable". Declining roles disqualify
+  receiving + rushing props.
+- **Line sensitivity.** `line-sensitivity.ts` computes nearby
+  probabilities at line ± 1, plus a key-line risk flag
+  (RECEPTIONS 4–7, RUSHING_ATTEMPTS multiples of 2, etc.).
+  Yardage props are gated more strictly on fragility.
+- **Market disagreement.** `market-disagreement.ts` classifies
+  the |model - market| gap and flags
+  `LIKELY_MODEL_OVERCONFIDENCE` when the gap is large but
+  confidence is low or signal support is proxy-only.
+- **Signal deduplication.** `signal-deduplication.ts` groups
+  signals by category (`ROLE` / `VOLUME` / `EFFICIENCY` /
+  `WEATHER` / `COACHING` / `MATCHUP` / `MARKET` /
+  `CORRELATION`) and caps the within-category total at
+  1.25 × the dominant signal — so OL injury + opponent pressure
+  cannot fire twice at full weight for the same "pressure-sensitive
+  QB" idea.
+- **Per-prop config.** `prop-model-config.ts` holds prop-specific
+  base thresholds, max market adjustment caps, preferred /
+  risky signal categories, sensitivity ratings, and confidence
+  / data quality floors. RECEIVING_YARDS gates more strictly
+  than RECEPTIONS; PASSING_ATTEMPTS prioritizes VOLUME +
+  COACHING signals; RUSHING_ATTEMPTS prioritizes ROLE + VOLUME.
+- **Centralized qualification.** `prop-qualification.ts`
+  enforces the disqualifier priority chain (market data → raw
+  edge → confidence-adjusted edge → data quality → role
+  stability → injury → weather → coaching → market
+  disagreement → line fragility → correlation → prop-specific).
+- **Debug trace.** Every decision produces a
+  `PlayerPropDecisionTrace` with input / output summary and
+  warnings per step (baseline projection, no-vig baseline,
+  signal dedup, market-anchored adjustment, side selection,
+  line sensitivity, confidence-adjusted edge, market
+  disagreement, qualification). Used by the future trace UI
+  and by the test runner's assertions.
+
+### How proxies, matchup, and coaching plug in
+
+- Proxies and matchup intelligence supply `DedupSignal` objects
+  with explicit `category`, `deltaPp`, `confidence`, and
+  `independent` flags. The pipeline weights them by confidence
+  before summing — a 10pp signal at 0.3 confidence contributes
+  3pp, not 10pp.
+- Coaching uncertainty (0–100 penalty) bumps the edge threshold
+  AND drags the raw model probability via a separate
+  `coachingDragPp`. The dedup cap prevents the two from
+  compounding within the same category.
+- Proxy-only or matchup-only signals never carry enough
+  confidence to push the model 12pp from market — the
+  disagreement classifier flips to `LIKELY_MODEL_OVERCONFIDENCE`
+  and the qualification gate hard-PASSes.
+
+### Why v2 is opt-in for now
+
+Backtesting will decide which modules stay, which thresholds
+move, and which signals get weakened. The existing scorecard is
+unchanged so the dashboard's recommendations are stable while
+v2 thresholds are validated. The two paths can be compared
+on the same input bundle by calling both `buildPropDecisionScorecard`
+and `runPlayerPropPipeline` from the same data.
+
+### Where to find it
+
+- Audit: `PLAYER_PROP_ALGO_AUDIT.md`
+- Per-prop config: `src/lib/model/prop-model-config.ts`
+- Role trend detector: `src/lib/model/role-change-detector.ts`
+- Line sensitivity: `src/lib/model/line-sensitivity.ts`
+- Confidence-adjusted edge: `src/lib/model/confidence-adjusted-edge.ts`
+- Market disagreement: `src/lib/model/market-disagreement.ts`
+- Signal deduplication: `src/lib/model/signal-deduplication.ts`
+- Centralized qualification: `src/lib/model/prop-qualification.ts`
+- Pipeline orchestrator: `src/lib/model/player-prop-pipeline.ts`
+- Test runner (22 scenarios): `scripts/test-player-prop-algo-audit.ts`
+
+## V1 vs V2 Player Prop Backtesting
+
+The Player Prop Algorithm v2 pipeline is opt-in for the backtest
+runner. The dashboard still uses V1 (`buildPropDecisionScorecard`)
+for its recommendations. The backtest comparison mode lets us
+measure V2 head-to-head on the same fixtures before we even
+consider changing the default.
+
+### What V1 and V2 mean here
+
+- **V1 (`V1_SCORECARD`)** — the existing scorecard path. Raw edge
+  `modelOverProbability - noVigOverProbability` compared to a
+  prop-specific threshold, with eight risk-bucket gates and
+  matchup σ widening. No confidence-adjusted edge gate, no
+  line-sensitivity gate, no market-disagreement classifier.
+- **V2 (`V2_PIPELINE`)** — the disciplined pipeline added during
+  the algorithm audit:
+  - **Market anchoring.** Model probability is the no-vig market
+    probability plus a capped, confidence-weighted sum of
+    football signals (per-prop cap from
+    `prop-model-config.ts`).
+  - **Confidence-adjusted edge.** Raw edge × clamp(confidence /
+    0.7). The gate uses the conf-adj edge, not the raw edge.
+  - **Line sensitivity.** Nearby-line probabilities at ±1; yardage
+    props gated more strictly on fragility.
+  - **Role-trend detection.** STABLE / EXPANDING / DECLINING /
+    VOLATILE / UNKNOWN. Tiny but flat usage = UNKNOWN.
+  - **Market-disagreement classification.** Flags
+    `LIKELY_MODEL_OVERCONFIDENCE` when |model − market| > 12pp
+    and confidence / DQ are below 60%.
+  - **Signal deduplication.** Within-category cap so the same
+    "pressure-sensitive QB" idea can't fire twice at full weight.
+
+V2 only becomes a candidate default if backtesting shows
+improvement on ROI, hit rate, and / or risk-adjusted profit
+across the markets we care about.
+
+### How to run the comparison
+
+The runner's `--algorithm-mode` flag picks the path:
+
+```
+# default — existing scorecard
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode v1
+
+# opt-in v2 pipeline
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode v2
+
+# A/B both algorithms on the same fixtures
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode compare
+```
+
+`compare` mode writes four files to `data/backtests/2025/`:
+
+- `v1-summary.fixture.json` — full V1 summary
+- `v2-summary.fixture.json` — full V2 summary
+- `v1-v2-comparison.fixture.json` — delta summary
+  (evaluated / qualified / hit rate / ROI / profit / per-prop /
+  per-line / per-confidence / per-edge / per-disqualifier deltas)
+- `recommendation-changes.fixture.json` — per-prop
+  classification: `SAME_BET` / `V1_BET_V2_PASS` /
+  `V1_PASS_V2_BET` / `OPPOSITE_SIDE` /
+  `SAME_PASS_DIFFERENT_REASON` /
+  `SAME_RECOMMENDATION_DIFFERENT_CONFIDENCE`, plus the top "new
+  V2 disqualifiers" — the gates V2 added that V1 wouldn't have
+  fired.
+
+### What the dashboard shows
+
+When `data/backtests/2025/v1-v2-comparison.fixture.json` exists,
+the `/backtest` page renders an **"Algorithm comparison (V1 vs
+V2)"** panel above the proxy accuracy section: V1 / V2 tiles
+for qualified bets, hit rate, ROI, profit, plus the
+recommendation-change ledger and top new V2 disqualifiers. The
+panel is hidden when no comparison file is present, so this is
+purely additive — the existing dashboard stays unchanged.
+
+### What stays untouched
+
+- The dashboard's player prop recommendations still flow through
+  V1 (`buildPropDecisionScorecard`). No V2 logic touches `/` or
+  `/props/[id]`.
+- The Game Edge model is fully separate; this comparison only
+  applies to player props.
+- No paid APIs, no live refresh, no touchdown markets, no
+  automated betting were introduced.
+
+### Test runner
+
+`scripts/test-v1-v2-backtest-comparison.ts` runs the fixture
+backtest in all three modes and asserts:
+
+- V1 mode echoes `V1_SCORECARD` and attaches no v2 metadata
+- V2 mode echoes `V2_PIPELINE` and exposes
+  `confidenceAdjustedEdge`, `riskAdjustedEdge`,
+  `lineSensitivityLabel`, `marketDisagreementClassification`,
+  `roleTrendClassification`, and a `debugTrace` with ≥ 10 steps
+- Compare mode produces v1Summary, v2Summary, deltaSummary, and
+  a recommendation-change ledger whose counts sum to the total
+  evaluated
+- Every evaluated propType is a V1 market (no touchdown
+  contamination)
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a
