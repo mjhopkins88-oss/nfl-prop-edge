@@ -710,6 +710,83 @@ on premium sources. The model layer wouldn't need to change.
 See `PROXY_FEATURE_NOTES.md` for per-proxy known failure modes,
 anchors, and calibration details.
 
+## How We Test Proxy Accuracy
+
+Logical tests prove proxies behave as expected. They don't prove the
+proxies are *useful*. That requires three levels of evaluation:
+
+### 1. Logical / unit tests
+
+`scripts/test-proxy-football-features.ts` (59 assertions) and
+`scripts/test-proxy-football-calibration.ts` (147 assertions) check
+that:
+
+- Each proxy fires on its valid-case profile and stays quiet on its
+  false-positive profile.
+- Confidence drops with thin samples / fallback data / one-sided
+  signals.
+- Anchors prevent single-signal hits from claiming "likely" labels.
+- Every output is bounded, prefixed `Proxy-based:`, and exposes no
+  forcing surface.
+
+### 2. Manual validation against football reality
+
+Spot-check proxy labels for real players the team knows: does a
+known slot WR (e.g., a Wes Welker archetype) actually get
+`SLOT_VOLUME_LIKELY`? Does a deep specialist register as
+`DEEP_THREAT_LIKELY` rather than `POSSESSION_RECEIVER_LIKELY`? Does
+a defense facing pass-heavy schedules with positive EPA allowed
+flag as a real pass funnel, while one that just leads a lot stays
+in `PASS_FUNNEL_SCRIPT_FALLBACK`? This is qualitative — easy to do,
+useful as a sanity gate before integration.
+
+### 3. Backtest accuracy validation (this section)
+
+`scripts/test-proxy-validation.ts` runs the fixture backtest, attaches
+proxy results to every evaluated prop, and asks: **for plays where
+this proxy fired with high value AND high confidence, did ROI
+actually improve vs the baseline?**
+
+Outputs land in `data/backtests/2025/`:
+
+- `proxy-performance.fixture.json` — per-proxy summary with value-
+  bucket and confidence-bucket slices.
+- `proxy-lift.fixture.json` — baseline vs high-value vs
+  high-confidence vs both-high ROI, plus a `KEEP` / `RECALIBRATE` /
+  `RETIRE` recommendation.
+- `proxy-false-positives.fixture.json` — examples where the proxy
+  fired strongly but the related bet lost.
+- `proxy-false-negatives.fixture.json` — examples where the proxy
+  was weak but the bet hit anyway.
+
+The `/backtest` page renders a *Proxy Accuracy* section above the
+existing performance cards (best lift, worst lift, false-positive
+count, false-negative count, per-proxy lift table, per-proxy
+high-confidence performance) whenever those files are present.
+
+### Lift, not vibes
+
+The framework treats each proxy as a **hypothesis**. The data either
+supports it or doesn't:
+
+- **Lift ≥ +5pp** (high-both ROI over baseline ROI) and ≥ 3 bets
+  on each side → `KEEP`.
+- **Lift in (0, +5pp)** or insufficient bet sample → `RECALIBRATE`.
+- **Lift ≤ 0** with sufficient sample → `RETIRE`.
+
+If a proxy can't earn its 5pp of lift after enough real data, it
+gets recalibrated or removed. The point is to build a **disciplined**
+library, not to add unverified knobs.
+
+### Premium data could replace proxies later
+
+Each proxy's input slice is the contract. Real route-charting,
+participation, alignment, EPA splits, and tracking data would slot
+into the same `PlayerProxyInput` / `OffenseProxyInput` /
+`DefenseProxyInput` shapes when the team is ready to spend on
+premium sources. The validation framework wouldn't change — only
+the inputs would.
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

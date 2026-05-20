@@ -11,11 +11,13 @@ import {
 } from "@/components/icons";
 import { getBacktestSummary } from "@/lib/data/backtest";
 import { loadFixtureBacktestSummary } from "@/lib/backtest/fixture-summary";
+import { loadFixtureProxySummary } from "@/lib/backtest/fixture-proxy-summary";
 import { PROP_TYPE_SHORT } from "@/lib/prop-utils";
 
 export default function BacktestPage() {
   const s = getBacktestSummary();
   const fixture = loadFixtureBacktestSummary();
+  const proxySummary = loadFixtureProxySummary();
 
   const winRate = s.wins / Math.max(1, s.totalPlays);
   const profit = s.unitsReturn - s.unitsStaked;
@@ -295,6 +297,174 @@ export default function BacktestPage() {
                 ))}
               </ul>
             )}
+          </div>
+        </section>
+      )}
+
+      {proxySummary && (
+        <section className="glass-strong rounded-3xl p-6 sm:p-8">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-sea-700">
+                Proxy accuracy
+              </div>
+              <h2 className="mt-1 text-xl font-semibold text-ink-900">
+                Are the football proxies actually useful?
+              </h2>
+            </div>
+            <div className="text-[11px] text-ink-500">
+              {Object.keys(proxySummary.performance).length} proxies tracked ·
+              {" "}
+              {proxySummary.falsePositives.length} false positives ·{" "}
+              {proxySummary.falseNegatives.length} false negatives
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <ProxyAuditCell
+              label="Best lift (proxy)"
+              value={
+                proxySummary.lift
+                  .slice()
+                  .sort((a, b) => b.liftVsBaselinePp - a.liftVsBaselinePp)[0]
+                  ?.proxyName ?? "—"
+              }
+              sub={`${proxySummary.lift
+                .slice()
+                .sort((a, b) => b.liftVsBaselinePp - a.liftVsBaselinePp)[0]
+                ?.liftVsBaselinePp.toFixed(1) ?? "0"}pp vs baseline`}
+              tone="positive"
+            />
+            <ProxyAuditCell
+              label="Worst lift (proxy)"
+              value={
+                proxySummary.lift
+                  .slice()
+                  .sort((a, b) => a.liftVsBaselinePp - b.liftVsBaselinePp)[0]
+                  ?.proxyName ?? "—"
+              }
+              sub={`${proxySummary.lift
+                .slice()
+                .sort((a, b) => a.liftVsBaselinePp - b.liftVsBaselinePp)[0]
+                ?.liftVsBaselinePp.toFixed(1) ?? "0"}pp vs baseline`}
+              tone="negative"
+            />
+            <ProxyAuditCell
+              label="False positives"
+              value={`${proxySummary.falsePositives.length}`}
+              sub="strong proxy, bet lost"
+              tone={
+                proxySummary.falsePositives.length === 0
+                  ? "positive"
+                  : "warning"
+              }
+            />
+            <ProxyAuditCell
+              label="False negatives"
+              value={`${proxySummary.falseNegatives.length}`}
+              sub="weak proxy, prop hit"
+              tone={
+                proxySummary.falseNegatives.length === 0
+                  ? "positive"
+                  : "warning"
+              }
+            />
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <ProxyAuditPanel title="Proxy lift table">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-[0.12em] text-ink-500">
+                  <tr>
+                    <th className="py-1 text-left font-medium">Proxy</th>
+                    <th className="py-1 text-right font-medium">Bets (both high)</th>
+                    <th className="py-1 text-right font-medium">Lift</th>
+                    <th className="py-1 text-right font-medium">Rec.</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-200/40">
+                  {proxySummary.lift.map((r) => (
+                    <tr key={r.proxyName}>
+                      <td className="py-1 text-ink-900">
+                        {prettyProxyName(r.proxyName)}
+                      </td>
+                      <td className="tabular py-1 text-right text-ink-700">
+                        {r.highBothBets}
+                      </td>
+                      <td
+                        className={`tabular py-1 text-right ${
+                          r.liftVsBaselinePp >= 0
+                            ? "text-sea-700"
+                            : "text-coral-700"
+                        }`}
+                      >
+                        {r.liftVsBaselinePp >= 0 ? "+" : ""}
+                        {r.liftVsBaselinePp.toFixed(1)}pp
+                      </td>
+                      <td className="py-1 text-right">
+                        <RecPill rec={r.recommendation} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ProxyAuditPanel>
+            <ProxyAuditPanel title="High-confidence performance">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-[0.12em] text-ink-500">
+                  <tr>
+                    <th className="py-1 text-left font-medium">Proxy</th>
+                    <th className="py-1 text-right font-medium">Bets</th>
+                    <th className="py-1 text-right font-medium">Hit</th>
+                    <th className="py-1 text-right font-medium">ROI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-200/40">
+                  {Object.values(proxySummary.performance)
+                    .filter((s) => s.whenBothHigh.bets > 0)
+                    .sort(
+                      (a, b) =>
+                        b.whenBothHigh.roiPct - a.whenBothHigh.roiPct,
+                    )
+                    .map((s) => (
+                      <tr key={s.proxyName}>
+                        <td className="py-1 text-ink-900">
+                          {prettyProxyName(s.proxyName)}
+                        </td>
+                        <td className="tabular py-1 text-right text-ink-700">
+                          {s.whenBothHigh.bets}
+                        </td>
+                        <td className="tabular py-1 text-right text-ink-700">
+                          {s.whenBothHigh.bets > 0
+                            ? `${(s.whenBothHigh.hitRate * 100).toFixed(0)}%`
+                            : "—"}
+                        </td>
+                        <td
+                          className={`tabular py-1 text-right ${
+                            s.whenBothHigh.roiPct >= 0
+                              ? "text-sea-700"
+                              : "text-coral-700"
+                          }`}
+                        >
+                          {s.whenBothHigh.bets > 0
+                            ? `${s.whenBothHigh.roiPct >= 0 ? "+" : ""}${s.whenBothHigh.roiPct.toFixed(0)}%`
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  {Object.values(proxySummary.performance).every(
+                    (s) => s.whenBothHigh.bets === 0,
+                  ) && (
+                    <tr>
+                      <td colSpan={4} className="py-2 text-center text-ink-500">
+                        No proxy has both value + confidence HIGH on any
+                        graded bet in this fixture run.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </ProxyAuditPanel>
           </div>
         </section>
       )}
@@ -799,4 +969,82 @@ function AuditCell({
       </div>
     </div>
   );
+}
+
+function ProxyAuditCell({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "positive" | "negative" | "warning" | "neutral";
+}) {
+  const valueClass =
+    tone === "positive"
+      ? "text-sea-700"
+      : tone === "negative"
+        ? "text-coral-700"
+        : tone === "warning"
+          ? "text-amber-700"
+          : "text-ink-900";
+  return (
+    <div className="rounded-xl bg-white/70 p-3 ring-1 ring-ink-200/50">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-500">
+        {label}
+      </div>
+      <div className={`tabular mt-1 text-sm font-semibold ${valueClass}`}>
+        {value}
+      </div>
+      {sub && (
+        <div className="tabular mt-0.5 text-[11px] text-ink-500">{sub}</div>
+      )}
+    </div>
+  );
+}
+
+function ProxyAuditPanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl bg-white/65 p-4 ring-1 ring-ink-200/40 backdrop-blur">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sea-700">
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function RecPill({ rec }: { rec: "KEEP" | "RECALIBRATE" | "RETIRE" }) {
+  const tone =
+    rec === "KEEP"
+      ? "bg-sea-50 text-sea-800 ring-sea-200"
+      : rec === "RETIRE"
+        ? "bg-rose-50 text-coral-700 ring-coral-200"
+        : "bg-amber-50 text-amber-900 ring-amber-200";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ring-1 ${tone}`}
+    >
+      {rec.toLowerCase()}
+    </span>
+  );
+}
+
+function prettyProxyName(name: string): string {
+  return name
+    .replace(/([A-Z])/g, " $1")
+    .replace(/Proxy$/, "")
+    .trim()
+    .toLowerCase()
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
