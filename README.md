@@ -307,64 +307,80 @@ widening it to add a trading surface requires a deliberate, reviewed code
 change. No order, portfolio, balance, or position endpoints exist in the
 client.
 
-## 2025 backtest
+## Local Backtest Engine
+
+The backtest engine is a **local, stored-data-only** replay of the 2025
+season against the scorecard-based decision model. **It never calls
+The Odds API, Kalshi, Open-Meteo, nflverse, or any other external
+service.** Ingestion and backtesting are intentionally split: the
+ingestion scripts cache raw responses out-of-band (dry-run by default,
+under credit guardrails), and the backtest runner only reads from
+`data/processed/` or `data/fixtures/`.
 
 ```bash
-# default: mock source — synthesizes per-week props from existing logs
-npx tsx scripts/run-backtest-2025.ts --season 2025 --weeks 7-10
+# Run the fixture-driven backtest assertions
+npx tsx scripts/test-backtest-fixtures.ts
 
-# also persist to Postgres
-DATABASE_URL="$DB_URL" npx tsx scripts/run-backtest-2025.ts \
-  --season 2025 --weeks 7-10 --persist
+# Run the backtest with the bundled fixtures (default: 4 V1 volume
+# markets, weeks 1-18 of 2025)
+npx tsx scripts/run-backtest-2025.ts --fixtures
 
-# preview without running the engine
-npx tsx scripts/run-backtest-2025.ts --season 2025 --weeks 7-10 --dry-run
+# Include yardage markets too
+npx tsx scripts/run-backtest-2025.ts --fixtures --include-yardage
+
+# Narrow the window
+npx tsx scripts/run-backtest-2025.ts --fixtures \
+  --start-week 11 --end-week 11
 ```
 
-Backtest pipeline modules (under `src/lib/backtest/`):
+Outputs land in `data/backtests/2025/`:
 
-- **feature-builder.ts** — turns the prop market + STRICTLY prior weekly
-  logs + weather + injuries into typed `PropFeatures`. The orchestrator
-  pre-slices logs so the engine can't see future data.
-- **projection-engine.ts** — blends recent (60%) + season (40%) mean and
-  stddev, applies weather (wind/precip on passing & receiving; rushing
-  volume bump in bad weather), injury adjustments (self status, teammate
-  boosts, own-OL / opposing-DB depletion, uncertainty widens σ), σ floors,
-  and small-sample widening. Returns `{ mean, stddev, reasons, risks,
-  roleUncertainty, injuryUncertainty }`.
-- **probability-engine.ts** — normal CDF for model over prob, de-juices
-  posted American odds to no-vig book prob, signed edge, per-prop-type
-  thresholds, pass triggers (role / injury / malformed market), EV on the
-  recommended side, and a 0..1 confidence from edge-over-threshold and
-  inverse coefficient of variation.
-- **grading.ts** — `(rec, line, actual)` → win/loss/push + units staked
-  and returned + a Brier component (whether or not we bet).
-- **metrics.ts** — aggregates a `GradedPrediction[]` into headline
-  ROI / hit-rate / units + `byPropType`, `byConfidence`,
-  `byEdgeBucket`, `byWeek` slices + Brier across graded predictions.
+- `backtest-summary.fixture.json` — aggregate metrics + per-bucket
+  slices (prop type, primary disqualifier, edge bucket, confidence
+  tier, coaching uncertainty, weather risk)
+- `backtest-results.fixture.csv` — one row per evaluated prop
+  (recommendation, qualified, bet, actual stat, outcome, P/L)
+- `backtest-results.fixture.json` — same data with the full scorecard
+  attached for downstream tooling
 
-Per-prop-type edge thresholds (defined in `probability-engine.ts`):
+The `/backtest` page automatically picks up the summary JSON if it
+exists and renders the new metrics above the existing performance
+cards.
 
-| Market | Threshold |
+### Backtest modules (under `src/lib/backtest/`)
+
+| File | Purpose |
 | --- | --- |
-| `PASSING_ATTEMPTS` | 4% |
-| `PASSING_COMPLETIONS` | 4% |
-| `RECEPTIONS` | 5% |
-| `RUSHING_ATTEMPTS` | 5% |
-| `PASSING_YARDS` | 6% |
-| `RUSHING_YARDS` | 6% |
-| `RECEIVING_YARDS` | 7% |
+| `types.ts` | All backtest types (scope, game, player-week, market, quote, weather, injury, feature row, candidate, graded result, summary, per-bucket slices) |
+| `data-loader.ts` | `loadFixture*` + `loadBacktestFixtures` for fixture data; `loadProcessedBacktestData` is scaffolded with TODOs for when the ingestion pipeline has populated `data/processed/` |
+| `market-adapter.ts` | American-odds → no-vig math, best-quote selection across books |
+| `feature-builder.ts` | Pregame feature row: player role stability + recent/season usage + team volume + game script + weather + injury + coaching transition + correlation exposure + data quality. **Only reads data strictly prior to the test week** — no future-data leakage |
+| `projection-adapter.ts` | `BacktestFeatureRow → ScorecardInput`. Reuses the existing model scorecard; no second decision path |
+| `grading.ts` | OVER wins if actual > line, UNDER if actual < line, PUSH if equal. PASS rows are evaluated but not bet. American-odds-correct flat staking |
+| `metrics.ts` | Hit rate, ROI, average edge, average EV, Brier score, max drawdown, plus 6 bucketed summaries |
+| `runner.ts` | `runBacktest()` — week-by-week replay. **Hard guardrail comments at the top: no paid APIs, no future data** |
+| `reporting.ts` | Writes summary JSON + per-bet CSV + per-bet JSON |
 
-Outputs always go to `data/backtests/<season>/`:
+### From fixtures to real 2025 data
 
-- `predictions.csv` — every prediction the engine made
-- `bets.csv` — qualified bets only (the actionable subset)
-- `summary_by_market.csv`, `summary_by_confidence.csv`,
-  `summary_by_edge_bucket.csv`, `summary_by_week.csv`
+The ingestion pipeline is staged separately (`scripts/ingest-*`):
 
-`--persist` additionally upserts `ModelRun`, per-prop `PropPrediction`,
-per-qualified `BetCandidate`, and per-`(propType, week)` `BacktestResult`
-rows to Postgres.
+1. `scripts/ingest-historical-prop-lines.ts` (Odds API) — `--scope`
+   gated, `--execute` + `ALLOW_REAL_ODDS_API_CALLS=true` required.
+   Writes `data/processed/prop_markets.csv` + `prop_quotes.csv`.
+2. `scripts/ingest-nfl-history.py` (nflverse) — writes
+   `data/processed/player_week_stats.csv` and friends.
+3. `scripts/ingest-weather-history.ts` (Open-Meteo, free) — writes
+   stadium weather snapshots.
+4. `scripts/ingest-injury-flags.ts` — manual injury report ingestion.
+
+Once those run, `loadProcessedBacktestData()` will map the CSV rows
+into the same `Backtest*` types the fixture loader produces. The
+runner doesn't change.
+
+This split is the API credit protection contract: the runner never
+spends credits, ingestion runs are explicit and credit-bounded, and
+cached responses make reruns free.
 
 ## V1 Qualification Logic
 

@@ -1,0 +1,16 @@
+[
+  {
+    "playerId": "fixture-saquon",
+    "season": 2025,
+    "week": 11,
+    "status": "QUESTIONABLE",
+    "note": "Right ankle, limited Wed/Thu, full Fri."
+  },
+  {
+    "playerId": "fixture-cmc",
+    "season": 2025,
+    "week": 11,
+    "status": "PROBABLE",
+    "note": "Veteran rest day Wednesday."
+  }
+]
