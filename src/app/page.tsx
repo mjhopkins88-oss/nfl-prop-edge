@@ -204,7 +204,7 @@ export default async function DashboardPage({
 
       <section
         aria-label="Other sections"
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
       >
         <Link
           href="/game-edge"
@@ -221,6 +221,30 @@ export default async function DashboardPage({
             <p className="mt-1 text-xs text-ink-600">
               Experimental moneyline, spread, and upset model — separate
               from the player prop scorecard.
+            </p>
+          </div>
+          <span
+            aria-hidden="true"
+            className="self-center text-ink-400 transition group-hover:translate-x-0.5 group-hover:text-ink-700"
+          >
+            →
+          </span>
+        </Link>
+        <Link
+          href="/parlays"
+          className="group glass-strong flex items-start justify-between gap-4 rounded-2xl p-5 ring-1 ring-white/40 transition hover:ring-sea-300/60"
+        >
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-amber-100/80 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              Beta
+            </div>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-ink-900">
+              Open Parlay Builder
+            </h2>
+            <p className="mt-1 text-xs text-ink-600">
+              Experimental correlated parlay model — separate from
+              player props and game edge.
             </p>
           </div>
           <span

@@ -1205,6 +1205,143 @@ backtest in all three modes and asserts:
 - Every evaluated propType is a V1 market (no touchdown
   contamination)
 
+## Experimental Correlated Parlay Model
+
+A third decision track for the app, **completely separate** from
+Player Props and Game Edge. Lives at `/parlays`. Builds 2-leg
+correlated parlays from V1 player prop legs, scores joint
+probability with capped correlation adjustments, and surfaces
+only parlays where confidence-adjusted EV is positive and projected
+hit rate clears the required-for-10%-ROI threshold.
+
+### Separation from existing sections
+
+- **Does not affect** the player prop dashboard (`/`, `/props/[id]`)
+  or the player prop scorecard (`buildPropDecisionScorecard`).
+- **Does not affect** the Game Edge dashboard (`/game-edge`,
+  `/game-edge/[id]`) or the Game Edge model (`buildGameEdge`).
+- Lives in its own module namespace (`src/lib/model/parlay-*.ts`),
+  its own route tree (`src/app/parlays/`), its own scorecard type
+  (`ParlayScorecard`), and its own test runner
+  (`scripts/test-parlay-model.ts`).
+
+### Joint probability
+
+Per-parlay joint probability is built in two steps:
+
+1. **Independent joint probability** = product of per-leg model
+   probabilities.
+2. **Correlation-adjusted joint probability** applies a capped
+   relative lift / drag based on the per-parlay `correlationScore`
+   (signed −1..+1):
+   - max upward lift: 15% relative
+   - max downward drag: 20% relative
+   - low confidence shrinks the adjustment toward independent
+   - UNKNOWN correlation produces near-zero adjustment
+
+### Correlation adjustment
+
+Correlation is detected from player relationships, prop types,
+side direction, and game environment:
+
+- **Positive**: QB + same-team receiver yards/receptions same
+  side, same-player RB attempts + yards, weather UNDER stacks.
+- **Negative / conflicting**: same-team QB OVER + RB attempts
+  OVER in low-volume games, multiple WR OVERs from the same team
+  (overstacking).
+- **Weak / unknown**: different-game pairings, sparse signal.
+
+The cap discipline matches the player prop v2 pipeline's
+market-anchored philosophy: correlation can help, but it can also
+be overestimated, so it is never allowed to inflate joint
+probability without bound.
+
+### Expected value
+
+```
+EV = correlationAdjustedJointProbability × combinedDecimalOdds − 1
+```
+
+Confidence-adjusted EV multiplies EV by shrinkage factors for low
+leg confidence, low data quality, high risk, unknown correlation,
+overstacking, line fragility, and same-game exposure. Shrinkage
+can only ever pull EV closer to zero — it never inflates.
+
+A parlay only qualifies when **both** raw EV and
+confidence-adjusted EV are positive.
+
+### Hit-rate target math
+
+The dashboard surfaces the average payout multiplier required to
+hit a target ROI across a batch of parlays. The math:
+
+```
+requiredPayoutMultiplier = (1 + targetRoi) / expectedHitRate
+```
+
+`payoutMultiplier` is total payout (stake + profit). For
+`targetRoi = 0.10`:
+
+| Hit rate | Required average payout |
+|---------:|------------------------:|
+| 15.0%    | 7.33x                   |
+| 17.5%    | 6.29x                   |
+| 20.0%    | 5.50x                   |
+
+These are theoretical. They must be validated by backtesting
+before any live use.
+
+### Qualification gates
+
+A parlay qualifies only if **all** of the following hold:
+
+- every leg is a V1 player prop (no touchdown props admitted)
+- every leg has acceptable confidence, data quality, and
+  confidence-adjusted edge on its own
+- combined raw EV > 0 and confidence-adjusted EV > 0
+- projected hit rate ≥ required-for-10%-ROI hit rate
+- correlation type is not CONFLICTING
+- no leg fragility / data-quality / role-stability hard fail
+- no same-team receiver overstacking
+
+**High payout alone never qualifies a parlay.** Correlation alone
+never qualifies a parlay. The EV gate and the hit-rate gate are
+both required.
+
+### UI
+
+- `/parlays` — Experimental Correlated Parlay Model dashboard.
+  Hero with summary tiles, target-batch math panel (15% / midpoint /
+  20% target rates), filter tabs (all / qualified / correlated
+  watch / pass / QB-WR / RB / weather-under / high-payout / low-risk),
+  one card per parlay candidate with combined odds, payout multiplier,
+  projected vs required hit rate, EV + conf-adj EV, correlation
+  badge, recommendation, top reason, top risk.
+- `/parlays/[id]` — Per-parlay detail with leg breakdown,
+  correlation analysis, probability + payout math, EV + hit-rate
+  math, reasons / risks / disqualifiers, what would change the
+  recommendation, target batch math, and final explanation.
+
+### No live wagering
+
+The app does not place bets and does not connect to any
+sportsbook or trading interface. The Parlay Builder is research
+only.
+
+### Where to find it
+
+- Types: `src/lib/model/parlay-types.ts`
+- Config: `src/lib/model/parlay-config.ts`
+- Probability + odds math: `src/lib/model/parlay-probability.ts`
+- Correlation: `src/lib/model/parlay-correlation.ts`
+- EV: `src/lib/model/parlay-ev.ts`
+- Builder + qualification: `src/lib/model/parlay-builder.ts`
+- Fixtures (23 legs, 16 candidates): `src/lib/model/parlay-data.ts`
+- Display helpers: `src/lib/model/parlay-scorecard.ts`
+- Test runner (18 scenarios + invariants):
+  `scripts/test-parlay-model.ts`
+- UI: `/parlays` and `/parlays/[id]`
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

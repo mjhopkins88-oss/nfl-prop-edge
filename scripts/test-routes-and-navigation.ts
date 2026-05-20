@@ -95,7 +95,7 @@ function main(): void {
   }
 
   // 3. Optional Parlay Builder — only fail if the route exists but
-  //    the header forgot to link to it. Absent route is OK.
+  //    the header / homepage forgot to link to it. Absent route is OK.
   const parlayPagePath = "src/app/parlays/page.tsx";
   if (exists(parlayPagePath)) {
     const header = exists(headerPath) ? readFile(headerPath) : "";
@@ -104,6 +104,14 @@ function main(): void {
       /href:\s*"\/parlays"/.test(header),
       "Header missing href '/parlays' — Parlay Builder route exists but is unreachable from the nav",
     );
+    if (exists("src/app/page.tsx")) {
+      const page = readFile("src/app/page.tsx");
+      check(
+        "Homepage cross-links to /parlays (since /parlays exists)",
+        /href=\s*"\/parlays"/.test(page),
+        "Homepage does not cross-link to /parlays — section discoverability suffers",
+      );
+    }
   } else {
     console.log("  · /parlays does not exist — skipping Parlay link check");
   }
