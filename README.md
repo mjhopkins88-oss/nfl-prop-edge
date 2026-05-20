@@ -171,21 +171,89 @@ the full CSV-to-Prisma mapping.
 ### Player props (The Odds API)
 
 ```bash
-# preview — no API calls, key only used for plan printing
+# preview — no API calls (dry-run is the default)
 ODDS_API_KEY=demo npx tsx scripts/ingest-historical-prop-lines.ts \
-  --season 2025 --weeks 1-10 --source mock --dry-run
+  --season 2025 --scope smoke-test --source mock
 
-# live
-ODDS_API_KEY=$ODDS_API_KEY npx tsx scripts/ingest-historical-prop-lines.ts \
-  --season 2025 --weeks 1-10 --budget 200
+# live (requires BOTH --execute AND the kill-switch env var)
+ALLOW_REAL_ODDS_API_CALLS=true \
+ODDS_API_KEY=$ODDS_API_KEY \
+  npx tsx scripts/ingest-historical-prop-lines.ts \
+    --season 2025 --scope smoke-test --execute --budget 200
 ```
 
 Pulls one pregame snapshot per game, ~3.5h before kickoff (rounded to the
-5-minute grid). Hard-capped at 7 markets (all lower-variance, no TDs) and
-`regions=us`. Writes raw events + per-event-odds JSON to
-`data/raw/odds-api/` and normalized rows to
-`data/processed/prop_markets.csv` + `prop_quotes.csv`. The script aborts
-**before any HTTP call** if the estimate exceeds `--budget` (default 200).
+5-minute grid). The first staged version is hard-pinned to **4 markets**
+(`player_pass_attempts`, `player_pass_completions`, `player_receptions`,
+`player_rush_attempts`) and `regions=us`. Writes raw events + per-event
+odds JSON to `data/raw/odds-api/`, runs them through the on-disk cache
+under `data/cache/odds-api/`, and emits normalized rows to
+`data/processed/prop_markets.csv` + `prop_quotes.csv`. Each call adds a
+row to `ApiUsageLog` (Postgres, when `DATABASE_URL` is set) and the
+per-run JSONL audit log at `data/raw/api-usage/<runId>.jsonl`. See the
+two sections below for the staging plan and the cost-protection rules.
+
+## Historical Odds Ingestion Staging Plan
+
+Pull 2025 historical prop lines from The Odds API in graduated scopes —
+prove the pipeline on the cheapest meaningful run first, ratchet up
+only after each step validates. Every step is opt-in via `--execute`,
+runs against the on-disk cache so reruns cost nothing, and is bounded
+by `MAX_ODDS_API_CREDITS_PER_RUN`.
+
+| Stage | Flag | Coverage | Approx credits | Purpose |
+| --- | --- | --- | --- | --- |
+| 1 | `--scope smoke-test` | Week 1 of season | ≤ 70 | Prove the pipeline end-to-end against one slate. Verify event matching, market normalization, cache writes, ApiUsageLog. |
+| 2 | `--scope week --week N` | One specific week | ≤ 70 | Spot-check a different week (e.g. a divisional Sunday) once the smoke test is green. |
+| 3 | `--scope four-weeks` | Weeks 1–4 | ~280 (raise `--budget`) | Builds a first multi-week sample for backtest sanity checks. Requires a budget bump above the 200-credit default. |
+| 4 | `--scope half-season` | Weeks 1–9 | ~600 (raise `--budget`) | Half-season corpus, big enough to fit projection / risk models. Run only after step 3 has been audited. |
+| 5 | `--scope full-season` | Weeks 1–18 | ~1300 (raise `--budget`) | Complete season backtest dataset. Plan + budget approval required before kicking this off. |
+
+Selection flags (use any one; explicit beats `--scope`):
+
+- `--weeks 1-9,12` — comma/range list
+- `--week 7` — single week shorthand
+- `--start-week 1 --end-week 4` — closed range
+
+Reruns are safe by design — the cache key hashes `(snapshot, eventId,
+markets, regions)`, so a second run of the same scope is a no-op for
+credits.
+
+## API Cost Protection Rules
+
+Every paid Odds-API path obeys these rules, enforced in
+`src/config/api-budget.ts` and `src/lib/ingestion/credit-estimator.ts`:
+
+1. **Default is dry-run.** `scripts/ingest-historical-prop-lines.ts`
+   only spends credits when both `--execute` is passed **and** the
+   env var `ALLOW_REAL_ODDS_API_CALLS=true` is set. Either alone is
+   refused.
+2. **Cache first.** Before any HTTP call the script checks
+   `data/cache/odds-api/<hash>.json`. Cached responses never re-hit
+   the API. Cache is gitignored and reused across runs.
+3. **Estimate before spending.** A plan summary prints **before** any
+   call: scope, games requested, markets requested, region,
+   estimated credits, cached responses found, new API calls required,
+   max allowed credits.
+4. **Hard per-run ceiling.** The script aborts if estimated credits
+   exceed `--budget` (default `MAX_ODDS_API_CREDITS_PER_RUN = 200`).
+   Bump the flag explicitly to run larger scopes.
+5. **Minimum reserve floor.** The script aborts mid-run if
+   `x-requests-remaining` from any response drops below
+   `MIN_ODDS_API_CREDITS_REMAINING = 1000`.
+6. **Overage circuit-breaker.** If actual credits used exceed the
+   estimate by more than `CREDIT_OVERAGE_ABORT_RATIO = 1.10` (10%),
+   the script halts before the next request.
+7. **Market cap.** The first version requests only the 4 V1 volume
+   markets. Yardage markets unlock once this version is verified.
+8. **Region cap.** `ALLOWED_ODDS_REGIONS = ["us"]`. No EU or AU pulls.
+9. **Header logging.** `x-requests-used`, `x-requests-remaining`, and
+   `x-requests-last` from every live response are written to the
+   per-run JSONL audit log and (when `DATABASE_URL` is set) to the
+   `ApiUsageLog` Postgres table.
+10. **Raw before normalization.** Raw responses are saved to
+    `data/raw/odds-api/<snapshot>-<eventId>-odds.json` before any
+    normalization, so a regenerated CSV never costs new credits.
 
 ### Weather (Open-Meteo)
 
@@ -239,64 +307,80 @@ widening it to add a trading surface requires a deliberate, reviewed code
 change. No order, portfolio, balance, or position endpoints exist in the
 client.
 
-## 2025 backtest
+## Local Backtest Engine
+
+The backtest engine is a **local, stored-data-only** replay of the 2025
+season against the scorecard-based decision model. **It never calls
+The Odds API, Kalshi, Open-Meteo, nflverse, or any other external
+service.** Ingestion and backtesting are intentionally split: the
+ingestion scripts cache raw responses out-of-band (dry-run by default,
+under credit guardrails), and the backtest runner only reads from
+`data/processed/` or `data/fixtures/`.
 
 ```bash
-# default: mock source — synthesizes per-week props from existing logs
-npx tsx scripts/run-backtest-2025.ts --season 2025 --weeks 7-10
+# Run the fixture-driven backtest assertions
+npx tsx scripts/test-backtest-fixtures.ts
 
-# also persist to Postgres
-DATABASE_URL="$DB_URL" npx tsx scripts/run-backtest-2025.ts \
-  --season 2025 --weeks 7-10 --persist
+# Run the backtest with the bundled fixtures (default: 4 V1 volume
+# markets, weeks 1-18 of 2025)
+npx tsx scripts/run-backtest-2025.ts --fixtures
 
-# preview without running the engine
-npx tsx scripts/run-backtest-2025.ts --season 2025 --weeks 7-10 --dry-run
+# Include yardage markets too
+npx tsx scripts/run-backtest-2025.ts --fixtures --include-yardage
+
+# Narrow the window
+npx tsx scripts/run-backtest-2025.ts --fixtures \
+  --start-week 11 --end-week 11
 ```
 
-Backtest pipeline modules (under `src/lib/backtest/`):
+Outputs land in `data/backtests/2025/`:
 
-- **feature-builder.ts** — turns the prop market + STRICTLY prior weekly
-  logs + weather + injuries into typed `PropFeatures`. The orchestrator
-  pre-slices logs so the engine can't see future data.
-- **projection-engine.ts** — blends recent (60%) + season (40%) mean and
-  stddev, applies weather (wind/precip on passing & receiving; rushing
-  volume bump in bad weather), injury adjustments (self status, teammate
-  boosts, own-OL / opposing-DB depletion, uncertainty widens σ), σ floors,
-  and small-sample widening. Returns `{ mean, stddev, reasons, risks,
-  roleUncertainty, injuryUncertainty }`.
-- **probability-engine.ts** — normal CDF for model over prob, de-juices
-  posted American odds to no-vig book prob, signed edge, per-prop-type
-  thresholds, pass triggers (role / injury / malformed market), EV on the
-  recommended side, and a 0..1 confidence from edge-over-threshold and
-  inverse coefficient of variation.
-- **grading.ts** — `(rec, line, actual)` → win/loss/push + units staked
-  and returned + a Brier component (whether or not we bet).
-- **metrics.ts** — aggregates a `GradedPrediction[]` into headline
-  ROI / hit-rate / units + `byPropType`, `byConfidence`,
-  `byEdgeBucket`, `byWeek` slices + Brier across graded predictions.
+- `backtest-summary.fixture.json` — aggregate metrics + per-bucket
+  slices (prop type, primary disqualifier, edge bucket, confidence
+  tier, coaching uncertainty, weather risk)
+- `backtest-results.fixture.csv` — one row per evaluated prop
+  (recommendation, qualified, bet, actual stat, outcome, P/L)
+- `backtest-results.fixture.json` — same data with the full scorecard
+  attached for downstream tooling
 
-Per-prop-type edge thresholds (defined in `probability-engine.ts`):
+The `/backtest` page automatically picks up the summary JSON if it
+exists and renders the new metrics above the existing performance
+cards.
 
-| Market | Threshold |
+### Backtest modules (under `src/lib/backtest/`)
+
+| File | Purpose |
 | --- | --- |
-| `PASSING_ATTEMPTS` | 4% |
-| `PASSING_COMPLETIONS` | 4% |
-| `RECEPTIONS` | 5% |
-| `RUSHING_ATTEMPTS` | 5% |
-| `PASSING_YARDS` | 6% |
-| `RUSHING_YARDS` | 6% |
-| `RECEIVING_YARDS` | 7% |
+| `types.ts` | All backtest types (scope, game, player-week, market, quote, weather, injury, feature row, candidate, graded result, summary, per-bucket slices) |
+| `data-loader.ts` | `loadFixture*` + `loadBacktestFixtures` for fixture data; `loadProcessedBacktestData` is scaffolded with TODOs for when the ingestion pipeline has populated `data/processed/` |
+| `market-adapter.ts` | American-odds → no-vig math, best-quote selection across books |
+| `feature-builder.ts` | Pregame feature row: player role stability + recent/season usage + team volume + game script + weather + injury + coaching transition + correlation exposure + data quality. **Only reads data strictly prior to the test week** — no future-data leakage |
+| `projection-adapter.ts` | `BacktestFeatureRow → ScorecardInput`. Reuses the existing model scorecard; no second decision path |
+| `grading.ts` | OVER wins if actual > line, UNDER if actual < line, PUSH if equal. PASS rows are evaluated but not bet. American-odds-correct flat staking |
+| `metrics.ts` | Hit rate, ROI, average edge, average EV, Brier score, max drawdown, plus 6 bucketed summaries |
+| `runner.ts` | `runBacktest()` — week-by-week replay. **Hard guardrail comments at the top: no paid APIs, no future data** |
+| `reporting.ts` | Writes summary JSON + per-bet CSV + per-bet JSON |
 
-Outputs always go to `data/backtests/<season>/`:
+### From fixtures to real 2025 data
 
-- `predictions.csv` — every prediction the engine made
-- `bets.csv` — qualified bets only (the actionable subset)
-- `summary_by_market.csv`, `summary_by_confidence.csv`,
-  `summary_by_edge_bucket.csv`, `summary_by_week.csv`
+The ingestion pipeline is staged separately (`scripts/ingest-*`):
 
-`--persist` additionally upserts `ModelRun`, per-prop `PropPrediction`,
-per-qualified `BetCandidate`, and per-`(propType, week)` `BacktestResult`
-rows to Postgres.
+1. `scripts/ingest-historical-prop-lines.ts` (Odds API) — `--scope`
+   gated, `--execute` + `ALLOW_REAL_ODDS_API_CALLS=true` required.
+   Writes `data/processed/prop_markets.csv` + `prop_quotes.csv`.
+2. `scripts/ingest-nfl-history.py` (nflverse) — writes
+   `data/processed/player_week_stats.csv` and friends.
+3. `scripts/ingest-weather-history.ts` (Open-Meteo, free) — writes
+   stadium weather snapshots.
+4. `scripts/ingest-injury-flags.ts` — manual injury report ingestion.
+
+Once those run, `loadProcessedBacktestData()` will map the CSV rows
+into the same `Backtest*` types the fixture loader produces. The
+runner doesn't change.
+
+This split is the API credit protection contract: the runner never
+spends credits, ingestion runs are explicit and credit-bounded, and
+cached responses make reruns free.
 
 ## V1 Qualification Logic
 
@@ -567,55 +651,56 @@ Operational guidance:
 
 ## Deploying to Railway
 
-Railway provisions Postgres and runs the Next.js app side-by-side. The flow is:
+The V1 site renders entirely from mock data + bundled fixtures, so it
+deploys to Railway **without a database**. Postgres is only needed
+once you start running the ingestion scripts or the DB-backed backtest
+runner.
 
 ### 1. Create the project
 
 1. Push this repo to GitHub.
 2. In Railway, **New Project → Deploy from GitHub repo** and pick this repo.
-3. Railway detects Next.js via the Nixpacks builder. `railway.json` in the root
-   already pins the build and start commands.
+3. Railway detects Next.js via the Nixpacks builder. `railway.json` pins
+   the build and start commands:
+   - **Build:** `npm install && npm run build`
+   - **Start:** `npm run start`
 
-### 2. Add a Postgres plugin
+   `npm run build` runs `prisma generate && next build` — the Prisma
+   client generates from `schema.prisma` without needing a live DB
+   connection.
 
-1. In the same Railway project: **+ New → Database → PostgreSQL**.
-2. Railway will inject a `DATABASE_URL` env var into the service. If it doesn't
-   wire it up automatically, copy the URL from the Postgres plugin's
-   **Connect** tab and add `DATABASE_URL` to the web service's variables.
+### 2. (Optional) Attach Postgres later
 
-### 3. Confirm the build + start commands
+Only do this if you intend to run the DB-backed paths (seed, migrate,
+backtest persistence, ingestion ApiUsageLog rows). The web app does
+NOT need it.
 
-`railway.json` declares them, but for reference the service should run:
+1. **+ New → Database → PostgreSQL**.
+2. Railway injects `DATABASE_URL` into the service.
+3. Run migrations manually the first time:
+   ```bash
+   # locally, against the Railway connection string
+   npx prisma migrate dev --name init
+   git add prisma/migrations && git commit -m "init prisma migrations"
+   git push
+   # then on Railway (one-shot job or shell-in)
+   npx prisma migrate deploy
+   npm run db:seed
+   ```
 
-- **Build:** `npm install && npm run build`
-- **Start:** `npx prisma migrate deploy && npm run start`
+We deliberately do NOT run `prisma migrate deploy` inside the start
+command — that would make every container restart depend on a healthy
+DB connection, which is fragile and unnecessary for V1.
 
-`prisma migrate deploy` runs every deploy so any committed migrations apply
-automatically. If you only used `prisma db push` locally, generate a baseline
-migration before the first Railway deploy:
+### 3. Open the deployed app
 
-```bash
-npx prisma migrate dev --name init
-git add prisma/migrations && git commit -m "init prisma migrations"
-```
-
-### 4. (Optional) Seed mock data on Railway
-
-After the first deploy, run the seed once from your local machine using the
-Railway connection string:
-
-```bash
-DATABASE_URL="<railway postgres url>" npm run db:seed
-```
-
-Or shell into the Railway service and run `npm run db:seed` there.
-
-### 5. Open the deployed app
-
-Railway will assign a public URL — share it from the service's **Settings →
-Domains** panel. The dashboard at `/` should render immediately because V1
-reads mock data; Postgres becomes meaningful once you start writing real
-projection/odds data into `PropMarket`.
+Railway will assign a public URL — share it from the service's
+**Settings → Domains** panel. The dashboard at `/` should render
+immediately because V1 reads mock data. The `/backtest` page renders
+the static performance summary plus a small "fixture not generated"
+hint card; commit a run of `npx tsx scripts/run-backtest-2025.ts
+--fixtures` (or wire it into a release step) to populate the live
+fixture summary section.
 
 ## What's next (post-V1)
 

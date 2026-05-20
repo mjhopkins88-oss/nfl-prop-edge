@@ -1,201 +1,292 @@
 /**
- * Backtest stage 5 — Metrics aggregation.
+ * Backtest metrics & bucketed summaries.
  *
- * Takes the array of graded predictions and computes the headline
- * numbers plus the slice-by-X breakdowns that get persisted as
- * `BacktestResult` rows and shipped to the dashboard.
- *
- * What we track today:
- *   - plays, wins, losses, pushes, no-bets
- *   - hit rate (over wins+losses; pushes excluded)
- *   - ROI (return − stake) / stake
- *   - units staked / returned
- *   - average edge (signed, over bet candidates only)
- *   - Brier score (mean over graded predictions, qualified or not)
- *   - CLV placeholder (null — closing-line ingestion not wired in)
- *
- * Slices:
- *   - by prop type
- *   - by confidence tier (High / Medium / Low)
- *   - by edge bucket (4–6 / 6–8 / 8–10 / 10+ %)
- *   - by week
+ * Pure math; no IO. Consumes `BacktestGradedResult[]` and produces
+ * aggregates plus the per-bucket slices that the report / page show.
  */
 
 import type { PropType } from "../types";
-import type { BetResult } from "@prisma/client";
+import type {
+  BacktestCoachingUncertaintyBucketSummary,
+  BacktestConfidenceBucketSummary,
+  BacktestDisqualifierSummary,
+  BacktestEdgeBucketSummary,
+  BacktestGradedResult,
+  BacktestPropTypeSummary,
+  BacktestWeatherRiskBucketSummary,
+} from "./types";
 
-export type ConfidenceTier = "High" | "Medium" | "Low";
+const PROP_TYPES: PropType[] = [
+  "PASSING_ATTEMPTS",
+  "PASSING_COMPLETIONS",
+  "PASSING_YARDS",
+  "RECEPTIONS",
+  "RECEIVING_YARDS",
+  "RUSHING_ATTEMPTS",
+  "RUSHING_YARDS",
+];
 
-export interface GradedPrediction {
-  season: number;
-  week: number;
-  propType: PropType;
-  recommendation: "OVER" | "UNDER" | "PASS";
-  qualified: boolean;
-  edge: number;
-  confidence: number;
-  unitsStaked: number;
-  unitsReturned: number;
-  result: BetResult;
-  brierComponent: number | null;
+export function calculateHitRate(results: BacktestGradedResult[]): number {
+  const bets = results.filter((r) => r.bet && r.outcome !== "PUSH" && r.outcome !== "NO_RESULT");
+  if (bets.length === 0) return 0;
+  const wins = bets.filter((r) => r.outcome === "WIN").length;
+  return wins / bets.length;
 }
 
-export interface MetricsBlock {
-  plays: number;
-  wins: number;
-  losses: number;
-  pushes: number;
-  noBets: number;
-  hitRate: number;
-  unitsStaked: number;
-  unitsReturned: number;
-  roiPct: number;
-  averageEdge: number;
+export function calculateROI(results: BacktestGradedResult[]): number {
+  const bets = results.filter((r) => r.bet);
+  if (bets.length === 0) return 0;
+  const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+  return profit / bets.length;
 }
 
-export interface BacktestMetrics extends MetricsBlock {
-  brierScore: number | null;
-  clvCentsAverage: number | null;
-  byPropType: Array<MetricsBlock & { propType: PropType }>;
-  byConfidence: Array<MetricsBlock & { tier: ConfidenceTier }>;
-  byEdgeBucket: Array<MetricsBlock & { bucket: string }>;
-  byWeek: Array<MetricsBlock & { season: number; week: number }>;
+export function calculateAverageEdge(results: BacktestGradedResult[]): number {
+  const bets = results.filter((r) => r.bet);
+  if (bets.length === 0) return 0;
+  return bets.reduce((acc, r) => acc + r.edgeAtRecommendation, 0) / bets.length;
 }
 
-// --- helpers ----------------------------------------------------------
-
-function tierForConfidence(c: number): ConfidenceTier {
-  if (c >= 0.75) return "High";
-  if (c >= 0.55) return "Medium";
-  return "Low";
-}
-
-function bucketForEdge(edge: number): string {
-  const e = Math.abs(edge) * 100;
-  if (e >= 10) return "10%+";
-  if (e >= 8) return "8–10%";
-  if (e >= 6) return "6–8%";
-  if (e >= 4) return "4–6%";
-  return "<4%";
-}
-
-function rollUp(graded: GradedPrediction[]): MetricsBlock {
-  let plays = 0,
-    wins = 0,
-    losses = 0,
-    pushes = 0,
-    noBets = 0,
-    staked = 0,
-    returned = 0,
-    edgeSum = 0,
-    edgeN = 0;
-  for (const g of graded) {
-    switch (g.result) {
-      case "WIN":
-        wins++;
-        plays++;
-        break;
-      case "LOSS":
-        losses++;
-        plays++;
-        break;
-      case "PUSH":
-        pushes++;
-        plays++;
-        break;
-      case "NO_BET":
-        noBets++;
-        break;
-    }
-    staked += g.unitsStaked;
-    returned += g.unitsReturned;
-    if (g.qualified) {
-      edgeSum += g.edge;
-      edgeN++;
-    }
+export function calculateAverageExpectedValue(
+  results: BacktestGradedResult[],
+): number {
+  // EV per unit = modelProb * payout - (1 - modelProb) (i.e. lose 1u).
+  // We approximate modelProb from the scorecard.
+  const bets = results.filter((r) => r.bet);
+  if (bets.length === 0) return 0;
+  let total = 0;
+  for (const r of bets) {
+    const sc = r.candidate.scorecard;
+    const modelProb =
+      sc.recommendation === "OVER"
+        ? sc.modelOverProbability
+        : sc.modelUnderProbability;
+    const odds =
+      sc.recommendation === "OVER" ? sc.overOdds : sc.underOdds;
+    const payout = odds > 0 ? odds / 100 : 100 / -odds;
+    total += modelProb * payout - (1 - modelProb);
   }
-  const decided = wins + losses;
-  const hitRate = decided > 0 ? wins / decided : 0;
-  const roiPct = staked > 0 ? ((returned - staked) / staked) * 100 : 0;
+  return total / bets.length;
+}
+
+export function calculateBrierScore(results: BacktestGradedResult[]): number {
+  // Brier across qualified bets with a graded outcome.
+  const scored = results.filter(
+    (r) =>
+      r.bet &&
+      (r.outcome === "WIN" || r.outcome === "LOSS" || r.outcome === "PUSH"),
+  );
+  if (scored.length === 0) return 0;
+  let sum = 0;
+  for (const r of scored) {
+    const sc = r.candidate.scorecard;
+    const modelProb =
+      sc.recommendation === "OVER"
+        ? sc.modelOverProbability
+        : sc.modelUnderProbability;
+    const actual = r.outcome === "WIN" ? 1 : r.outcome === "PUSH" ? 0.5 : 0;
+    sum += (modelProb - actual) ** 2;
+  }
+  return sum / scored.length;
+}
+
+export function calculateMaxDrawdown(results: BacktestGradedResult[]): number {
+  const bets = results.filter((r) => r.bet);
+  let running = 0;
+  let peak = 0;
+  let maxDd = 0;
+  for (const r of bets) {
+    running += r.profitLossUnits;
+    if (running > peak) peak = running;
+    const dd = peak - running;
+    if (dd > maxDd) maxDd = dd;
+  }
+  return maxDd;
+}
+
+function summarizeBets(bets: BacktestGradedResult[]) {
+  const wins = bets.filter((r) => r.outcome === "WIN").length;
+  const losses = bets.filter((r) => r.outcome === "LOSS").length;
+  const pushes = bets.filter((r) => r.outcome === "PUSH").length;
+  const decided = wins + losses + pushes;
+  const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+  const decidedNoPush = wins + losses;
   return {
-    plays,
+    bets: bets.length,
     wins,
     losses,
     pushes,
-    noBets,
-    hitRate,
-    unitsStaked: staked,
-    unitsReturned: returned,
-    roiPct,
-    averageEdge: edgeN > 0 ? edgeSum / edgeN : 0,
+    profitUnits: profit,
+    roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+    hitRate: decidedNoPush > 0 ? wins / decidedNoPush : 0,
+    decided,
   };
 }
 
-// --- entry point ------------------------------------------------------
+export function summarizeByPropType(
+  results: BacktestGradedResult[],
+): BacktestPropTypeSummary[] {
+  return PROP_TYPES.map((pt) => {
+    const evaluated = results.filter((r) => r.candidate.propType === pt);
+    const bets = evaluated.filter((r) => r.bet);
+    const s = summarizeBets(bets);
+    return {
+      propType: pt,
+      evaluated: evaluated.length,
+      bets: s.bets,
+      wins: s.wins,
+      losses: s.losses,
+      pushes: s.pushes,
+      hitRate: s.hitRate,
+      roiPct: s.roiPct,
+      profitUnits: s.profitUnits,
+    };
+  }).filter((s) => s.evaluated > 0);
+}
 
-export function aggregateMetrics(graded: GradedPrediction[]): BacktestMetrics {
-  const overall = rollUp(graded);
+export function summarizeByPrimaryDisqualifier(
+  results: BacktestGradedResult[],
+): BacktestDisqualifierSummary[] {
+  const counts = new Map<string, number>();
+  for (const r of results) {
+    if (!r.primaryDisqualifier) continue;
+    const key = simplifyDisqualifier(r.primaryDisqualifier);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([disqualifier, count]) => ({ disqualifier, count }))
+    .sort((a, b) => b.count - a.count);
+}
 
-  const brierComponents = graded
-    .map((g) => g.brierComponent)
-    .filter((b): b is number => typeof b === "number");
-  const brierScore =
-    brierComponents.length > 0
-      ? brierComponents.reduce((a, b) => a + b, 0) / brierComponents.length
-      : null;
+function simplifyDisqualifier(raw: string): string {
+  // Collapse score values so "Edge of +3.5% on OVER below 4.0% threshold"
+  // groups with "Edge of +2.5% on OVER below 4.0% threshold".
+  if (raw.toLowerCase().startsWith("edge of")) return "Edge below threshold";
+  // "Injury context score 0.30 below 0.55 gate" → "Injury context gate"
+  const m = raw.match(/^([A-Za-z\s/]+?)\s+score\s+\d/i);
+  if (m) return `${m[1].trim()} gate`;
+  return raw;
+}
 
-  // Slice helpers
-  const groupBy = <K extends string>(
-    keyFn: (g: GradedPrediction) => K,
-  ): Map<K, GradedPrediction[]> => {
-    const out = new Map<K, GradedPrediction[]>();
-    for (const g of graded) {
-      const k = keyFn(g);
-      const arr = out.get(k) ?? [];
-      arr.push(g);
-      out.set(k, arr);
-    }
-    return out;
-  };
+const EDGE_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+  { label: "< 0%", lo: -Infinity, hi: 0 },
+  { label: "0–2%", lo: 0, hi: 0.02 },
+  { label: "2–4%", lo: 0.02, hi: 0.04 },
+  { label: "4–6%", lo: 0.04, hi: 0.06 },
+  { label: "6–10%", lo: 0.06, hi: 0.10 },
+  { label: "≥ 10%", lo: 0.10, hi: Infinity },
+];
 
-  const propTypeGroups = groupBy<PropType>((g) => g.propType);
-  const byPropType = Array.from(propTypeGroups.entries())
-    .map(([propType, items]) => ({ propType, ...rollUp(items) }))
-    .sort((a, b) => b.roiPct - a.roiPct);
-
-  const confGroups = groupBy<ConfidenceTier>((g) =>
-    tierForConfidence(g.confidence),
-  );
-  const byConfidence: Array<MetricsBlock & { tier: ConfidenceTier }> = (
-    ["High", "Medium", "Low"] as const
-  )
-    .filter((t) => confGroups.has(t))
-    .map((tier) => ({ tier, ...rollUp(confGroups.get(tier)!) }));
-
-  const edgeBucketGroups = groupBy<string>((g) => bucketForEdge(g.edge));
-  const byEdgeBucket: Array<MetricsBlock & { bucket: string }> = (
-    ["<4%", "4–6%", "6–8%", "8–10%", "10%+"] as const
-  )
-    .filter((b) => edgeBucketGroups.has(b))
-    .map((bucket) => ({ bucket, ...rollUp(edgeBucketGroups.get(bucket)!) }));
-
-  const weekGroups = groupBy<string>((g) => `${g.season}-${g.week}`);
-  const byWeek = Array.from(weekGroups.entries())
-    .map(([key, items]) => {
-      const [s, w] = key.split("-").map(Number);
-      return { season: s, week: w, ...rollUp(items) };
-    })
-    .sort((a, b) =>
-      a.season !== b.season ? a.season - b.season : a.week - b.week,
+export function summarizeByEdgeBucket(
+  results: BacktestGradedResult[],
+): BacktestEdgeBucketSummary[] {
+  return EDGE_BUCKETS.map((b) => {
+    const inBucket = results.filter(
+      (r) => r.edgeAtRecommendation >= b.lo && r.edgeAtRecommendation < b.hi,
     );
+    const bets = inBucket.filter((r) => r.bet);
+    const s = summarizeBets(bets);
+    return {
+      label: b.label,
+      loEdge: b.lo === -Infinity ? -1 : b.lo,
+      hiEdge: b.hi === Infinity ? 1 : b.hi,
+      bets: s.bets,
+      wins: s.wins,
+      losses: s.losses,
+      pushes: s.pushes,
+      hitRate: s.hitRate,
+      roiPct: s.roiPct,
+      profitUnits: s.profitUnits,
+    };
+  }).filter((s) => s.bets > 0 || s.wins > 0 || s.losses > 0);
+}
 
-  return {
-    ...overall,
-    brierScore,
-    clvCentsAverage: null, // requires closing-line ingestion (not yet)
-    byPropType,
-    byConfidence,
-    byEdgeBucket,
-    byWeek,
-  };
+export function summarizeByConfidenceBucket(
+  results: BacktestGradedResult[],
+): BacktestConfidenceBucketSummary[] {
+  const tiers: Array<"High" | "Medium" | "Low"> = ["High", "Medium", "Low"];
+  return tiers.map((tier) => {
+    const bets = results.filter((r) => {
+      if (!r.bet) return false;
+      const c = r.candidate.scorecard.confidence;
+      if (tier === "High") return c >= 0.8;
+      if (tier === "Medium") return c >= 0.6 && c < 0.8;
+      return c < 0.6;
+    });
+    const s = summarizeBets(bets);
+    return {
+      label: tier,
+      bets: s.bets,
+      wins: s.wins,
+      losses: s.losses,
+      pushes: s.pushes,
+      hitRate: s.hitRate,
+      roiPct: s.roiPct,
+      profitUnits: s.profitUnits,
+    };
+  });
+}
+
+const COACHING_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+  { label: "None / low (< 20)", lo: 0, hi: 20 },
+  { label: "Mild (20–39)", lo: 20, hi: 40 },
+  { label: "Moderate (40–59)", lo: 40, hi: 60 },
+  { label: "High (60–74)", lo: 60, hi: 75 },
+  { label: "Severe (75+)", lo: 75, hi: 101 },
+];
+
+export function summarizeByCoachingUncertaintyBucket(
+  results: BacktestGradedResult[],
+): BacktestCoachingUncertaintyBucketSummary[] {
+  return COACHING_BUCKETS.map((b) => {
+    const bets = results.filter((r) => {
+      if (!r.bet) return false;
+      const ct = r.candidate.scorecard.coachingTransition;
+      const penalty = ct?.scores.coachingUncertaintyPenalty ?? 0;
+      return penalty >= b.lo && penalty < b.hi;
+    });
+    const s = summarizeBets(bets);
+    return {
+      label: b.label,
+      loPenalty: b.lo,
+      hiPenalty: b.hi,
+      bets: s.bets,
+      wins: s.wins,
+      losses: s.losses,
+      pushes: s.pushes,
+      hitRate: s.hitRate,
+      roiPct: s.roiPct,
+      profitUnits: s.profitUnits,
+    };
+  }).filter((b) => b.bets > 0);
+}
+
+const WEATHER_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+  { label: "Risk (< 0.50)", lo: 0, hi: 0.5 },
+  { label: "Borderline (0.50–0.74)", lo: 0.5, hi: 0.75 },
+  { label: "Clean (≥ 0.75)", lo: 0.75, hi: 1.01 },
+];
+
+export function summarizeByWeatherRiskBucket(
+  results: BacktestGradedResult[],
+): BacktestWeatherRiskBucketSummary[] {
+  return WEATHER_BUCKETS.map((b) => {
+    const bets = results.filter((r) => {
+      if (!r.bet) return false;
+      const w = r.candidate.scorecard.weatherEnvironmentScore;
+      return w >= b.lo && w < b.hi;
+    });
+    const s = summarizeBets(bets);
+    return {
+      label: b.label,
+      loScore: b.lo,
+      hiScore: b.hi,
+      bets: s.bets,
+      wins: s.wins,
+      losses: s.losses,
+      pushes: s.pushes,
+      hitRate: s.hitRate,
+      roiPct: s.roiPct,
+      profitUnits: s.profitUnits,
+    };
+  }).filter((b) => b.bets > 0);
 }

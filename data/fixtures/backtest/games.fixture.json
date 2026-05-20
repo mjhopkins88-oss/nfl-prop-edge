@@ -1,0 +1,46 @@
+[
+  {
+    "id": "fixture-kc-at-buf-w11",
+    "season": 2025,
+    "week": 11,
+    "kickoff": "2025-11-16T18:00:00Z",
+    "homeTeamAbbr": "BUF",
+    "awayTeamAbbr": "KC",
+    "spread": -2.5,
+    "total": 48.5,
+    "isDome": false
+  },
+  {
+    "id": "fixture-sf-at-mia-w11",
+    "season": 2025,
+    "week": 11,
+    "kickoff": "2025-11-16T21:25:00Z",
+    "homeTeamAbbr": "MIA",
+    "awayTeamAbbr": "SF",
+    "spread": -3.0,
+    "total": 47.0,
+    "isDome": false
+  },
+  {
+    "id": "fixture-phi-at-dal-w11",
+    "season": 2025,
+    "week": 11,
+    "kickoff": "2025-11-17T01:20:00Z",
+    "homeTeamAbbr": "DAL",
+    "awayTeamAbbr": "PHI",
+    "spread": -3.0,
+    "total": 47.5,
+    "isDome": true
+  },
+  {
+    "id": "fixture-nyg-at-min-w11",
+    "season": 2025,
+    "week": 11,
+    "kickoff": "2025-11-18T01:15:00Z",
+    "homeTeamAbbr": "MIN",
+    "awayTeamAbbr": "NYG",
+    "spread": -7.5,
+    "total": 44.0,
+    "isDome": true
+  }
+]

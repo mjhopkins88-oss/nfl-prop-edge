@@ -1,0 +1,38 @@
+[
+  {
+    "gameId": "fixture-kc-at-buf-w11",
+    "isDome": false,
+    "temperatureF": 32,
+    "windMph": 22,
+    "gustsMph": 31,
+    "precipitationMm": 0,
+    "snowfallCm": 1.5
+  },
+  {
+    "gameId": "fixture-sf-at-mia-w11",
+    "isDome": false,
+    "temperatureF": 78,
+    "windMph": 8,
+    "gustsMph": 12,
+    "precipitationMm": 0,
+    "snowfallCm": 0
+  },
+  {
+    "gameId": "fixture-phi-at-dal-w11",
+    "isDome": true,
+    "temperatureF": null,
+    "windMph": null,
+    "gustsMph": null,
+    "precipitationMm": null,
+    "snowfallCm": null
+  },
+  {
+    "gameId": "fixture-nyg-at-min-w11",
+    "isDome": true,
+    "temperatureF": null,
+    "windMph": null,
+    "gustsMph": null,
+    "precipitationMm": null,
+    "snowfallCm": null
+  }
+]

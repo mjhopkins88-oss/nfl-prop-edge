@@ -1,104 +1,118 @@
 /**
- * Backtest stage 4 — Grading.
+ * Backtest grading.
  *
- * Given a recommendation + odds + the actual stat value, produce a
- * win/loss/push label, units staked + returned, and a Brier-score
- * component for downstream calibration.
+ * Compare scorecard recommendation against the actual stat the player
+ * produced in the test week. PASS rows still count as evaluated but
+ * are not bets — no profit/loss is assigned.
  *
- * Settlement convention:
- *   OVER  : win if actual > line, push if actual == line, loss if <
- *   UNDER : win if actual < line, push if actual == line, loss if >
- *   PASS  : no bet, no stake, no return
- *
- * Units: V1 always stakes 1 unit per bet. Returned units = stake * (1 + payout)
- * on a win, refunded on a push, zero on a loss.
+ * Flat staking: 1 unit risk per qualified bet. American odds → payout
+ * on a WIN, -1 unit on a LOSS, 0 on PUSH/PASS.
  */
 
-import type { Recommendation } from "../types";
-import type { BetResult } from "@prisma/client";
+import type { PropType } from "../types";
+import type {
+  BacktestCandidate,
+  BacktestGradedResult,
+  BacktestOutcome,
+  BacktestPlayerWeekStat,
+} from "./types";
+import { getPrimaryDisqualifier } from "../model/model-scorecard";
+import { selectedEdge } from "../model/prop-opportunity";
 
-export interface GradingInput {
-  recommendation: Recommendation;
-  line: number;
-  overOdds: number;
-  underOdds: number;
-  /** Null if we don't have an actual stat yet (live prediction, not backtest). */
-  actualValue: number | null;
-  modelOverProbability: number;
+const STAT_KEY_BY_PROP_TYPE: Record<PropType, keyof BacktestPlayerWeekStat> = {
+  PASSING_ATTEMPTS: "passingAttempts",
+  PASSING_COMPLETIONS: "passingCompletions",
+  PASSING_YARDS: "passingYards",
+  RECEPTIONS: "receptions",
+  RECEIVING_YARDS: "receivingYards",
+  RUSHING_ATTEMPTS: "rushingAttempts",
+  RUSHING_YARDS: "rushingYards",
+};
+
+export function getActualStatForProp(args: {
+  playerId: string;
+  propType: PropType;
+  season: number;
+  week: number;
+  playerWeekStats: BacktestPlayerWeekStat[];
+}): number | null {
+  const row = args.playerWeekStats.find(
+    (r) =>
+      r.playerId === args.playerId &&
+      r.season === args.season &&
+      r.week === args.week,
+  );
+  if (!row) return null;
+  const key = STAT_KEY_BY_PROP_TYPE[args.propType];
+  const value = row[key];
+  return typeof value === "number" ? value : null;
 }
 
-export interface GradeResult {
-  result: BetResult;
-  unitsStaked: number;
-  unitsReturned: number;
-  /** Squared error of model OVER probability vs the realized OVER outcome. */
-  brierComponent: number | null;
-}
-
-function decimalPayout(odds: number): number {
+function americanPayoutMultiplier(odds: number): number {
   return odds > 0 ? odds / 100 : 100 / -odds;
 }
 
-export function gradePrediction(input: GradingInput): GradeResult {
-  // No actual value -> can't grade. (Used by live predictions.)
-  if (input.actualValue === null) {
-    return {
-      result: input.recommendation === "PASS" ? "NO_BET" : "NO_BET",
-      unitsStaked: 0,
-      unitsReturned: 0,
-      brierComponent: null,
-    };
-  }
+export function gradeBacktestCandidate(args: {
+  candidate: BacktestCandidate;
+  playerWeekStats: BacktestPlayerWeekStat[];
+}): BacktestGradedResult {
+  const { candidate } = args;
+  const sc = candidate.scorecard;
+  const actual = getActualStatForProp({
+    playerId: candidate.playerId,
+    propType: candidate.propType,
+    season: candidate.season,
+    week: candidate.week,
+    playerWeekStats: args.playerWeekStats,
+  });
 
-  // Brier component is well-defined whether we bet or not — calibration
-  // doesn't care about whether we acted. Excludes pushes (treated as
-  // half-credit), see classifyOverHit.
-  const overHit =
-    input.actualValue > input.line ? 1 : input.actualValue < input.line ? 0 : 0.5;
-  const brierComponent = (input.modelOverProbability - overHit) ** 2;
+  let outcome: BacktestOutcome = "NO_RESULT";
+  let profitLossUnits = 0;
+  const bet = sc.qualified && sc.recommendation !== "PASS";
 
-  if (input.recommendation === "PASS") {
-    return {
-      result: "NO_BET",
-      unitsStaked: 0,
-      unitsReturned: 0,
-      brierComponent,
-    };
-  }
-
-  const stake = 1;
-  let result: BetResult;
-  let returned = 0;
-
-  if (input.recommendation === "OVER") {
-    if (input.actualValue > input.line) {
-      result = "WIN";
-      returned = stake * (1 + decimalPayout(input.overOdds));
-    } else if (input.actualValue === input.line) {
-      result = "PUSH";
-      returned = stake;
-    } else {
-      result = "LOSS";
-      returned = 0;
-    }
+  if (!bet) {
+    outcome = "PASS";
+  } else if (actual === null) {
+    outcome = "NO_RESULT";
+  } else if (actual === sc.marketLine) {
+    outcome = "PUSH";
   } else {
-    // UNDER
-    if (input.actualValue < input.line) {
-      result = "WIN";
-      returned = stake * (1 + decimalPayout(input.underOdds));
-    } else if (input.actualValue === input.line) {
-      result = "PUSH";
-      returned = stake;
+    const overWins = actual > sc.marketLine;
+    const win =
+      (sc.recommendation === "OVER" && overWins) ||
+      (sc.recommendation === "UNDER" && !overWins);
+    if (win) {
+      outcome = "WIN";
+      const odds =
+        sc.recommendation === "OVER" ? candidate.scorecard.overOdds : candidate.scorecard.underOdds;
+      profitLossUnits = americanPayoutMultiplier(odds);
     } else {
-      result = "LOSS";
-      returned = 0;
+      outcome = "LOSS";
+      profitLossUnits = -1;
     }
   }
 
   return {
-    result,
-    unitsStaked: stake,
-    unitsReturned: returned,
-    brierComponent,
+    candidate,
+    recommendation: sc.recommendation,
+    qualified: sc.qualified,
+    bet,
+    actualStat: actual,
+    outcome,
+    profitLossUnits,
+    edgeAtRecommendation: selectedEdge(sc),
+    primaryDisqualifier: getPrimaryDisqualifier(sc) ?? undefined,
   };
+}
+
+export function gradeBacktestResults(args: {
+  candidates: BacktestCandidate[];
+  playerWeekStats: BacktestPlayerWeekStat[];
+}): BacktestGradedResult[] {
+  return args.candidates.map((candidate) =>
+    gradeBacktestCandidate({
+      candidate,
+      playerWeekStats: args.playerWeekStats,
+    }),
+  );
 }

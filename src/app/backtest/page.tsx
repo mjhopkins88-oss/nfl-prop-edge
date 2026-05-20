@@ -10,10 +10,12 @@ import {
   TrendUpIcon,
 } from "@/components/icons";
 import { getBacktestSummary } from "@/lib/data/backtest";
+import { loadFixtureBacktestSummary } from "@/lib/backtest/fixture-summary";
 import { PROP_TYPE_SHORT } from "@/lib/prop-utils";
 
 export default function BacktestPage() {
   const s = getBacktestSummary();
+  const fixture = loadFixtureBacktestSummary();
 
   const winRate = s.wins / Math.max(1, s.totalPlays);
   const profit = s.unitsReturn - s.unitsStaked;
@@ -41,6 +43,167 @@ export default function BacktestPage() {
           our model claimed at recommendation time.
         </p>
       </section>
+
+      {!fixture && (
+        <section className="rounded-2xl bg-amber-50/70 p-4 ring-1 ring-amber-200/60 backdrop-blur">
+          <div className="flex items-start gap-3">
+            <AlertTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <div className="text-sm font-medium text-amber-900">
+                Live fixture backtest not yet generated.
+              </div>
+              <div className="mt-0.5 text-xs text-amber-800">
+                Run{" "}
+                <code className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px]">
+                  npx tsx scripts/run-backtest-2025.ts --fixtures
+                </code>{" "}
+                to populate{" "}
+                <code className="font-mono text-[11px]">
+                  data/backtests/2025/backtest-summary.fixture.json
+                </code>
+                . The static performance summary below stays available
+                regardless.
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {fixture && (
+        <section className="glass-strong rounded-3xl p-6 sm:p-8">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-sea-700">
+                Live fixture backtest
+              </div>
+              <h2 className="mt-1 text-xl font-semibold text-ink-900">
+                {fixture.scope.season} · Weeks {fixture.scope.startWeek}–
+                {fixture.scope.endWeek}
+              </h2>
+            </div>
+            <div className="text-[11px] text-ink-500">
+              {fixture.scope.propTypes.length} prop types · generated{" "}
+              {new Date(fixture.generatedAt).toLocaleString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <FixtureMetric label="Evaluated props" value={`${fixture.evaluated}`} />
+            <FixtureMetric
+              label="Qualified bets"
+              value={`${fixture.qualifiedBets}`}
+              sub={`${fixture.passes} passes`}
+            />
+            <FixtureMetric
+              label="Hit rate"
+              value={`${(fixture.hitRate * 100).toFixed(1)}%`}
+              sub={`${fixture.wins}W / ${fixture.losses}L / ${fixture.pushes}P`}
+              tone={fixture.hitRate >= 0.55 ? "positive" : "neutral"}
+            />
+            <FixtureMetric
+              label="ROI"
+              value={`${fixture.roiPct >= 0 ? "+" : ""}${fixture.roiPct.toFixed(1)}%`}
+              sub={`${fixture.profitUnits >= 0 ? "+" : ""}${fixture.profitUnits.toFixed(2)} units`}
+              tone={fixture.roiPct >= 0 ? "positive" : "negative"}
+            />
+            <FixtureMetric
+              label="Avg edge"
+              value={`${(fixture.averageEdge * 100).toFixed(1)}%`}
+            />
+            <FixtureMetric
+              label="Avg EV / unit"
+              value={fixture.averageExpectedValueUnits.toFixed(3)}
+            />
+            <FixtureMetric
+              label="Best prop type"
+              value={fixture.bestPropType ?? "—"}
+            />
+            <FixtureMetric
+              label="Most common disq"
+              value={fixture.mostCommonDisqualifier ?? "—"}
+            />
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <FixturePanel title="Performance by prop type">
+              <SimpleTable
+                rows={fixture.byPropType.map((b) => ({
+                  label: b.propType,
+                  bets: b.bets,
+                  hitRate: b.hitRate,
+                  roiPct: b.roiPct,
+                }))}
+              />
+            </FixturePanel>
+            <FixturePanel title="Performance by edge bucket">
+              <SimpleTable
+                rows={fixture.byEdgeBucket.map((b) => ({
+                  label: b.label,
+                  bets: b.bets,
+                  hitRate: b.hitRate,
+                  roiPct: b.roiPct,
+                }))}
+              />
+            </FixturePanel>
+            <FixturePanel title="Performance by confidence">
+              <SimpleTable
+                rows={fixture.byConfidence.map((b) => ({
+                  label: b.label,
+                  bets: b.bets,
+                  hitRate: b.hitRate,
+                  roiPct: b.roiPct,
+                }))}
+              />
+            </FixturePanel>
+            <FixturePanel title="Primary disqualifiers">
+              <ul className="space-y-1 text-sm text-ink-700">
+                {fixture.byDisqualifier.length === 0 ? (
+                  <li className="text-ink-500">No disqualifiers.</li>
+                ) : (
+                  fixture.byDisqualifier.map((d) => (
+                    <li
+                      key={d.disqualifier}
+                      className="flex items-center justify-between"
+                    >
+                      <span>{d.disqualifier}</span>
+                      <span className="tabular text-ink-900">{d.count}</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </FixturePanel>
+            {fixture.byCoachingUncertainty.length > 0 && (
+              <FixturePanel title="Performance by coaching uncertainty">
+                <SimpleTable
+                  rows={fixture.byCoachingUncertainty.map((b) => ({
+                    label: b.label,
+                    bets: b.bets,
+                    hitRate: b.hitRate,
+                    roiPct: b.roiPct,
+                  }))}
+                />
+              </FixturePanel>
+            )}
+            {fixture.byWeatherRisk.length > 0 && (
+              <FixturePanel title="Performance by weather risk">
+                <SimpleTable
+                  rows={fixture.byWeatherRisk.map((b) => ({
+                    label: b.label,
+                    bets: b.bets,
+                    hitRate: b.hitRate,
+                    roiPct: b.roiPct,
+                  }))}
+                />
+              </FixturePanel>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* SUMMARY CARDS */}
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -418,5 +581,92 @@ function Callout({
         </div>
       </div>
     </div>
+  );
+}
+
+function FixtureMetric({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "positive" | "neutral" | "negative";
+}) {
+  const accent =
+    tone === "positive"
+      ? "text-sea-700"
+      : tone === "negative"
+        ? "text-coral-600"
+        : "text-ink-900";
+  return (
+    <div className="rounded-2xl bg-white/70 p-4 ring-1 ring-ink-200/40 backdrop-blur">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {label}
+      </div>
+      <div className={`tabular mt-1 text-xl font-semibold ${accent}`}>
+        {value}
+      </div>
+      {sub && <div className="tabular mt-0.5 text-xs text-ink-500">{sub}</div>}
+    </div>
+  );
+}
+
+function FixturePanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl bg-white/65 p-4 ring-1 ring-ink-200/40 backdrop-blur">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SimpleTable({
+  rows,
+}: {
+  rows: Array<{ label: string; bets: number; hitRate: number; roiPct: number }>;
+}) {
+  if (rows.length === 0) {
+    return <div className="text-sm text-ink-500">No bets in this slice.</div>;
+  }
+  return (
+    <table className="w-full text-sm">
+      <thead className="text-[10px] uppercase tracking-[0.12em] text-ink-500">
+        <tr>
+          <th className="py-1 text-left font-medium">Bucket</th>
+          <th className="py-1 text-right font-medium">Bets</th>
+          <th className="py-1 text-right font-medium">Hit</th>
+          <th className="py-1 text-right font-medium">ROI</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-ink-200/40">
+        {rows.map((r) => (
+          <tr key={r.label}>
+            <td className="py-1 text-ink-900">{r.label}</td>
+            <td className="tabular py-1 text-right text-ink-700">{r.bets}</td>
+            <td className="tabular py-1 text-right text-ink-700">
+              {r.bets > 0 ? `${(r.hitRate * 100).toFixed(0)}%` : "—"}
+            </td>
+            <td
+              className={`tabular py-1 text-right ${
+                r.roiPct >= 0 ? "text-sea-700" : "text-coral-600"
+              }`}
+            >
+              {r.bets > 0 ? `${r.roiPct >= 0 ? "+" : ""}${r.roiPct.toFixed(1)}%` : "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

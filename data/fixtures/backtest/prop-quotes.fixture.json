@@ -1,0 +1,11 @@
+[
+  { "marketId": "fixture-pm-mahomes-passyds", "sportsbook": "DraftKings", "line": 274.5, "overOdds": -110, "underOdds": -110 },
+  { "marketId": "fixture-pm-mahomes-passyds", "sportsbook": "FanDuel",    "line": 273.5, "overOdds": -115, "underOdds": -105 },
+  { "marketId": "fixture-pm-mahomes-passyds", "sportsbook": "BetMGM",     "line": 275.5, "overOdds": -110, "underOdds": -110 },
+
+  { "marketId": "fixture-pm-cmc-rushyds", "sportsbook": "BetMGM",     "line": 84.5, "overOdds": -110, "underOdds": -110 },
+  { "marketId": "fixture-pm-cmc-rushyds", "sportsbook": "DraftKings", "line": 85.5, "overOdds": -115, "underOdds": -105 },
+
+  { "marketId": "fixture-pm-hill-recyds", "sportsbook": "BetMGM",     "line": 88.5, "overOdds": -110, "underOdds": -110 },
+  { "marketId": "fixture-pm-hill-recyds", "sportsbook": "FanDuel",    "line": 89.5, "overOdds": -115, "underOdds": -105 }
+]

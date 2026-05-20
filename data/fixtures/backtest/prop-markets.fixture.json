@@ -1,0 +1,45 @@
+[
+  { "id": "fixture-pm-mahomes-passatt", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-mahomes", "propType": "PASSING_ATTEMPTS", "line": 33.5, "overOdds": -110, "underOdds": -110, "projectionMean": 38.0, "projectionStdDev": 4.0, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-mahomes-passcomp", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-mahomes", "propType": "PASSING_COMPLETIONS", "line": 22.5, "overOdds": -110, "underOdds": -110, "projectionMean": 25.0, "projectionStdDev": 3.2, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-mahomes-passyds", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-mahomes", "propType": "PASSING_YARDS", "line": 274.5, "overOdds": -110, "underOdds": -110, "projectionMean": 290.0, "projectionStdDev": 38.0, "sportsbook": "DraftKings" },
+
+  { "id": "fixture-pm-kelce-rec", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-kelce", "propType": "RECEPTIONS", "line": 6.5, "overOdds": -135, "underOdds": 110, "projectionMean": 5.5, "projectionStdDev": 1.8, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-kelce-recyds", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-kelce", "propType": "RECEIVING_YARDS", "line": 64.5, "overOdds": -115, "underOdds": -105, "projectionMean": 65.0, "projectionStdDev": 22.0, "sportsbook": "BetMGM" },
+
+  { "id": "fixture-pm-pacheco-rushyds", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-pacheco", "propType": "RUSHING_YARDS", "line": 58.5, "overOdds": -110, "underOdds": -110, "projectionMean": 51.0, "projectionStdDev": 22.0, "sportsbook": "Caesars" },
+  { "id": "fixture-pm-pacheco-rushatt", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-pacheco", "propType": "RUSHING_ATTEMPTS", "line": 14.5, "overOdds": -110, "underOdds": -110, "projectionMean": 14.7, "projectionStdDev": 3.0, "sportsbook": "FanDuel" },
+
+  { "id": "fixture-pm-allen-passatt", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-allen", "propType": "PASSING_ATTEMPTS", "line": 32.5, "overOdds": -115, "underOdds": -105, "projectionMean": 36.0, "projectionStdDev": 4.5, "sportsbook": "FanDuel" },
+  { "id": "fixture-pm-allen-passyds", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-allen", "propType": "PASSING_YARDS", "line": 248.5, "overOdds": -110, "underOdds": -110, "projectionMean": 268.0, "projectionStdDev": 40.0, "sportsbook": "DraftKings" },
+
+  { "id": "fixture-pm-cook-rushatt", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-cook", "propType": "RUSHING_ATTEMPTS", "line": 16, "overOdds": -110, "underOdds": -110, "projectionMean": 17.5, "projectionStdDev": 3.0, "sportsbook": "FanDuel" },
+  { "id": "fixture-pm-cook-rushyds", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-cook", "propType": "RUSHING_YARDS", "line": 78.5, "overOdds": -110, "underOdds": -110, "projectionMean": 84.0, "projectionStdDev": 22.0, "sportsbook": "BetMGM" },
+
+  { "id": "fixture-pm-shakir-rec", "gameId": "fixture-kc-at-buf-w11", "playerId": "fixture-shakir", "propType": "RECEPTIONS", "line": 4.5, "overOdds": -110, "underOdds": -110, "projectionMean": 3.5, "projectionStdDev": 1.8, "sportsbook": "FanDuel" },
+
+  { "id": "fixture-pm-purdy-passcomp", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-purdy", "propType": "PASSING_COMPLETIONS", "line": 22.5, "overOdds": -110, "underOdds": -110, "projectionMean": 25.0, "projectionStdDev": 3.2, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-purdy-passyds", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-purdy", "propType": "PASSING_YARDS", "line": 268.5, "overOdds": -115, "underOdds": -105, "projectionMean": 285.0, "projectionStdDev": 38.0, "sportsbook": "DraftKings" },
+
+  { "id": "fixture-pm-cmc-rushyds", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-cmc", "propType": "RUSHING_YARDS", "line": 84.5, "overOdds": -110, "underOdds": -110, "projectionMean": 100.0, "projectionStdDev": 22.0, "sportsbook": "BetMGM" },
+  { "id": "fixture-pm-cmc-rushatt", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-cmc", "propType": "RUSHING_ATTEMPTS", "line": 19.5, "overOdds": -110, "underOdds": -110, "projectionMean": 22.0, "projectionStdDev": 3.0, "sportsbook": "Caesars" },
+  { "id": "fixture-pm-cmc-rec", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-cmc", "propType": "RECEPTIONS", "line": 4.5, "overOdds": -135, "underOdds": 110, "projectionMean": 4.8, "projectionStdDev": 1.8, "sportsbook": "FanDuel", "correlationTag": "cmc-stack" },
+
+  { "id": "fixture-pm-tagovailoa-passyds", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-tagovailoa", "propType": "PASSING_YARDS", "line": 245.5, "overOdds": -110, "underOdds": -110, "projectionMean": 250.0, "projectionStdDev": 35.0, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-tagovailoa-passcomp", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-tagovailoa", "propType": "PASSING_COMPLETIONS", "line": 22.5, "overOdds": -110, "underOdds": -110, "projectionMean": 23.5, "projectionStdDev": 3.2, "sportsbook": "FanDuel" },
+
+  { "id": "fixture-pm-hill-rec", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-hill", "propType": "RECEPTIONS", "line": 6.5, "overOdds": -110, "underOdds": -110, "projectionMean": 7.8, "projectionStdDev": 2.0, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-hill-recyds", "gameId": "fixture-sf-at-mia-w11", "playerId": "fixture-hill", "propType": "RECEIVING_YARDS", "line": 88.5, "overOdds": -110, "underOdds": -110, "projectionMean": 102.0, "projectionStdDev": 22.0, "sportsbook": "BetMGM" },
+
+  { "id": "fixture-pm-hurts-passyds", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-hurts", "propType": "PASSING_YARDS", "line": 224.5, "overOdds": -110, "underOdds": -110, "projectionMean": 218.0, "projectionStdDev": 42.0, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-hurts-rushatt", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-hurts", "propType": "RUSHING_ATTEMPTS", "line": 9.5, "overOdds": -110, "underOdds": -110, "projectionMean": 11.0, "projectionStdDev": 2.5, "sportsbook": "FanDuel" },
+
+  { "id": "fixture-pm-ajbrown-rec", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-ajbrown", "propType": "RECEPTIONS", "line": 5.5, "overOdds": -110, "underOdds": -110, "projectionMean": 6.5, "projectionStdDev": 2.0, "sportsbook": "DraftKings" },
+
+  { "id": "fixture-pm-saquon-rushyds", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-saquon", "propType": "RUSHING_YARDS", "line": 92.5, "overOdds": -110, "underOdds": -110, "projectionMean": 110.0, "projectionStdDev": 28.0, "sportsbook": "BetMGM" },
+  { "id": "fixture-pm-saquon-rushatt", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-saquon", "propType": "RUSHING_ATTEMPTS", "line": 19.5, "overOdds": -110, "underOdds": -110, "projectionMean": 22.0, "projectionStdDev": 3.0, "sportsbook": "Caesars" },
+
+  { "id": "fixture-pm-lamb-recyds", "gameId": "fixture-phi-at-dal-w11", "playerId": "fixture-lamb", "propType": "RECEIVING_YARDS", "line": 87.5, "overOdds": -110, "underOdds": -110, "projectionMean": 70.0, "projectionStdDev": 22.0, "sportsbook": "FanDuel" },
+
+  { "id": "fixture-pm-jones-passyds", "gameId": "fixture-nyg-at-min-w11", "playerId": "fixture-jones", "propType": "PASSING_YARDS", "line": 218.5, "overOdds": -110, "underOdds": -110, "projectionMean": 222.0, "projectionStdDev": 40.0, "sportsbook": "DraftKings" },
+  { "id": "fixture-pm-jjefferson-recyds", "gameId": "fixture-nyg-at-min-w11", "playerId": "fixture-jjefferson", "propType": "RECEIVING_YARDS", "line": 89.5, "overOdds": -110, "underOdds": -110, "projectionMean": 110.0, "projectionStdDev": 28.0, "sportsbook": "DraftKings" }
+]

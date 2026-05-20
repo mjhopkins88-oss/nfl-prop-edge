@@ -27,6 +27,29 @@ export const MAX_MARKETS_PER_REQUEST = 7;
 export const ALLOWED_ODDS_REGIONS = ["us"] as const;
 export type AllowedOddsRegion = (typeof ALLOWED_ODDS_REGIONS)[number];
 
+/**
+ * First-version ingestion market list. The Odds-API client knows about
+ * the full V1 lower-variance market set, but the first staged ingestion
+ * run pulls only volume markets (no yardage) to bound credit spend and
+ * sanity-check the pipeline against a smaller surface area. Yardage
+ * markets unlock once this version is verified.
+ */
+export const V1_INGESTION_MARKETS = [
+  "player_pass_attempts",
+  "player_pass_completions",
+  "player_receptions",
+  "player_rush_attempts",
+] as const;
+export type V1IngestionMarket = (typeof V1_INGESTION_MARKETS)[number];
+
+/**
+ * Abort threshold for actual-vs-estimated credit overage. If a paid
+ * run exceeds the estimate by more than this ratio, the script halts
+ * before the next request. 1.10 = 10% slack for rounding / region
+ * multipliers without choking on legitimate surprises.
+ */
+export const CREDIT_OVERAGE_ABORT_RATIO = 1.1;
+
 /** Pregame snapshot offset (hours before kickoff, rounded to 5-min grid). */
 export const DEFAULT_HISTORICAL_SNAPSHOT_HOURS_BEFORE_KICKOFF = 3.5;
 
