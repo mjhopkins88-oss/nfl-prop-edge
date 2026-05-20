@@ -2,6 +2,10 @@ import type { PropType, Recommendation } from "../types";
 import { americanOddsToImpliedProb } from "../prop-utils";
 import { edgeThresholdBumpFromPenalty } from "./coaching-transition";
 import type { CoachingTransitionScorecard } from "./coaching-transition-types";
+import type {
+  MatchupAdjustmentOutput,
+  MatchupScorecardComponent,
+} from "./matchup-intelligence-types";
 
 export type Side = "OVER" | "UNDER";
 
@@ -55,6 +59,21 @@ export interface ScorecardInput {
   correlationExposureScore: number;
   edgeThreshold?: number;
   coachingTransition?: CoachingTransitionScorecard;
+  /**
+   * Optional matchup-intelligence input. When provided the scorecard
+   * applies the σ widening (only), appends matchup reasons / risks,
+   * and attaches a `matchupComponent` to the output. Mean multiplier
+   * is reported on the component but NOT applied to qualification
+   * math — matchup intelligence can never qualify a non-qualifying
+   * bet by itself.
+   */
+  matchupAdjustment?: MatchupAdjustmentOutput;
+  /**
+   * Optional pre-built matchup scorecard component. Useful for
+   * callers that already constructed the display object and want it
+   * attached without re-running the adjustment.
+   */
+  matchupComponent?: MatchupScorecardComponent;
 }
 
 export interface PropDecisionScorecard {
@@ -97,6 +116,7 @@ export interface PropDecisionScorecard {
   disqualifiers: string[];
   finalExplanation: string;
   coachingTransition?: CoachingTransitionScorecard;
+  matchupComponent?: MatchupScorecardComponent;
 }
 
 export interface ScorecardSummary {
@@ -218,7 +238,14 @@ export function buildPropDecisionScorecard(
     overround > 0 ? marketOverProbability / overround : 0.5;
   const noVigUnderProbability = 1 - noVigOverProbability;
 
-  const std = Math.max(input.projectedStdDev, 1e-6);
+  // Matchup intelligence: σ widening ONLY (mean multiplier is reported
+  // on the component but never applied to qualification math).
+  const matchupStdDevMultiplier = Math.max(
+    1,
+    input.matchupAdjustment?.projectedStdDevMultiplier ?? 1,
+  );
+  const adjustedStdDev = input.projectedStdDev * matchupStdDevMultiplier;
+  const std = Math.max(adjustedStdDev, 1e-6);
   const z = (input.marketLine - input.projectedMean) / std;
   const modelUnderProbability = clamp(normalCdf(z), 0, 1);
   const modelOverProbability = 1 - modelUnderProbability;
@@ -315,6 +342,13 @@ export function buildPropDecisionScorecard(
     if (qualified) passReasons.push(coachingTransition.summary);
   }
 
+  if (input.matchupAdjustment) {
+    for (const r of input.matchupAdjustment.reasons) {
+      if (qualified) passReasons.push(r);
+    }
+    for (const r of input.matchupAdjustment.risks) risks.push(r);
+  }
+
   const reasons = qualified ? [...passReasons] : [...failReasons];
 
   const edgeMagnitude = Math.abs(selectedEdge);
@@ -322,9 +356,15 @@ export function buildPropDecisionScorecard(
   const coachingConfidenceDrag = coachingTransition
     ? (coachingTransition.scores.coachingUncertaintyPenalty / 100) * 0.5
     : 0;
+  const matchupConfidenceDelta =
+    input.matchupAdjustment?.confidenceAdjustment ?? 0;
   const confidence = qualified
     ? clamp(
-        0.5 + 0.3 * edgeStrength + 0.2 * riskScore - coachingConfidenceDrag,
+        0.5 +
+          0.3 * edgeStrength +
+          0.2 * riskScore -
+          coachingConfidenceDrag +
+          matchupConfidenceDelta,
         0.5,
         0.98,
       )
@@ -387,6 +427,7 @@ export function buildPropDecisionScorecard(
     disqualifiers,
     finalExplanation,
     coachingTransition,
+    matchupComponent: input.matchupComponent,
   };
 }
 

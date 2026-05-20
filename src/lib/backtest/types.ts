@@ -1,5 +1,9 @@
 import type { PropType, Recommendation } from "../types";
 import type { CoachingTransitionScorecard } from "../model/coaching-transition-types";
+import type {
+  MatchupAdjustmentOutput,
+  MatchupScorecardComponent,
+} from "../model/matchup-intelligence-types";
 import type { PropDecisionScorecard } from "../model/model-scorecard";
 
 export type BacktestSeason = number;
@@ -128,6 +132,13 @@ export interface BacktestFeatureRow {
   dataQualityScore: number;
   /** Optional coaching transition scorecard. */
   coachingTransition?: CoachingTransitionScorecard;
+  /**
+   * Optional matchup intelligence adjustment + display component.
+   * Reserved for when matchup data is plumbed in; runner does not
+   * require it yet.
+   */
+  matchupAdjustment?: MatchupAdjustmentOutput;
+  matchupComponent?: MatchupScorecardComponent;
 }
 
 export interface BacktestProjectionInput {

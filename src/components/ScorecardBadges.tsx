@@ -2,39 +2,61 @@ import clsx from "clsx";
 import type { PropDecisionScorecard } from "@/lib/model/model-scorecard";
 import { selectedEdge } from "@/lib/model/prop-opportunity";
 
-type BadgeTone = "positive" | "warning" | "negative";
+type BadgePalette =
+  | "teal"
+  | "amber"
+  | "coral"
+  | "blue"
+  | "purple"
+  | "orange"
+  | "neutral";
 
 interface Badge {
   label: string;
-  tone: BadgeTone;
+  palette: BadgePalette;
 }
 
 function collectBadges(scorecard: PropDecisionScorecard): Badge[] {
   const badges: Badge[] = [];
   if (scorecard.qualified) {
-    badges.push({ label: "Qualified", tone: "positive" });
+    badges.push({ label: "Qualified", palette: "teal" });
   }
   const edge = selectedEdge(scorecard);
   if (edge < scorecard.edgeThreshold) {
-    badges.push({ label: "Edge Below Threshold", tone: "warning" });
+    badges.push({ label: "Edge Below Threshold", palette: "amber" });
   }
   if (scorecard.roleStabilityScore < 0.55) {
-    badges.push({ label: "Role Risk", tone: "negative" });
+    badges.push({ label: "Role Risk", palette: "amber" });
   }
   if (scorecard.injuryContextScore < 0.55) {
-    badges.push({ label: "Injury Risk", tone: "negative" });
+    badges.push({ label: "Injury Risk", palette: "coral" });
   }
   if (scorecard.weatherEnvironmentScore < 0.5) {
-    badges.push({ label: "Weather Risk", tone: "warning" });
+    badges.push({ label: "Weather Risk", palette: "blue" });
   }
   if (scorecard.correlationExposureScore < 0.5) {
-    badges.push({ label: "Correlation Risk", tone: "warning" });
+    badges.push({ label: "Correlation Risk", palette: "orange" });
   }
   if (scorecard.dataQualityScore < 0.55) {
-    badges.push({ label: "Low Data Quality", tone: "negative" });
+    badges.push({ label: "Low Data Quality", palette: "coral" });
+  }
+  const coachingPenalty =
+    scorecard.coachingTransition?.scores.coachingUncertaintyPenalty ?? 0;
+  if (coachingPenalty >= 40) {
+    badges.push({ label: "Coaching Uncertainty", palette: "purple" });
   }
   return badges;
 }
+
+const PALETTE: Record<BadgePalette, string> = {
+  teal: "bg-sea-50 text-sea-800 ring-sea-200",
+  amber: "bg-amber-50 text-amber-900 ring-amber-200",
+  coral: "bg-rose-50 text-coral-700 ring-coral-200/70",
+  blue: "bg-sky-50 text-sky2-700 ring-sky2-200",
+  purple: "bg-purple-50 text-purple-700 ring-purple-200",
+  orange: "bg-orange-50 text-orange-700 ring-orange-200",
+  neutral: "bg-ink-100/80 text-ink-700 ring-ink-200/70",
+};
 
 export default function ScorecardBadges({
   scorecard,
@@ -48,7 +70,12 @@ export default function ScorecardBadges({
   return (
     <div className="flex flex-wrap gap-1.5">
       {badges.map((b) => (
-        <BadgePill key={b.label} label={b.label} tone={b.tone} size={size} />
+        <BadgePill
+          key={b.label}
+          label={b.label}
+          palette={b.palette}
+          size={size}
+        />
       ))}
     </div>
   );
@@ -56,19 +83,13 @@ export default function ScorecardBadges({
 
 function BadgePill({
   label,
-  tone,
+  palette,
   size,
 }: {
   label: string;
-  tone: BadgeTone;
+  palette: BadgePalette;
   size: "sm" | "md";
 }) {
-  const toneClass =
-    tone === "positive"
-      ? "bg-edge-positive/15 text-edge-positive ring-edge-positive/30"
-      : tone === "warning"
-        ? "bg-amber-400/15 text-amber-300 ring-amber-400/30"
-        : "bg-edge-negative/15 text-edge-negative ring-edge-negative/30";
   const sizeClass =
     size === "md"
       ? "px-2.5 py-1 text-xs"
@@ -76,8 +97,8 @@ function BadgePill({
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-md font-semibold uppercase tracking-wider ring-1",
-        toneClass,
+        "inline-flex items-center rounded-full font-semibold uppercase tracking-[0.08em] ring-1",
+        PALETTE[palette],
         sizeClass,
       )}
     >

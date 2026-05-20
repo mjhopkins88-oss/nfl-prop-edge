@@ -58,13 +58,13 @@ export default function ScorecardDetailPanel({
   const unit = PROP_TYPE_UNIT[scorecard.propType];
 
   return (
-    <section className="rounded-2xl border border-ink-800 bg-ink-900/60 p-6 shadow-card backdrop-blur">
+    <section className="glass-strong rounded-2xl p-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-ink-400">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700">
             Model Decision Scorecard
           </h2>
-          <p className="mt-1 text-xs text-ink-500">
+          <p className="mt-1 text-sm text-ink-700">
             Selected side, edge math, gates, and final explanation.
           </p>
         </div>
@@ -72,8 +72,10 @@ export default function ScorecardDetailPanel({
           <RecommendationPill rec={scorecard.recommendation} size="lg" />
           <span
             className={clsx(
-              "text-[11px] uppercase tracking-wider",
-              scorecard.qualified ? "text-edge-positive" : "text-edge-negative",
+              "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ring-1",
+              scorecard.qualified
+                ? "bg-sea-50 text-sea-700 ring-sea-200"
+                : "bg-amber-50 text-amber-900 ring-amber-200",
             )}
           >
             {scorecard.qualified ? "Qualified" : "Not qualified"}
@@ -202,8 +204,16 @@ export default function ScorecardDetailPanel({
       </div>
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
-        <ListPanel title="Pass reasons" items={scorecard.passReasons} tone="positive" />
-        <ListPanel title="Fail reasons" items={scorecard.failReasons} tone="negative" />
+        <ListPanel
+          title="Pass reasons"
+          items={scorecard.passReasons}
+          tone="positive"
+        />
+        <ListPanel
+          title="Fail reasons"
+          items={scorecard.failReasons}
+          tone="negative"
+        />
         <ListPanel
           title="Disqualifiers"
           items={scorecard.disqualifiers}
@@ -212,11 +222,11 @@ export default function ScorecardDetailPanel({
         />
       </div>
 
-      <div className="mt-6 rounded-lg border border-ink-800 bg-ink-850 p-4">
-        <div className="text-[11px] uppercase tracking-wider text-ink-400">
+      <div className="mt-6 rounded-xl bg-cream-100/70 p-4 ring-1 ring-amber-200/40">
+        <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-amber-700">
           Final explanation
         </div>
-        <p className="mt-1 text-sm leading-relaxed text-white">
+        <p className="mt-1 text-sm leading-relaxed text-ink-900">
           {scorecard.finalExplanation}
         </p>
       </div>
@@ -230,7 +240,7 @@ export default function ScorecardDetailPanel({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-ink-400">
+    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
       {children}
     </div>
   );
@@ -251,19 +261,21 @@ function Cell({
 }) {
   const valueClass =
     tone === "positive"
-      ? "text-edge-positive"
+      ? "text-sea-700"
       : tone === "negative"
-        ? "text-edge-negative"
-        : "text-white";
+        ? "text-coral-700"
+        : "text-ink-900";
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
-      <div className="text-[11px] uppercase tracking-wider text-ink-400">
+    <div className="rounded-xl bg-white/70 p-3 ring-1 ring-ink-200/50">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-500">
         {label}
       </div>
       <div className={clsx("tabular mt-1 text-base font-semibold", valueClass)}>
         {value}
       </div>
-      {sub && <div className="tabular mt-0.5 text-[11px] text-ink-500">{sub}</div>}
+      {sub && (
+        <div className="tabular mt-0.5 text-[11px] text-ink-500">{sub}</div>
+      )}
       {children}
     </div>
   );
@@ -285,45 +297,55 @@ function RiskRow({
   const tone = passes ? (warn ? "warning" : "positive") : "negative";
   const barColor =
     tone === "positive"
-      ? "bg-edge-positive"
+      ? "bg-sea-500"
       : tone === "warning"
         ? "bg-amber-400"
-        : "bg-edge-negative";
+        : "bg-coral-500";
+  const pillClass =
+    tone === "positive"
+      ? "bg-sea-50 text-sea-800 ring-sea-200"
+      : tone === "warning"
+        ? "bg-amber-50 text-amber-900 ring-amber-200"
+        : "bg-rose-50 text-coral-700 ring-coral-200/70";
   const pctWidth = Math.max(0, Math.min(1, score)) * 100;
   const gatePos = Math.max(0, Math.min(1, gate)) * 100;
   return (
     <div
       className={clsx(
-        "rounded-lg border bg-ink-850 px-3 py-2",
-        emphasize ? "border-ink-700" : "border-ink-800",
+        "rounded-xl bg-white/70 px-3 py-2 ring-1",
+        emphasize ? "ring-ink-200/70" : "ring-ink-200/40",
       )}
     >
       <div className="flex items-baseline justify-between text-xs">
-        <span className={clsx(emphasize ? "text-white" : "text-ink-300")}>
+        <span
+          className={clsx(
+            emphasize ? "font-semibold text-ink-900" : "text-ink-800",
+          )}
+        >
           {label}
         </span>
         <span className="flex items-center gap-2 text-[11px]">
-          <span className="tabular text-white">{score.toFixed(2)}</span>
+          <span className="tabular font-semibold text-ink-900">
+            {score.toFixed(2)}
+          </span>
           <span className="text-ink-500">gate {gate.toFixed(2)}</span>
           <span
             className={clsx(
-              "rounded px-1.5 py-px text-[10px] font-semibold uppercase",
-              tone === "positive" && "bg-edge-positive/15 text-edge-positive",
-              tone === "warning" && "bg-amber-400/15 text-amber-300",
-              tone === "negative" && "bg-edge-negative/15 text-edge-negative",
+              "rounded-full px-1.5 py-px text-[10px] font-semibold uppercase ring-1",
+              pillClass,
             )}
           >
             {tone === "positive" ? "OK" : tone === "warning" ? "WARN" : "FAIL"}
           </span>
         </span>
       </div>
-      <div className="relative mt-1.5 h-1.5 overflow-hidden rounded-full bg-ink-700">
+      <div className="relative mt-1.5 h-1.5 overflow-hidden rounded-full bg-ink-200/60">
         <div
           className={clsx("h-full rounded-full", barColor)}
           style={{ width: `${pctWidth}%` }}
         />
         <div
-          className="absolute top-[-2px] h-2.5 w-px bg-white/60"
+          className="absolute top-[-2px] h-2.5 w-px bg-ink-800/60"
           style={{ left: `${gatePos}%` }}
           title={`Gate at ${gate.toFixed(2)}`}
         />
@@ -343,17 +365,33 @@ function ListPanel({
   tone: "positive" | "negative";
   emptyLabel?: string;
 }) {
+  const containerClass =
+    tone === "positive"
+      ? "bg-sea-50/60 ring-sea-200/60"
+      : "bg-amber-50/70 ring-amber-200/60";
+  const labelTone =
+    tone === "positive" ? "text-sea-800" : "text-amber-900";
   const bulletColor =
-    tone === "positive" ? "bg-edge-positive" : "bg-edge-negative";
+    tone === "positive" ? "bg-sea-500" : "bg-coral-500";
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
-      <div className="mb-1.5 text-[11px] uppercase tracking-wider text-ink-400">
+    <div
+      className={clsx(
+        "rounded-xl p-3 ring-1 backdrop-blur",
+        containerClass,
+      )}
+    >
+      <div
+        className={clsx(
+          "mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+          labelTone,
+        )}
+      >
         {title}
       </div>
       {items.length === 0 ? (
         <div className="text-xs text-ink-500">{emptyLabel ?? "—"}</div>
       ) : (
-        <ul className="space-y-1.5 text-xs text-ink-300">
+        <ul className="space-y-1.5 text-xs text-ink-800">
           {items.map((item, i) => (
             <li key={i} className="flex gap-2">
               <span
