@@ -154,17 +154,79 @@ export interface BacktestCandidate {
 
 export type BacktestOutcome = "WIN" | "LOSS" | "PUSH" | "PASS" | "NO_RESULT";
 
-export interface BacktestGradedResult {
-  candidate: BacktestCandidate;
+export type BacktestBetResult = BacktestOutcome;
+
+export type BacktestLineBucket = string;
+
+export type BacktestPostmortemTag =
+  | "GOOD_READ_BAD_VARIANCE"
+  | "PROJECTION_TOO_AGGRESSIVE"
+  | "PROJECTION_TOO_CONSERVATIVE"
+  | "ROLE_ASSUMPTION_FAILED"
+  | "GAME_SCRIPT_FAILED"
+  | "WEATHER_UNDERESTIMATED"
+  | "INJURY_USAGE_SURPRISE"
+  | "MARKET_WAS_RIGHT"
+  | "BAD_LINE_PRICE"
+  | "COACHING_UNCERTAINTY_UNDERESTIMATED"
+  | "CORRELATION_RISK"
+  | "EDGE_TOO_THIN"
+  | "FILTER_CORRECTLY_AVOIDED"
+  | "FILTER_TOO_CONSERVATIVE";
+
+export interface BacktestEvaluatedProp {
+  id: string;
+  season: BacktestSeason;
+  week: BacktestWeek;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: PropType;
+  line: number;
+  lineBucket: BacktestLineBucket;
+  marketOverProbability: number;
+  marketUnderProbability: number;
+  modelOverProbability: number;
+  modelUnderProbability: number;
+  edge: number;
+  edgeBucket: string;
   recommendation: Recommendation;
   qualified: boolean;
-  bet: boolean;
-  actualStat: number | null;
-  outcome: BacktestOutcome;
-  profitLossUnits: number;
-  edgeAtRecommendation: number;
+  confidence: number;
+  confidenceBucket: "High" | "Medium" | "Low";
   primaryDisqualifier?: string;
+  disqualifiers: string[];
+  riskScore: number;
+  dataQualityScore: number;
+  roleStabilityScore: number;
+  weatherRiskScore: number;
+  injuryRiskScore: number;
+  coachingUncertaintyScore: number;
+  correlationRiskScore: number;
+  overOdds: number;
+  underOdds: number;
+  selectedOdds: number;
+  selectedSide: "OVER" | "UNDER";
+  actualStat: number | null;
+  result: BacktestBetResult;
+  profitLossUnits: number;
+  counterfactualResult: BacktestBetResult;
+  counterfactualProfitLossUnits: number;
+  closingLine?: number;
+  closingLineValue?: number;
+  postmortemTags: BacktestPostmortemTag[];
+  scorecardSnapshot: PropDecisionScorecard;
+  createdAt: string;
 }
+
+/**
+ * Backwards-compatible alias. Earlier code referred to the per-prop
+ * record as a "graded result"; the enriched shape that tracks
+ * counterfactuals and postmortem tags is the canonical record now.
+ */
+export type BacktestGradedResult = BacktestEvaluatedProp;
 
 export interface BacktestPropTypeSummary {
   propType: PropType;
@@ -233,6 +295,43 @@ export interface BacktestWeatherRiskBucketSummary {
   profitUnits: number;
 }
 
+export interface BacktestPerformanceBreakdown {
+  bucketLabel: string;
+  evaluated: number;
+  bets: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  passes: number;
+  hitRate: number;
+  roiPct: number;
+  averageEdge: number;
+  averageEvUnits: number;
+  averageProfitLossUnits: number;
+  averageModelProbability: number;
+  averageMarketProbability: number;
+  profitUnits: number;
+}
+
+export interface BacktestModelAuditSummary {
+  bestPropType?: PropType;
+  worstPropType?: PropType;
+  bestLineBucket?: string;
+  worstLineBucket?: string;
+  bestConfidenceTier?: "High" | "Medium" | "Low";
+  filterSavedMostLosses?: string;
+  filterTooConservative?: string;
+  highestRoiEdgeBucket?: string;
+  lowestRoiEdgeBucket?: string;
+  /**
+   * Counterfactual win-rate of PASSes. If the model lean had been
+   * acted on for every PASS, what fraction would have hit? Helps spot
+   * filters that are too aggressive.
+   */
+  passCounterfactualHitRate?: number;
+  notes: string[];
+}
+
 export interface BacktestSummary {
   scope: BacktestScope;
   generatedAt: string;
@@ -258,4 +357,11 @@ export interface BacktestSummary {
   byConfidence: BacktestConfidenceBucketSummary[];
   byCoachingUncertainty: BacktestCoachingUncertaintyBucketSummary[];
   byWeatherRisk: BacktestWeatherRiskBucketSummary[];
+  /** Rich per-bucket breakdowns (extended scope). */
+  byLineBucket: BacktestPerformanceBreakdown[];
+  byPostmortem: BacktestPerformanceBreakdown[];
+  byRecommendationSide: BacktestPerformanceBreakdown[];
+  byRoleStability: BacktestPerformanceBreakdown[];
+  byQualifiedVsPassed: BacktestPerformanceBreakdown[];
+  audit: BacktestModelAuditSummary;
 }

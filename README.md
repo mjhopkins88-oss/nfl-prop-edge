@@ -382,6 +382,121 @@ This split is the API credit protection contract: the runner never
 spends credits, ingestion runs are explicit and credit-bounded, and
 cached responses make reruns free.
 
+## How We Track What Works and What Fails
+
+The backtest doesn't just record wins and losses on bets. Every
+evaluated prop — including the ones the model passed on — carries a
+full per-prop record so we can iterate on the parts of the model that
+are actually moving the needle.
+
+### What each evaluated prop stores
+
+`BacktestEvaluatedProp` (defined in `src/lib/backtest/types.ts`)
+records:
+
+- Identity: id, season, week, gameId, playerId, playerName, team,
+  opponent, propType
+- Market: line, lineBucket, overOdds, underOdds, selectedSide,
+  selectedOdds, market over/under probability
+- Model: modelOverProbability, modelUnderProbability, edge,
+  edgeBucket, recommendation, qualified, confidence, confidenceBucket,
+  riskScore + the eight risk-score components (data quality, role,
+  weather, injury, coaching uncertainty, correlation, …)
+- Disqualifiers: primaryDisqualifier + full disqualifiers array
+- Outcome: actualStat, result (WIN / LOSS / PUSH / PASS / NO_RESULT),
+  profitLossUnits
+- **Counterfactual**: counterfactualResult and
+  counterfactualProfitLossUnits — what would have happened if we had
+  acted on the model's lean for a passed prop
+- Postmortem tags (multi-label, see below)
+- A full scorecard snapshot
+
+### Postmortem tagging (`src/lib/backtest/postmortem.ts`)
+
+Each evaluated prop gets one or more tags assigned by deterministic
+rules. Tags include:
+
+| Tag | When it fires |
+| --- | --- |
+| `GOOD_READ_BAD_VARIANCE` | qualified bet lost by a small margin relative to the line |
+| `PROJECTION_TOO_AGGRESSIVE` | OVER lost with actual far below projection |
+| `PROJECTION_TOO_CONSERVATIVE` | UNDER lost with actual far above projection |
+| `ROLE_ASSUMPTION_FAILED` | snap / target / carry share collapsed |
+| `GAME_SCRIPT_FAILED` | projection direction right but absolute miss |
+| `WEATHER_UNDERESTIMATED` | wind/precipitation outpaced our score |
+| `INJURY_USAGE_SURPRISE` | injury context score was generous |
+| `MARKET_WAS_RIGHT` | clean qualifying bet that simply lost |
+| `BAD_LINE_PRICE` | high overround + projection-on-line miss |
+| `COACHING_UNCERTAINTY_UNDERESTIMATED` | high penalty but bet anyway |
+| `CORRELATION_RISK` | stacked exposure on a losing parlay leg |
+| `EDGE_TOO_THIN` | thin edge that lost |
+| `FILTER_CORRECTLY_AVOIDED` | PASS would have lost as a counterfactual |
+| `FILTER_TOO_CONSERVATIVE` | PASS would have won as a counterfactual |
+
+### Performance breakdowns
+
+`BacktestSummary` carries per-bucket performance for all of:
+
+- prop type · line bucket · recommendation side · edge bucket ·
+  confidence bucket · primary disqualifier · postmortem tag ·
+  coaching uncertainty bucket · weather risk bucket · role stability
+  bucket · qualified vs passed
+
+Each `BacktestPerformanceBreakdown` includes evaluated count, bets,
+wins, losses, pushes, passes, hit rate, ROI, average edge, average
+EV, average profit/loss, average model probability, and average no-
+vig market probability.
+
+### Output files
+
+`scripts/run-backtest-2025.ts --fixtures` writes to
+`data/backtests/2025/`:
+
+- `backtest-summary.fixture.json` — full summary + audit insights
+- `backtest-results.fixture.json` — every evaluated prop with the
+  scorecard snapshot, counterfactual, and tags
+- `backtest-results.fixture.csv` — flat one-row-per-prop view
+- `performance-by-prop-type.fixture.json`
+- `performance-by-line-bucket.fixture.json`
+- `performance-by-edge-bucket.fixture.json`
+- `performance-by-confidence.fixture.json`
+- `performance-by-disqualifier.fixture.json`
+- `performance-by-postmortem.fixture.json`
+
+The `/backtest` page picks these up automatically.
+
+### Model improvement signals
+
+The summary's `audit` block surfaces:
+
+- best / worst prop type by ROI
+- best / worst line bucket by ROI
+- highest / lowest ROI edge bucket
+- best confidence tier
+- the filter that saved the most losses (most prevalent
+  `FILTER_CORRECTLY_AVOIDED` tag bucket)
+- the filter that may be too conservative (most prevalent
+  `FILTER_TOO_CONSERVATIVE` tag bucket)
+- PASS counterfactual hit rate — the fraction of passed props the
+  model would have hit if we'd bet the lean
+
+The `/backtest` page renders these as a *Model Improvement Signals*
+card so it's immediately obvious which markets / buckets / filters
+are worth tightening, loosening, or removing.
+
+### Why we track passes too
+
+Filters are only valuable if they reject more losers than winners.
+Counterfactual outcomes on PASSes let us:
+
+1. Measure whether a given gate (role / injury / weather / coaching /
+   correlation / edge) is pulling its weight.
+2. Spot filters that are saving us from real bad bets (good) versus
+   filters that are coincidentally avoiding plays the model actually
+   liked correctly (bad — too conservative).
+3. Decide which markets to expand, tighten, or remove without
+   waiting for live betting evidence.
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

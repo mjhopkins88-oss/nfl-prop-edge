@@ -21,6 +21,7 @@ import {
   V1_PROP_TYPES,
 } from "../src/lib/backtest/runner";
 import {
+  writeBreakdownJson,
   writeResultsCsv,
   writeResultsJson,
   writeSummaryJson,
@@ -169,14 +170,36 @@ function main(): number {
     fixtures,
   });
 
+  const outDir = path.dirname(args.outputJson);
   writeSummaryJson(args.outputJson, summary);
   writeResultsCsv(args.outputCsv, results);
   writeResultsJson(
-    path.join(
-      path.dirname(args.outputJson),
-      "backtest-results.fixture.json",
-    ),
+    path.join(outDir, "backtest-results.fixture.json"),
     results,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-prop-type.fixture.json"),
+    summary.byPropType,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-line-bucket.fixture.json"),
+    summary.byLineBucket,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-edge-bucket.fixture.json"),
+    summary.byEdgeBucket,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-confidence.fixture.json"),
+    summary.byConfidence,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-disqualifier.fixture.json"),
+    summary.byDisqualifier,
+  );
+  writeBreakdownJson(
+    path.join(outDir, "performance-by-postmortem.fixture.json"),
+    summary.byPostmortem,
   );
 
   // eslint-disable-next-line no-console
