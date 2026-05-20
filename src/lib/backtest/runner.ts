@@ -47,6 +47,11 @@ import type {
   BacktestScope,
   BacktestSummary,
 } from "./types";
+import {
+  buildV2BacktestCandidate,
+  type V2BacktestCandidate,
+  type V2BacktestMetadata,
+} from "./v2-pipeline-adapter";
 
 export const V1_PROP_TYPES: readonly PropType[] = [
   "PASSING_ATTEMPTS",
@@ -65,19 +70,47 @@ export const V1_STARTER_PROP_TYPES: readonly PropType[] = [
   "RUSHING_ATTEMPTS",
 ];
 
+/**
+ * Backtest algorithm mode. The v2 pipeline is opt-in — `V1_SCORECARD`
+ * remains the default so existing callers and dashboard recommendations
+ * are unchanged. `COMPARE_V1_V2` runs both paths over the same fixtures
+ * — use the comparison runner in `algorithm-comparison.ts` for the
+ * full A/B output.
+ */
+export type BacktestAlgorithmMode =
+  | "V1_SCORECARD"
+  | "V2_PIPELINE"
+  | "COMPARE_V1_V2";
+
 export interface RunBacktestArgs {
   scope: BacktestScope;
   fixtures?: LoadedBacktestFixtures;
+  /** Defaults to V1_SCORECARD. */
+  algorithmMode?: BacktestAlgorithmMode;
 }
 
 export interface RunBacktestOutput {
   summary: BacktestSummary;
   results: BacktestEvaluatedProp[];
+  /** Echoed for downstream consumers (defaults to V1_SCORECARD). */
+  algorithmMode: BacktestAlgorithmMode;
+  /**
+   * Populated when `algorithmMode === "V2_PIPELINE"`. The keys are
+   * `propMarketId` so the comparison runner can join V1 and V2
+   * candidates without re-walking the fixture loop.
+   */
+  v2Metadata?: Record<string, V2BacktestMetadata>;
 }
 
 export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
   const fixtures = args.fixtures ?? loadBacktestFixtures();
   const { scope } = args;
+  const mode: BacktestAlgorithmMode = args.algorithmMode ?? "V1_SCORECARD";
+  // COMPARE_V1_V2 is orchestrated externally — when called via
+  // `runBacktest` we treat it as V1 and let the caller invoke
+  // `runBacktestComparison` for the full A/B output.
+  const effectiveMode: "V1_SCORECARD" | "V2_PIPELINE" =
+    mode === "V2_PIPELINE" ? "V2_PIPELINE" : "V1_SCORECARD";
 
   const allowedPropTypes = new Set<PropType>(scope.propTypes);
   if (!scope.includeYardage) {
@@ -87,6 +120,7 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
   }
 
   const candidates: BacktestCandidate[] = [];
+  const v2MetadataByPropMarketId: Record<string, V2BacktestMetadata> = {};
 
   for (let week = scope.startWeek; week <= scope.endWeek; week++) {
     const gamesThisWeek = fixtures.games.filter(
@@ -114,21 +148,40 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
         injuryFlags: fixtures.injuryFlags,
         allMarketsThisWeek: marketsThisWeek,
       });
-      const scorecardInput = buildScorecardInputFromFeatureRow(featureRow);
-      const scorecard = buildPropDecisionScorecard(scorecardInput);
-      candidates.push({
-        propMarketId: market.id,
-        gameId: game.id,
-        playerId: market.playerId,
-        playerName: featureRow.playerName,
-        teamAbbr: featureRow.teamAbbr,
-        opponentAbbr: featureRow.opponentAbbr,
-        propType: market.propType,
-        season: scope.season,
-        week,
-        marketLine: featureRow.marketLine,
-        scorecard,
-      });
+      if (effectiveMode === "V2_PIPELINE") {
+        const v2Candidate: V2BacktestCandidate =
+          buildV2BacktestCandidate(featureRow);
+        candidates.push({
+          propMarketId: v2Candidate.propMarketId,
+          gameId: v2Candidate.gameId,
+          playerId: v2Candidate.playerId,
+          playerName: v2Candidate.playerName,
+          teamAbbr: v2Candidate.teamAbbr,
+          opponentAbbr: v2Candidate.opponentAbbr,
+          propType: v2Candidate.propType,
+          season: v2Candidate.season,
+          week: v2Candidate.week,
+          marketLine: v2Candidate.marketLine,
+          scorecard: v2Candidate.scorecard,
+        });
+        v2MetadataByPropMarketId[v2Candidate.propMarketId] = v2Candidate.v2;
+      } else {
+        const scorecardInput = buildScorecardInputFromFeatureRow(featureRow);
+        const scorecard = buildPropDecisionScorecard(scorecardInput);
+        candidates.push({
+          propMarketId: market.id,
+          gameId: game.id,
+          playerId: market.playerId,
+          playerName: featureRow.playerName,
+          teamAbbr: featureRow.teamAbbr,
+          opponentAbbr: featureRow.opponentAbbr,
+          propType: market.propType,
+          season: scope.season,
+          week,
+          marketLine: featureRow.marketLine,
+          scorecard,
+        });
+      }
     }
   }
 
@@ -214,5 +267,11 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
     audit,
   };
 
-  return { summary, results };
+  return {
+    summary,
+    results,
+    algorithmMode: effectiveMode,
+    v2Metadata:
+      effectiveMode === "V2_PIPELINE" ? v2MetadataByPropMarketId : undefined,
+  };
 }

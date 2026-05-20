@@ -1102,6 +1102,109 @@ and `runPlayerPropPipeline` from the same data.
 - Pipeline orchestrator: `src/lib/model/player-prop-pipeline.ts`
 - Test runner (22 scenarios): `scripts/test-player-prop-algo-audit.ts`
 
+## V1 vs V2 Player Prop Backtesting
+
+The Player Prop Algorithm v2 pipeline is opt-in for the backtest
+runner. The dashboard still uses V1 (`buildPropDecisionScorecard`)
+for its recommendations. The backtest comparison mode lets us
+measure V2 head-to-head on the same fixtures before we even
+consider changing the default.
+
+### What V1 and V2 mean here
+
+- **V1 (`V1_SCORECARD`)** — the existing scorecard path. Raw edge
+  `modelOverProbability - noVigOverProbability` compared to a
+  prop-specific threshold, with eight risk-bucket gates and
+  matchup σ widening. No confidence-adjusted edge gate, no
+  line-sensitivity gate, no market-disagreement classifier.
+- **V2 (`V2_PIPELINE`)** — the disciplined pipeline added during
+  the algorithm audit:
+  - **Market anchoring.** Model probability is the no-vig market
+    probability plus a capped, confidence-weighted sum of
+    football signals (per-prop cap from
+    `prop-model-config.ts`).
+  - **Confidence-adjusted edge.** Raw edge × clamp(confidence /
+    0.7). The gate uses the conf-adj edge, not the raw edge.
+  - **Line sensitivity.** Nearby-line probabilities at ±1; yardage
+    props gated more strictly on fragility.
+  - **Role-trend detection.** STABLE / EXPANDING / DECLINING /
+    VOLATILE / UNKNOWN. Tiny but flat usage = UNKNOWN.
+  - **Market-disagreement classification.** Flags
+    `LIKELY_MODEL_OVERCONFIDENCE` when |model − market| > 12pp
+    and confidence / DQ are below 60%.
+  - **Signal deduplication.** Within-category cap so the same
+    "pressure-sensitive QB" idea can't fire twice at full weight.
+
+V2 only becomes a candidate default if backtesting shows
+improvement on ROI, hit rate, and / or risk-adjusted profit
+across the markets we care about.
+
+### How to run the comparison
+
+The runner's `--algorithm-mode` flag picks the path:
+
+```
+# default — existing scorecard
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode v1
+
+# opt-in v2 pipeline
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode v2
+
+# A/B both algorithms on the same fixtures
+npx tsx scripts/run-backtest-2025.ts --fixtures --algorithm-mode compare
+```
+
+`compare` mode writes four files to `data/backtests/2025/`:
+
+- `v1-summary.fixture.json` — full V1 summary
+- `v2-summary.fixture.json` — full V2 summary
+- `v1-v2-comparison.fixture.json` — delta summary
+  (evaluated / qualified / hit rate / ROI / profit / per-prop /
+  per-line / per-confidence / per-edge / per-disqualifier deltas)
+- `recommendation-changes.fixture.json` — per-prop
+  classification: `SAME_BET` / `V1_BET_V2_PASS` /
+  `V1_PASS_V2_BET` / `OPPOSITE_SIDE` /
+  `SAME_PASS_DIFFERENT_REASON` /
+  `SAME_RECOMMENDATION_DIFFERENT_CONFIDENCE`, plus the top "new
+  V2 disqualifiers" — the gates V2 added that V1 wouldn't have
+  fired.
+
+### What the dashboard shows
+
+When `data/backtests/2025/v1-v2-comparison.fixture.json` exists,
+the `/backtest` page renders an **"Algorithm comparison (V1 vs
+V2)"** panel above the proxy accuracy section: V1 / V2 tiles
+for qualified bets, hit rate, ROI, profit, plus the
+recommendation-change ledger and top new V2 disqualifiers. The
+panel is hidden when no comparison file is present, so this is
+purely additive — the existing dashboard stays unchanged.
+
+### What stays untouched
+
+- The dashboard's player prop recommendations still flow through
+  V1 (`buildPropDecisionScorecard`). No V2 logic touches `/` or
+  `/props/[id]`.
+- The Game Edge model is fully separate; this comparison only
+  applies to player props.
+- No paid APIs, no live refresh, no touchdown markets, no
+  automated betting were introduced.
+
+### Test runner
+
+`scripts/test-v1-v2-backtest-comparison.ts` runs the fixture
+backtest in all three modes and asserts:
+
+- V1 mode echoes `V1_SCORECARD` and attaches no v2 metadata
+- V2 mode echoes `V2_PIPELINE` and exposes
+  `confidenceAdjustedEdge`, `riskAdjustedEdge`,
+  `lineSensitivityLabel`, `marketDisagreementClassification`,
+  `roleTrendClassification`, and a `debugTrace` with ≥ 10 steps
+- Compare mode produces v1Summary, v2Summary, deltaSummary, and
+  a recommendation-change ledger whose counts sum to the total
+  evaluated
+- Every evaluated propType is a V1 market (no touchdown
+  contamination)
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a
