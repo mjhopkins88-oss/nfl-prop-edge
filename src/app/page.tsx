@@ -1,23 +1,13 @@
 import PropFilters from "@/components/PropFilters";
-import PropCard from "@/components/PropCard";
+import OpportunityList from "@/components/OpportunityList";
 import StatCard from "@/components/StatCard";
-import DashboardSidebar from "@/components/DashboardSidebar";
 import {
-  ActivityIcon,
-  ChartBarIcon,
-  SparkleIcon,
-  TargetIcon,
-} from "@/components/icons";
-import {
-  getDashboardSummary,
-  getPropOpportunities,
-} from "@/lib/data/props";
-import type {
-  Position,
-  PropOpportunitySort,
-  PropType,
-  Recommendation,
-} from "@/lib/data/types";
+  getOpportunities,
+  selectedEdge,
+  warnIfInvalidOpportunities,
+  type PropOpportunity,
+} from "@/lib/model/prop-opportunity";
+import type { PropType, Position, Recommendation } from "@/lib/types";
 
 const PROP_TYPE_VALUES = new Set<PropType>([
   "PASSING_ATTEMPTS",
@@ -30,7 +20,6 @@ const PROP_TYPE_VALUES = new Set<PropType>([
 ]);
 const POSITION_VALUES = new Set<Position>(["QB", "RB", "WR", "TE"]);
 const RECOMMENDATION_VALUES = new Set<Recommendation>(["OVER", "UNDER", "PASS"]);
-const SORT_VALUES = new Set<PropOpportunitySort>(["edge", "confidence", "player"]);
 
 type Search = {
   propType?: string;
@@ -49,14 +38,45 @@ function parseFilters(raw: Search) {
       ? (raw.position as Position)
       : undefined;
   const recommendation =
-    raw.recommendation && RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
+    raw.recommendation &&
+    RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
       ? (raw.recommendation as Recommendation)
       : undefined;
-  const sort: PropOpportunitySort =
-    raw.sort && SORT_VALUES.has(raw.sort as PropOpportunitySort)
-      ? (raw.sort as PropOpportunitySort)
-      : "edge";
+  const sort =
+    raw.sort === "confidence" || raw.sort === "player" ? raw.sort : "edge";
   return { propType, position, recommendation, sort };
+}
+
+function applyFilters(
+  opps: PropOpportunity[],
+  filters: ReturnType<typeof parseFilters>,
+): PropOpportunity[] {
+  let result = opps;
+  if (filters.propType) {
+    result = result.filter((o) => o.prop.propType === filters.propType);
+  }
+  if (filters.position) {
+    result = result.filter((o) => o.player.position === filters.position);
+  }
+  if (filters.recommendation) {
+    result = result.filter(
+      (o) => o.scorecard.recommendation === filters.recommendation,
+    );
+  }
+  if (filters.sort === "confidence") {
+    result = [...result].sort((a, b) => b.scorecard.confidence - a.scorecard.confidence);
+  } else if (filters.sort === "player") {
+    result = [...result].sort((a, b) =>
+      a.player.fullName.localeCompare(b.player.fullName),
+    );
+  } else {
+    result = [...result].sort(
+      (a, b) =>
+        Math.abs(selectedEdge(b.scorecard)) -
+        Math.abs(selectedEdge(a.scorecard)),
+    );
+  }
+  return result;
 }
 
 export default async function DashboardPage({
@@ -65,99 +85,72 @@ export default async function DashboardPage({
   searchParams: Promise<Search>;
 }) {
   const raw = await searchParams;
-  const { propType, position, recommendation, sort } = parseFilters(raw);
+  const filters = parseFilters(raw);
+  const all = getOpportunities();
+  warnIfInvalidOpportunities(all);
+  const filtered = applyFilters(all, filters);
 
-  const summary = getDashboardSummary();
-  const opportunities = getPropOpportunities({
-    filter: { propType, position, recommendation },
-    sort,
-  });
+  const qualified = all.filter((o) => o.scorecard.qualified);
+  const positiveEdges = all.filter(
+    (o) => selectedEdge(o.scorecard) >= o.scorecard.edgeThreshold,
+  );
+  const avgEdge =
+    qualified.reduce((acc, o) => acc + Math.abs(selectedEdge(o.scorecard)), 0) /
+    Math.max(qualified.length, 1);
+  const topOpp = [...qualified].sort(
+    (a, b) =>
+      Math.abs(selectedEdge(b.scorecard)) - Math.abs(selectedEdge(a.scorecard)),
+  )[0];
+  const topEdge = topOpp ? selectedEdge(topOpp.scorecard) : 0;
 
   return (
-    <div className="space-y-8">
-      <section className="relative overflow-hidden rounded-3xl">
-        <div className="relative">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/65 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700 ring-1 ring-amber-200/60 backdrop-blur">
-            <SparkleIcon className="h-3 w-3" />
-            Week 11 · 2025 · Lower-variance markets
-          </div>
-          <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">
-            Find the cleanest edges in the
-            <span className="bg-gradient-to-r from-amber-600 via-coral-500 to-rose-500 bg-clip-text text-transparent">
-              {" "}
-              NFL player prop slate
-            </span>
-            .
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm text-ink-700">
-            Volume-driven props only — passing, receiving, rushing. Our model
-            projections, every book&apos;s pricing, and a transparent edge score
-            so you can sort by what actually matters.
-          </p>
-        </div>
+    <div className="space-y-6">
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight text-white">
+          Player prop opportunities
+        </h1>
+        <p className="mt-1 text-sm text-ink-400">
+          Lower-variance markets only — passing, receiving, and rushing volume.
+          Every prop is scored by the model decision engine: edge, gates, and a
+          plain-English explanation.
+        </p>
       </section>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Tracked markets"
-          value={`${summary.trackedMarkets}`}
-          hint={`${summary.actionableMarkets} actionable`}
-          icon={<ChartBarIcon className="h-4 w-4" />}
-          accent="amber"
+          value={`${all.length}`}
+          hint={`${qualified.length} qualified`}
         />
         <StatCard
           label="Positive edges"
-          value={`${summary.positiveEdges}`}
-          hint=">= +4.0% vs market"
+          value={`${positiveEdges.length}`}
+          hint=">= +4.0% over market"
           tone="positive"
-          icon={<SparkleIcon className="h-4 w-4" />}
-          accent="teal"
         />
         <StatCard
-          label="Avg model edge"
-          value={`${(summary.averageEdge * 100).toFixed(1)}%`}
-          hint="across actionable props"
-          icon={<ActivityIcon className="h-4 w-4" />}
-          accent="blue"
+          label="Avg qualified edge"
+          value={`${(avgEdge * 100).toFixed(1)}%`}
+          hint={qualified.length > 0 ? "across qualified props" : "no qualified plays"}
         />
         <StatCard
           label="Top edge"
-          value={summary.topEdge ? `${(summary.topEdge.value * 100).toFixed(1)}%` : "—"}
-          hint={summary.topEdge?.playerName}
-          tone={summary.topEdge?.positive ? "positive" : "negative"}
-          icon={<TargetIcon className="h-4 w-4" />}
-          accent="coral"
+          value={topOpp ? `${(Math.abs(topEdge) * 100).toFixed(1)}%` : "—"}
+          hint={topOpp?.player.fullName}
+          tone={topOpp && topEdge > 0 ? "positive" : "neutral"}
         />
       </section>
 
       <PropFilters />
 
-      <section className="grid gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2">
-          <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-ink-600">
-              Opportunities
-            </h2>
-            <span className="text-xs text-ink-500">
-              {opportunities.length} shown · sorted by{" "}
-              <span className="text-ink-700">
-                {sort === "edge" ? "top edge" : sort === "confidence" ? "confidence" : "player A-Z"}
-              </span>
-            </span>
-          </div>
-          {opportunities.length === 0 ? (
-            <div className="glass rounded-2xl p-10 text-center text-sm text-ink-500">
-              No props match these filters yet.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-              {opportunities.map((opp) => (
-                <PropCard key={opp.id} opp={opp} />
-              ))}
-            </div>
-          )}
+      <section>
+        <div className="mb-2 flex items-baseline justify-between">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-ink-400">
+            Opportunities
+          </h2>
+          <span className="text-xs text-ink-500">{filtered.length} shown</span>
         </div>
-        <DashboardSidebar />
+        <OpportunityList opportunities={filtered} />
       </section>
     </div>
   );

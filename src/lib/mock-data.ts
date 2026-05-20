@@ -315,7 +315,7 @@ const rawPropMarkets = (
       overOdds: -110,
       underOdds: -110,
       sportsbook: "DraftKings",
-      projection: 262.8,
+      projection: 252.5,
       projectionStdDev: 41.5,
       modelHitRateOver: 0.572,
       bookImpliedOver: 0.524,
@@ -638,7 +638,7 @@ const rawPropMarkets = (
       overOdds: -115,
       underOdds: -105,
       sportsbook: "FanDuel",
-      projection: 98.4,
+      projection: 93.0,
       projectionStdDev: 31.2,
       modelHitRateOver: 0.566,
       bookImpliedOver: 0.535,
@@ -1000,6 +1000,10 @@ export function getPropDetail(id: string): PropDetail | undefined {
     whatWouldChangeRec: computeWhatWouldChangeRec(prop),
     expectedValue: computeExpectedValue(prop),
   };
+}
+
+export function getMatchupNotes(propId: string): string[] {
+  return matchupNotesByProp[propId] ?? [];
 }
 
 function defaultMatchupNotes(prop: PropMarket, playerName: string, opponent: string): string[] {

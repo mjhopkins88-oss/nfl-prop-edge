@@ -1,230 +1,659 @@
-/**
- * test-synthetic-model.ts
- *
- * Runs every scenario from `src/lib/model/synthetic-scenarios.ts`
- * through the full pipeline:
- *
- *   projection inputs → projectProp()              ── mean / σ / over-prob
- *   feature inputs    → calculate*Score()          ── per-group scores
- *   edge + featureSet → qualifyWithFeatures()      ── recommendation
- *
- * For each scenario it checks:
- *   - actual recommendation matches the expected one
- *   - (optional) expected `reasonFragment` appears in the combined
- *     narrative (projection reasons + risks, derived feature reasons +
- *     risks, qualifier pass-reasons), case-insensitive substring match
- *   - (optional) expected `riskFragment` appears in the same narrative
- *
- * Prints a PASS / FAIL line per scenario and a summary. Exits non-zero
- * if any scenario fails so the script is CI-friendly.
- *
- * No external APIs. No DB writes. Pure CPU.
- */
-
-import process from "node:process";
-
 import {
-  SYNTHETIC_SCENARIOS,
-  type SyntheticScenario,
-} from "../src/lib/model/synthetic-scenarios";
-import {
-  projectProp,
-  type PropProjectionOutput,
-} from "../src/lib/model/prop-projection-engine";
-import {
-  calculateCorrelationExposureScore,
-  calculateGameScriptScore,
-  calculateInjuryContextScore,
-  calculateMarketContextScore,
-  calculatePaceScore,
-  calculateRoleStabilityScore,
-  calculateWeatherEnvironmentScore,
-  deriveFeatureReasons,
-  deriveFeatureRisks,
-  qualifyWithFeatures,
-  type QualificationResult,
-} from "../src/lib/model/feature-scoring";
-import type { PropFeatureSet } from "../src/lib/model/feature-framework";
+  buildPropDecisionScorecard,
+  getPrimaryDisqualifier,
+  type ScorecardInput,
+} from "../src/lib/model/model-scorecard";
+import { buildCoachingTransitionScorecard } from "../src/lib/model/coaching-transition";
+import { TEAM_COACHING_TRANSITIONS } from "../src/lib/model/coaching-transition-data";
+import type { CoachingTransitionScorecard } from "../src/lib/model/coaching-transition-types";
+import type { PropType, Recommendation } from "../src/lib/types";
 
-// --- helpers ---------------------------------------------------------
-
-function americanToImpliedProb(odds: number): number {
-  if (odds === 0) return 0;
-  return odds > 0 ? 100 / (odds + 100) : -odds / (-odds + 100);
-}
-
-function noVigOver(overOdds: number, underOdds: number): number {
-  const o = americanToImpliedProb(overOdds);
-  const u = americanToImpliedProb(underOdds);
-  return o / (o + u);
-}
-
-function buildFeatureSet(scenario: SyntheticScenario): PropFeatureSet {
-  // We don't know the model side yet, so we pass OVER as the placeholder
-  // side to scoreMarketContext (the only group that uses side info).
-  // The qualifier itself decides the side from the signed edge.
-  const tentativeSide =
-    scenario.expected.recommendation === "UNDER" ? "UNDER" : "OVER";
-  return {
-    roleStability: calculateRoleStabilityScore(
-      scenario.featureInputs.roleStability,
-    ),
-    gameScript: calculateGameScriptScore(
-      scenario.featureInputs.gameScript,
-      scenario.propType,
-    ),
-    pace: calculatePaceScore(scenario.featureInputs.pace),
-    marketContext: calculateMarketContextScore(
-      scenario.featureInputs.marketContext,
-      tentativeSide,
-    ),
-    weatherEnvironment: calculateWeatherEnvironmentScore(
-      scenario.featureInputs.weatherEnvironment,
-      scenario.propType,
-    ),
-    injuryContext: calculateInjuryContextScore(
-      scenario.featureInputs.injuryContext,
-      scenario.propType,
-    ),
-    correlationExposure: calculateCorrelationExposureScore(
-      scenario.featureInputs.correlationExposure,
-    ),
-  };
-}
-
-function combinedNarrative(
-  projection: PropProjectionOutput,
-  featureSet: PropFeatureSet,
-  gate: QualificationResult,
-): string[] {
-  return [
-    ...projection.reasons,
-    ...projection.risks,
-    ...deriveFeatureReasons(featureSet),
-    ...deriveFeatureRisks(featureSet),
-    ...gate.passReasons,
-  ];
-}
-
-function containsFragment(narrative: string[], fragment: string): boolean {
-  const f = fragment.toLowerCase();
-  return narrative.some((s) => s.toLowerCase().includes(f));
-}
-
-// --- color + symbols (terminal-friendly, no deps) --------------------
-
-const TICK = "✓";
-const CROSS = "✗";
-const C_GREEN = "\x1b[32m";
-const C_RED = "\x1b[31m";
-const C_DIM = "\x1b[2m";
-const C_RESET = "\x1b[0m";
-
-// --- runner ----------------------------------------------------------
-
-interface ScenarioResult {
-  scenario: SyntheticScenario;
-  actualRecommendation: string;
-  recommendationOk: boolean;
-  reasonFragmentOk: boolean;
-  riskFragmentOk: boolean;
-  edge: number;
-  modelOver: number;
+interface Scenario {
+  scenarioName: string;
+  playerName: string;
+  propType: PropType;
+  marketLine: number;
+  overOdds: number;
+  underOdds: number;
+  coachingTransition?: CoachingTransitionScorecard;
   projectedMean: number;
-  passReasons: string[];
-}
-
-function runScenario(scenario: SyntheticScenario): ScenarioResult {
-  const projection = projectProp({
-    propType: scenario.propType,
-    ctx: scenario.projection,
-    line: scenario.line,
-  });
-  const bookOver = noVigOver(scenario.overOdds, scenario.underOdds);
-  const edge = projection.modelOverProbability - bookOver;
-  const featureSet = buildFeatureSet(scenario);
-  const gate = qualifyWithFeatures({
-    propType: scenario.propType,
-    edge,
-    featureSet,
-  });
-
-  const narrative = combinedNarrative(projection, featureSet, gate);
-
-  const recommendationOk =
-    gate.recommendation === scenario.expected.recommendation;
-  const reasonFragmentOk =
-    scenario.expected.reasonFragment == null ||
-    containsFragment(narrative, scenario.expected.reasonFragment);
-  const riskFragmentOk =
-    scenario.expected.riskFragment == null ||
-    containsFragment(narrative, scenario.expected.riskFragment);
-
-  return {
-    scenario,
-    actualRecommendation: gate.recommendation,
-    recommendationOk,
-    reasonFragmentOk,
-    riskFragmentOk,
-    edge,
-    modelOver: projection.modelOverProbability,
-    projectedMean: projection.projectedMean,
-    passReasons: gate.passReasons,
+  projectedStdDev: number;
+  dataQualityScore: number;
+  roleStabilityScore: number;
+  gameScriptScore: number;
+  paceScore: number;
+  marketContextScore: number;
+  weatherEnvironmentScore: number;
+  injuryContextScore: number;
+  correlationExposureScore: number;
+  expected: {
+    qualified: boolean;
+    recommendation: Recommendation;
+    primaryDisqualifierIncludes?: string;
   };
 }
 
-function formatScenarioLine(r: ScenarioResult, idx: number, total: number): string {
-  const ok = r.recommendationOk && r.reasonFragmentOk && r.riskFragmentOk;
-  const head = `[${idx}/${total}] ${r.scenario.name}`;
-  const recLine =
-    `  expected: ${r.scenario.expected.recommendation.padEnd(5)}  ` +
-    `actual: ${r.actualRecommendation.padEnd(5)}  ` +
-    (r.recommendationOk ? `${C_GREEN}${TICK}${C_RESET}` : `${C_RED}${CROSS}${C_RESET}`);
-  const numLine = `${C_DIM}  mean=${r.projectedMean.toFixed(1)}  modelOver=${(r.modelOver * 100).toFixed(1)}%  edge=${(r.edge * 100).toFixed(1)}%${C_RESET}`;
-  const reasonLine = r.scenario.expected.reasonFragment
-    ? `  reason "${r.scenario.expected.reasonFragment}" ` +
-      (r.reasonFragmentOk
-        ? `${C_GREEN}${TICK} found${C_RESET}`
-        : `${C_RED}${CROSS} missing${C_RESET}`)
-    : "";
-  const riskLine = r.scenario.expected.riskFragment
-    ? `  risk   "${r.scenario.expected.riskFragment}" ` +
-      (r.riskFragmentOk
-        ? `${C_GREEN}${TICK} found${C_RESET}`
-        : `${C_RED}${CROSS} missing${C_RESET}`)
-    : "";
-  const passReasonLine =
-    !r.recommendationOk && r.passReasons.length > 0
-      ? `${C_DIM}  qualifier passReasons: ${r.passReasons.join(" | ")}${C_RESET}`
-      : "";
-  const verdict = ok
-    ? `${C_GREEN}PASS${C_RESET}`
-    : `${C_RED}FAIL${C_RESET}`;
-  return [head, recLine, numLine, reasonLine, riskLine, passReasonLine, `  -> ${verdict}`]
-    .filter((s) => s.length > 0)
-    .join("\n");
+interface RiskScores {
+  dataQualityScore: number;
+  roleStabilityScore: number;
+  gameScriptScore: number;
+  paceScore: number;
+  marketContextScore: number;
+  weatherEnvironmentScore: number;
+  injuryContextScore: number;
+  correlationExposureScore: number;
 }
 
-function main(): number {
-  const results: ScenarioResult[] = SYNTHETIC_SCENARIOS.map(runScenario);
+const GREEN: RiskScores = {
+  dataQualityScore: 0.8,
+  roleStabilityScore: 0.8,
+  gameScriptScore: 0.8,
+  paceScore: 0.8,
+  marketContextScore: 0.8,
+  weatherEnvironmentScore: 0.8,
+  injuryContextScore: 0.8,
+  correlationExposureScore: 0.8,
+};
 
-  results.forEach((r, i) => {
-    // eslint-disable-next-line no-console
-    console.log(formatScenarioLine(r, i + 1, results.length) + "\n");
-  });
+function risks(overrides: Partial<RiskScores> = {}): RiskScores {
+  return { ...GREEN, ...overrides };
+}
 
-  const passed = results.filter(
-    (r) => r.recommendationOk && r.reasonFragmentOk && r.riskFragmentOk,
-  ).length;
-  const failed = results.length - passed;
+const scenarios: Scenario[] = [
+  // 1. Qualified OVER — passing yards
+  {
+    scenarioName: "PY-OVER-strong",
+    playerName: "Patrick Mahomes",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 268,
+    projectedStdDev: 45,
+    ...risks(),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 2. Qualified OVER — passing attempts (juiced)
+  {
+    scenarioName: "PA-OVER-strong",
+    playerName: "Josh Allen",
+    propType: "PASSING_ATTEMPTS",
+    marketLine: 32.5,
+    overOdds: -115,
+    underOdds: -105,
+    projectedMean: 36,
+    projectedStdDev: 4.5,
+    ...risks({
+      dataQualityScore: 0.75,
+      roleStabilityScore: 0.75,
+      gameScriptScore: 0.75,
+      paceScore: 0.75,
+      marketContextScore: 0.75,
+      weatherEnvironmentScore: 0.75,
+      injuryContextScore: 0.75,
+      correlationExposureScore: 0.75,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 3. Qualified UNDER — passing completions
+  {
+    scenarioName: "PC-UNDER-strong",
+    playerName: "Joe Burrow",
+    propType: "PASSING_COMPLETIONS",
+    marketLine: 24.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 21,
+    projectedStdDev: 3,
+    ...risks({
+      dataQualityScore: 0.75,
+      roleStabilityScore: 0.75,
+      gameScriptScore: 0.75,
+      paceScore: 0.75,
+      marketContextScore: 0.75,
+      weatherEnvironmentScore: 0.75,
+      injuryContextScore: 0.75,
+      correlationExposureScore: 0.75,
+    }),
+    expected: { qualified: true, recommendation: "UNDER" },
+  },
+  // 4. Qualified OVER — receptions
+  {
+    scenarioName: "REC-OVER-strong",
+    playerName: "Stefon Diggs",
+    propType: "RECEPTIONS",
+    marketLine: 5.5,
+    overOdds: -120,
+    underOdds: 100,
+    projectedMean: 7.2,
+    projectedStdDev: 2.0,
+    ...risks({
+      dataQualityScore: 0.78,
+      roleStabilityScore: 0.78,
+      gameScriptScore: 0.78,
+      paceScore: 0.78,
+      marketContextScore: 0.78,
+      weatherEnvironmentScore: 0.78,
+      injuryContextScore: 0.78,
+      correlationExposureScore: 0.78,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 5. Qualified OVER — receiving yards
+  {
+    scenarioName: "RY-OVER-strong",
+    playerName: "Justin Jefferson",
+    propType: "RECEIVING_YARDS",
+    marketLine: 68.5,
+    overOdds: -115,
+    underOdds: -105,
+    projectedMean: 86,
+    projectedStdDev: 24,
+    ...risks({
+      dataQualityScore: 0.78,
+      roleStabilityScore: 0.78,
+      gameScriptScore: 0.78,
+      paceScore: 0.78,
+      marketContextScore: 0.78,
+      weatherEnvironmentScore: 0.78,
+      injuryContextScore: 0.78,
+      correlationExposureScore: 0.78,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 6. Qualified OVER — rushing attempts (workhorse)
+  {
+    scenarioName: "RA-OVER-workhorse",
+    playerName: "Derrick Henry",
+    propType: "RUSHING_ATTEMPTS",
+    marketLine: 17.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 22,
+    projectedStdDev: 3.5,
+    ...risks({
+      dataQualityScore: 0.82,
+      roleStabilityScore: 0.82,
+      gameScriptScore: 0.82,
+      paceScore: 0.82,
+      marketContextScore: 0.82,
+      weatherEnvironmentScore: 0.82,
+      injuryContextScore: 0.82,
+      correlationExposureScore: 0.82,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 7. Qualified UNDER — rushing yards vs tough D
+  {
+    scenarioName: "RY-rush-UNDER-tough-D",
+    playerName: "Christian McCaffrey",
+    propType: "RUSHING_YARDS",
+    marketLine: 75.5,
+    overOdds: 100,
+    underOdds: -120,
+    projectedMean: 58,
+    projectedStdDev: 22,
+    ...risks({
+      dataQualityScore: 0.78,
+      roleStabilityScore: 0.78,
+      gameScriptScore: 0.78,
+      paceScore: 0.78,
+      marketContextScore: 0.78,
+      weatherEnvironmentScore: 0.78,
+      injuryContextScore: 0.78,
+      correlationExposureScore: 0.78,
+    }),
+    expected: { qualified: true, recommendation: "UNDER" },
+  },
+  // 8. Qualified OVER — second passing yards play
+  {
+    scenarioName: "PY-OVER-clean",
+    playerName: "Justin Herbert",
+    propType: "PASSING_YARDS",
+    marketLine: 232.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 256,
+    projectedStdDev: 45,
+    ...risks({
+      dataQualityScore: 0.7,
+      roleStabilityScore: 0.7,
+      gameScriptScore: 0.7,
+      paceScore: 0.7,
+      marketContextScore: 0.7,
+      weatherEnvironmentScore: 0.7,
+      injuryContextScore: 0.7,
+      correlationExposureScore: 0.7,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 9. Qualified OVER — rushing yards
+  {
+    scenarioName: "RY-rush-OVER",
+    playerName: "Joe Mixon",
+    propType: "RUSHING_YARDS",
+    marketLine: 62.5,
+    overOdds: -105,
+    underOdds: -115,
+    projectedMean: 80,
+    projectedStdDev: 22,
+    ...risks({
+      dataQualityScore: 0.74,
+      roleStabilityScore: 0.74,
+      gameScriptScore: 0.74,
+      paceScore: 0.74,
+      marketContextScore: 0.74,
+      weatherEnvironmentScore: 0.74,
+      injuryContextScore: 0.74,
+      correlationExposureScore: 0.74,
+    }),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 10. Qualified UNDER — receptions in shadow coverage
+  {
+    scenarioName: "REC-UNDER-shadow",
+    playerName: "Cooper Kupp",
+    propType: "RECEPTIONS",
+    marketLine: 6.5,
+    overOdds: -115,
+    underOdds: -105,
+    projectedMean: 4.5,
+    projectedStdDev: 1.8,
+    ...risks({
+      dataQualityScore: 0.76,
+      roleStabilityScore: 0.76,
+      gameScriptScore: 0.76,
+      paceScore: 0.76,
+      marketContextScore: 0.76,
+      weatherEnvironmentScore: 0.76,
+      injuryContextScore: 0.76,
+      correlationExposureScore: 0.76,
+    }),
+    expected: { qualified: true, recommendation: "UNDER" },
+  },
+  // 11. PASS — edge below threshold (passing yards)
+  {
+    scenarioName: "PY-thin-edge",
+    playerName: "Jared Goff",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 252,
+    projectedStdDev: 50,
+    ...risks({
+      dataQualityScore: 0.78,
+      roleStabilityScore: 0.78,
+      gameScriptScore: 0.78,
+      paceScore: 0.78,
+      marketContextScore: 0.78,
+      weatherEnvironmentScore: 0.78,
+      injuryContextScore: 0.78,
+      correlationExposureScore: 0.78,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
+  // 12. PASS — edge below threshold (receiving yards)
+  {
+    scenarioName: "RY-thin-edge",
+    playerName: "Chris Olave",
+    propType: "RECEIVING_YARDS",
+    marketLine: 72.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 74,
+    projectedStdDev: 25,
+    ...risks({
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      injuryContextScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
+  // 13. PASS — edge below threshold (passing attempts)
+  {
+    scenarioName: "PA-thin-edge",
+    playerName: "Tua Tagovailoa",
+    propType: "PASSING_ATTEMPTS",
+    marketLine: 32.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 32.85,
+    projectedStdDev: 4,
+    ...risks({
+      dataQualityScore: 0.78,
+      roleStabilityScore: 0.78,
+      gameScriptScore: 0.78,
+      paceScore: 0.78,
+      marketContextScore: 0.78,
+      weatherEnvironmentScore: 0.78,
+      injuryContextScore: 0.78,
+      correlationExposureScore: 0.78,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
+  // 14. PASS — strong edge but role stability blocks (snap share unclear)
+  {
+    scenarioName: "RY-rush-role-instability",
+    playerName: "Jamaal Williams",
+    propType: "RUSHING_YARDS",
+    marketLine: 60.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 78,
+    projectedStdDev: 22,
+    ...risks({
+      roleStabilityScore: 0.35,
+      dataQualityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      injuryContextScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "role stability",
+    },
+  },
+  // 15. PASS — strong edge but injury context blocks (questionable tag)
+  {
+    scenarioName: "RY-injury-questionable",
+    playerName: "Garrett Wilson",
+    propType: "RECEIVING_YARDS",
+    marketLine: 65.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 82,
+    projectedStdDev: 24,
+    ...risks({
+      injuryContextScore: 0.3,
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "injury context",
+    },
+  },
+  // 16. PASS — strong edge but data quality blocks (rookie sample)
+  {
+    scenarioName: "PY-rookie-thin-data",
+    playerName: "Will Levis",
+    propType: "PASSING_YARDS",
+    marketLine: 240.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 268,
+    projectedStdDev: 48,
+    ...risks({
+      dataQualityScore: 0.4,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      injuryContextScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "data quality",
+    },
+  },
+  // 17. PASS — strong edge but correlation exposure blocks (already on QB)
+  {
+    scenarioName: "REC-correlated-stack",
+    playerName: "Brandon Aiyuk",
+    propType: "RECEPTIONS",
+    marketLine: 5.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 7.0,
+    projectedStdDev: 2.0,
+    ...risks({
+      correlationExposureScore: 0.3,
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      injuryContextScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "correlation exposure",
+    },
+  },
+  // 18. PASS — strong edge but weather blocks (heavy wind / rain)
+  {
+    scenarioName: "PY-weather-storm",
+    playerName: "Trevor Lawrence",
+    propType: "PASSING_YARDS",
+    marketLine: 245.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 268,
+    projectedStdDev: 50,
+    ...risks({
+      weatherEnvironmentScore: 0.25,
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      injuryContextScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "weather",
+    },
+  },
+  // 19. PASS — strong edge but multiple soft gates fail (gameScript, pace, market)
+  {
+    scenarioName: "RA-blowout-flip-risk",
+    playerName: "Tony Pollard",
+    propType: "RUSHING_ATTEMPTS",
+    marketLine: 14.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 18.5,
+    projectedStdDev: 4,
+    ...risks({
+      gameScriptScore: 0.25,
+      paceScore: 0.3,
+      marketContextScore: 0.3,
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      injuryContextScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "game script",
+    },
+  },
+  // 20. PASS — thin edge AND injury (edge gate is primary disqualifier)
+  {
+    scenarioName: "PC-thin-edge-and-injury",
+    playerName: "Geno Smith",
+    propType: "PASSING_COMPLETIONS",
+    marketLine: 23.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 23.7,
+    projectedStdDev: 3.2,
+    ...risks({
+      injuryContextScore: 0.3,
+      dataQualityScore: 0.72,
+      roleStabilityScore: 0.72,
+      gameScriptScore: 0.72,
+      paceScore: 0.72,
+      marketContextScore: 0.72,
+      weatherEnvironmentScore: 0.72,
+      correlationExposureScore: 0.72,
+    }),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
+  // 21. QUALIFY OVER — coaching context provided, BUF high continuity
+  // bumps threshold by 0 pp (penalty 18 < 20). Edge still clears.
+  {
+    scenarioName: "PY-OVER-coaching-continuity",
+    playerName: "Patrick Mahomes",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 268,
+    projectedStdDev: 45,
+    ...risks(),
+    coachingTransition: buildCoachingTransitionScorecard(
+      TEAM_COACHING_TRANSITIONS.BUF,
+      3,
+    ),
+    expected: { qualified: true, recommendation: "OVER" },
+  },
+  // 22. PASS — TEN coaching reset (penalty 65) bumps the edge threshold
+  // by 1.5 pp to 5.5%, dragging a thin ~4.9% edge under it.
+  {
+    scenarioName: "PY-coaching-uncertainty-flips-to-pass",
+    playerName: "Will Levis",
+    propType: "PASSING_YARDS",
+    marketLine: 248.5,
+    overOdds: -110,
+    underOdds: -110,
+    projectedMean: 254,
+    projectedStdDev: 45,
+    ...risks(),
+    coachingTransition: buildCoachingTransitionScorecard(
+      TEAM_COACHING_TRANSITIONS.TEN,
+      2,
+    ),
+    expected: {
+      qualified: false,
+      recommendation: "PASS",
+      primaryDisqualifierIncludes: "edge",
+    },
+  },
+];
 
-  // eslint-disable-next-line no-console
+function pad(value: string, width: number): string {
+  return value.length >= width ? value : value + " ".repeat(width - value.length);
+}
+
+const useColor = process.stdout.isTTY === true;
+const C_GREEN = useColor ? "\x1b[32m" : "";
+const C_RED = useColor ? "\x1b[31m" : "";
+const C_RESET = useColor ? "\x1b[0m" : "";
+
+let passCount = 0;
+const failures: string[] = [];
+
+for (let i = 0; i < scenarios.length; i++) {
+  const s = scenarios[i];
+  const input: ScorecardInput = {
+    scenarioName: s.scenarioName,
+    playerName: s.playerName,
+    propType: s.propType,
+    marketLine: s.marketLine,
+    overOdds: s.overOdds,
+    underOdds: s.underOdds,
+    projectedMean: s.projectedMean,
+    projectedStdDev: s.projectedStdDev,
+    dataQualityScore: s.dataQualityScore,
+    roleStabilityScore: s.roleStabilityScore,
+    gameScriptScore: s.gameScriptScore,
+    paceScore: s.paceScore,
+    marketContextScore: s.marketContextScore,
+    weatherEnvironmentScore: s.weatherEnvironmentScore,
+    injuryContextScore: s.injuryContextScore,
+    correlationExposureScore: s.correlationExposureScore,
+    coachingTransition: s.coachingTransition,
+  };
+
+  const sc = buildPropDecisionScorecard(input);
+  const primary = getPrimaryDisqualifier(sc);
+
+  const okQualified = sc.qualified === s.expected.qualified;
+  const okReco = sc.recommendation === s.expected.recommendation;
+  const okDisq =
+    !s.expected.primaryDisqualifierIncludes ||
+    (primary
+      ? primary
+          .toLowerCase()
+          .includes(s.expected.primaryDisqualifierIncludes.toLowerCase())
+      : false);
+  const ok = okQualified && okReco && okDisq;
+
+  const statusColor = ok ? C_GREEN : C_RED;
+  const status = `${statusColor}${ok ? "PASS" : "FAIL"}${C_RESET}`;
   console.log(
-    `\n${passed === results.length ? C_GREEN : C_RED}Summary: ${passed}/${results.length} scenarios passed${C_RESET}` +
-      (failed > 0 ? `  (${failed} failed)` : ""),
+    `\n[${status}] #${pad(String(i + 1), 2)} ${s.scenarioName} (${s.propType}, ${s.playerName})`,
   );
+  console.log(`        recommendation: ${sc.recommendation}`);
+  console.log(`        qualified:      ${sc.qualified}`);
+  console.log(`        primary disq:   ${primary ?? "(none)"}`);
+  console.log(`        explanation:    ${sc.finalExplanation}`);
 
-  return failed === 0 ? 0 : 1;
+  if (ok) {
+    passCount++;
+  } else {
+    failures.push(
+      `#${i + 1} ${s.scenarioName}: expected qualified=${s.expected.qualified} reco=${s.expected.recommendation}` +
+        (s.expected.primaryDisqualifierIncludes
+          ? ` primary~="${s.expected.primaryDisqualifierIncludes}"`
+          : "") +
+        `, got qualified=${sc.qualified} reco=${sc.recommendation} primary="${primary ?? ""}"`,
+    );
+  }
 }
 
-process.exit(main());
+const summaryColor =
+  passCount === scenarios.length ? C_GREEN : C_RED;
+console.log(
+  `\n${summaryColor}${passCount}/${scenarios.length} scenarios passed.${C_RESET}`,
+);
+if (failures.length > 0) {
+  console.log("\nFailures:");
+  for (const f of failures) {
+    console.log(`  - ${f}`);
+  }
+  process.exit(1);
+}
+process.exit(0);
