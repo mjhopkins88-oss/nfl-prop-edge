@@ -12,6 +12,7 @@ import {
   loadWeek1V1V2Comparison,
   loadWeek1GameEdgePreview,
 } from "@/lib/backtest/week-1-summary";
+import { getWeek1StarterTestContext } from "@/lib/app-context";
 
 export default function MonitorPage() {
   const fixture = loadFixtureBacktestSummary();
@@ -85,6 +86,7 @@ function computeReadiness(args: {
 }
 
 function Hero({ readiness }: { readiness: Readiness }) {
+  const starter = getWeek1StarterTestContext();
   return (
     <section>
       <div className="flex flex-wrap items-center gap-2">
@@ -99,6 +101,15 @@ function Hero({ readiness }: { readiness: Readiness }) {
         >
           <span className="h-1.5 w-1.5 rounded-full bg-current" />
           {readiness.status.replace(/_/g, " ")}
+        </span>
+        <span
+          className="inline-flex items-center gap-2 rounded-full bg-sea-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sea-800 ring-1 ring-sea-200/80"
+          data-testid="monitor-active-test"
+        >
+          Active test · {starter.label}
+        </span>
+        <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+          Leakage guard · pregame outcomes stripped
         </span>
       </div>
       <h1 className="mt-3 text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">

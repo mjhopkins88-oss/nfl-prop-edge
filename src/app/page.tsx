@@ -11,6 +11,7 @@ import {
   TrendDownIcon,
   TrendUpIcon,
 } from "@/components/icons";
+import { getDemoAppContext } from "@/lib/app-context";
 import {
   getOpportunities,
   selectedEdge,
@@ -180,12 +181,44 @@ export default async function DashboardPage({
     return best;
   })();
 
+  const demoContext = getDemoAppContext();
   return (
     <div className="space-y-8">
+      <section
+        aria-label="Demo / Week 1 test pointer"
+        className="rounded-2xl bg-amber-50/80 p-4 ring-1 ring-amber-200/70 backdrop-blur"
+        data-testid="homepage-demo-banner"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900">
+              Demo data — Week {demoContext.week} mock slate
+            </div>
+            <p className="mt-0.5 max-w-2xl text-xs text-amber-900">
+              The cards below render from{" "}
+              <code className="rounded bg-white/70 px-1 py-0.5 font-mono text-[10px]">
+                src/lib/mock-data.ts
+              </code>{" "}
+              — a legacy Week-{demoContext.week} demo set. The 2025 focus is
+              the Week 1 historical starter test.
+            </p>
+          </div>
+          <Link
+            href="/backtest/week-1"
+            className="inline-flex items-center gap-2 rounded-full bg-sea-600 px-3.5 py-1.5 text-xs font-semibold text-cream-50 transition hover:bg-sea-700"
+          >
+            Open Week 1 Starter Test →
+          </Link>
+        </div>
+      </section>
+
       <section className="relative overflow-hidden">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700 ring-1 ring-amber-200/60 backdrop-blur">
+        <div
+          className="inline-flex items-center gap-2 rounded-full bg-amber-100/80 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/70 backdrop-blur"
+          data-testid="homepage-mode-chip"
+        >
           <SparkleIcon className="h-3 w-3" />
-          Week 11 · 2025 · Lower-variance markets
+          {demoContext.label} · Lower-variance markets
         </div>
         <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">
           Find the cleanest edges in the
