@@ -616,6 +616,100 @@ populate `DefensiveFunnelProfile` / `CoverageProfile` /
 `MatchupAdjustmentOutput` into the scorecard. The framework's
 architecture doesn't change — only the data source.
 
+## Proxy Football Features
+
+The proxy layer sits one rung upstream of the matchup intelligence
+framework. Twelve confidence-scored proxies translate available
+stat rows into educated classifications (slot vs deep vs possession
+WR, receiving RB / TE, pass-funnel / run-funnel / pressure-heavy /
+deep-suppressing defenses, quick-game offenses, stable target
+shares, stable rush volume).
+
+### What the proxies are — and what they aren't
+
+- **Approximations from available data.** They use targets, target
+  share, air yards, catch rate, snap share, carries, team pass/rush
+  attempts, sacks taken / generated, and (when present) EPA-allowed
+  splits.
+- **Not true route / alignment / coverage / pressure data.** Every
+  explanation is prefixed `Proxy-based:` precisely so this stays
+  visible at every layer.
+- **Confidence-scored.** Sample-size and signal-agreement
+  multipliers combine to a final `confidence ∈ [0, 0.95]` — the
+  framework never claims certainty.
+- **Capped.** `value ∈ [0, 1]`. Indirect / fallback paths add
+  explicit per-proxy caps (`PASS_FUNNEL_SCRIPT_FALLBACK`,
+  `DEEP_SUPPRESSION_FALLBACK`, `QUICK_GAME_INDIRECT`,
+  `PRESSURE_ONE_SIDED`).
+
+### Calibration constants
+
+All thresholds, sample-size floors, and league baselines live in
+`src/lib/model/proxy-football-calibration.ts`:
+
+```
+LEAGUE_AVG_PASS_RATE_FACED       0.59
+LEAGUE_AVG_RUSH_RATE_FACED       0.41
+LEAGUE_AVG_SACK_RATE             0.065
+LOW_ADOT_THRESHOLD               8
+DEEP_ADOT_THRESHOLD              13
+MEANINGFUL_TARGET_SHARE          0.12
+HIGH_TARGET_SHARE                0.22
+MEANINGFUL_AIR_YARDS_SHARE       0.20
+HIGH_CATCH_RATE                  0.70
+LOW_CATCH_RATE                   0.55
+MIN_GAMES_FOR_MEDIUM_CONFIDENCE  3
+MIN_TARGETS_FOR_MEDIUM_CONFIDENCE 18
+MIN_DEFENSIVE_PLAYS_FOR_MEDIUM_CONFIDENCE 150
+MIN_WEEKS_FOR_STABILITY          3
+PROXY_CONFIDENCE_MAX             0.95
+```
+
+Plus helpers: `confidenceFromSampleSize`,
+`confidenceFromPlayerVolume`, `confidenceFromDefenseVolume`,
+`confidenceFromSignalAgreement`, `capProxyAdjustment`,
+`detectConflictingProxySignals`, `buildProxyAccuracyWarning`.
+
+### False-positive protections
+
+The calibrated framework explicitly defends against these common
+bad inferences:
+
+- A low-aDOT WR with 4% target share **does not** become a
+  `SLOT_VOLUME_LIKELY` tag — multi-signal anchor (low aDOT *and*
+  meaningful TS) caps the value below the "likely" band.
+- A high-aDOT WR with only 3 targets in 1 game **does not** earn
+  `DEEP_THREAT_LIKELY` — sample-size confidence drops below 0.5.
+- A defense facing pass-heavy schedules without EPA support
+  **does not** earn `PASS_FUNNEL_LIKELY` — the
+  `PASS_FUNNEL_SCRIPT_FALLBACK` tag flags the script-driven case
+  and confidence is capped at 0.5.
+- A 1-game high-sack sample **does not** earn `PRESSURE_RISK_HIGH`
+  — sample-size confidence drops below 0.5.
+- A stable 2% target share **does not** earn `STABLE_TARGET_SHARE`
+  — the meaningfulness multiplier pushes the value below 0.4 and
+  the `TINY_SHARE_NOT_MEANINGFUL` tag fires.
+
+### Backtesting decides what stays
+
+The proxies do **not** feed the scorecard's qualification math.
+Backtesting will tell us which proxies correlate with WIN
+outcomes when they fire with high confidence. Those stay. Ones
+that don't earn their keep get recalibrated or removed. The point
+is to build a **disciplined library** of educated approximations,
+not to add unverified knobs to the recommendation engine.
+
+### Premium data could replace proxies later
+
+Each proxy's input slice (`PlayerProxyInput`, `OffenseProxyInput`,
+`DefenseProxyInput`) is the contract. Real route-charting,
+participation, alignment, and tracking data would slot in to
+those same shapes when (and only when) the team is ready to spend
+on premium sources. The model layer wouldn't need to change.
+
+See `PROXY_FEATURE_NOTES.md` for per-proxy known failure modes,
+anchors, and calibration details.
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

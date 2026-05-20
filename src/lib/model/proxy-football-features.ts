@@ -2,21 +2,43 @@
  * Proxy football features.
  *
  * Derived, confidence-scored classifications of player role, defense
- * tendency, and offense behavior. The proxies are upstream of the
- * matchup intelligence layer — they help classify a player as
- * "slot-volume WR" vs "outside deep WR", a defense as "pass funnel"
- * vs "balanced", and so on. They do NOT feed directly into the
- * scorecard's recommendation math; they feed the matchup framework
- * (which is itself non-forcing) and surface explanations + risks for
- * the UI.
+ * tendency, and offense behavior. These are educated estimates from
+ * AVAILABLE stat rows; they are NOT claims of true alignment, route
+ * tree, coverage shell, or pressure rate.
  *
- * Every proxy:
- *   - returns a 0..1 confidence
- *   - prefixes its explanation with `Proxy-based:`
- *   - sets a risk note when confidence is low or signals conflict
- *   - caps its value so a single proxy cannot drive a decision
+ * Calibrated against `proxy-football-calibration.ts`. Every proxy:
+ *   - is anchored on multiple agreeing signals (single-signal hits get
+ *     low confidence)
+ *   - returns `value ∈ [0, 1]` and `confidence ∈ [0, 0.95]`
+ *   - prefixes explanation with `Proxy-based:`
+ *   - sets `risk` when confidence is low / sample is thin / fallback
+ *     data was used / signals disagree
+ *   - exposes no recommendation or forcing surface
  */
 
+import {
+  DEEP_ADOT_THRESHOLD,
+  HIGH_CATCH_RATE,
+  HIGH_TARGET_SHARE,
+  LEAGUE_AVG_PASS_RATE_FACED,
+  LEAGUE_AVG_RUSH_RATE_FACED,
+  LEAGUE_AVG_SACK_RATE,
+  LOW_ADOT_THRESHOLD,
+  LOW_CATCH_RATE,
+  MEANINGFUL_AIR_YARDS_SHARE,
+  MEANINGFUL_TARGET_SHARE,
+  MIN_DEFENSIVE_PLAYS_FOR_MEDIUM_CONFIDENCE,
+  MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+  MIN_TARGETS_FOR_MEDIUM_CONFIDENCE,
+  MIN_WEEKS_FOR_STABILITY,
+  PROXY_CONFIDENCE_MAX,
+  buildProxyAccuracyWarning,
+  clamp,
+  confidenceFromDefenseVolume,
+  confidenceFromPlayerVolume,
+  confidenceFromSampleSize,
+  confidenceFromSignalAgreement,
+} from "./proxy-football-calibration";
 import type {
   AllFootballProxies,
   DefenseProxies,
@@ -39,11 +61,7 @@ export type {
   ProxyResult,
 } from "./proxy-football-feature-types";
 
-// --- shared helpers --------------------------------------------------
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(Math.max(v, lo), hi);
-}
+// --- internal helpers ------------------------------------------------
 
 function divSafe(num: number, denom: number, fallback = 0): number {
   if (!Number.isFinite(num) || !Number.isFinite(denom) || denom === 0)
@@ -63,52 +81,48 @@ function stddevArr(xs: number[]): number {
   return Math.sqrt(v);
 }
 
-/**
- * Sample-size confidence. Inputs:
- *   - games observed in the window
- *   - count of the underlying observations (targets, carries, etc.)
- *
- * Returns 0..1. Capped so even rich data won't push confidence above
- * 0.95 — proxies are still approximations.
- */
-function sampleConfidence(games: number, observations: number): number {
-  const gameComponent = clamp(games / 6, 0, 1);
-  const obsComponent = clamp(observations / 60, 0, 1);
-  return clamp(0.5 * gameComponent + 0.5 * obsComponent, 0, 0.95);
-}
-
-function positionConfidenceMultiplier(
-  actual: PlayerProxyInput["position"],
-  expected: PlayerProxyInput["position"],
-): number {
-  return actual === expected ? 1 : 0;
-}
-
-// --- player-role proxies --------------------------------------------
-
 const RECEIVING_POSITIONS = new Set(["WR", "TE", "RB"]);
+
+function notApplicable(reason: string): ProxyResult {
+  return {
+    value: 0,
+    confidence: 0,
+    explanation: `Proxy-based: ${reason}`,
+    risk: reason,
+    tags: ["NOT_APPLICABLE"],
+  };
+}
+
+function noSample(reason: string): ProxyResult {
+  return {
+    value: 0,
+    confidence: 0.05,
+    explanation: `Proxy-based: ${reason}`,
+    risk: `${reason} — proxy unreliable`,
+    tags: ["NO_SAMPLE"],
+  };
+}
 
 function ensureReceiverContext(player: PlayerProxyInput): ProxyResult | null {
   if (!RECEIVING_POSITIONS.has(player.position)) {
-    return {
-      value: 0,
-      confidence: 0,
-      explanation: `Proxy-based: position ${player.position} not a receiving role; proxy not applicable`,
-      risk: "Proxy not applicable to this position",
-      tags: ["NOT_APPLICABLE"],
-    };
+    return notApplicable(
+      `position ${player.position} not a receiving role; proxy not applicable`,
+    );
   }
   if (player.games === 0 || player.targets === 0) {
-    return {
-      value: 0,
-      confidence: 0.05,
-      explanation: "Proxy-based: no receiving usage in window; proxy not estimable",
-      risk: "No targets in sample — proxy unreliable",
-      tags: ["NO_SAMPLE"],
-    };
+    return noSample("no receiving usage in window");
   }
   return null;
 }
+
+function finalConfidence(
+  sampleConfidence: number,
+  agreementConfidence: number,
+): number {
+  return clamp(sampleConfidence * agreementConfidence, 0, PROXY_CONFIDENCE_MAX);
+}
+
+// --- player-role proxies --------------------------------------------
 
 export function calculateSlotRoleProxy(player: PlayerProxyInput): ProxyResult {
   const bail = ensureReceiverContext(player);
@@ -116,25 +130,58 @@ export function calculateSlotRoleProxy(player: PlayerProxyInput): ProxyResult {
   const aDOT = divSafe(player.airYards, player.targets);
   const targetShare = divSafe(player.targets, player.teamTargets);
   const catchRate = divSafe(player.receptions, player.targets);
+  const snapShare = player.snapShare;
 
-  const lowADOT = clamp((9 - aDOT) / 4, 0, 1);
-  const volume = clamp(targetShare / 0.18, 0, 1);
-  const catchAccuracy = clamp((catchRate - 0.5) / 0.3, 0, 1);
+  // Continuous component scores (each in [0, 1]).
+  const aDotScore = clamp((LOW_ADOT_THRESHOLD - aDOT) / 3.5, 0, 1);
+  const targetShareScore = clamp(targetShare / MEANINGFUL_TARGET_SHARE, 0, 1);
+  const catchRateScore = clamp((catchRate - LOW_CATCH_RATE) / 0.2, 0, 1);
+  const snapScore = clamp(snapShare / 0.55, 0, 1);
 
-  let value = 0.5 * lowADOT + 0.3 * volume + 0.2 * catchAccuracy;
-  if (player.position === "TE" || player.position === "RB") {
-    // Slot-WR signal applies less strongly to TE / RB roles.
-    value *= 0.4;
-  }
+  // Continuous value uses all four with weights.
+  let value =
+    0.35 * aDotScore + 0.25 * targetShareScore + 0.25 * catchRateScore +
+    0.15 * snapScore;
+
+  // Multi-signal anchor: both low aDOT AND meaningful TS must hold for
+  // the value to enter the "likely" band. Without those anchors the
+  // signal is at best ambiguous.
+  const anchorsMet =
+    aDOT < LOW_ADOT_THRESHOLD && targetShare >= MEANINGFUL_TARGET_SHARE;
+  if (!anchorsMet) value = Math.min(value, 0.55);
+  // Position dampening: slot-volume WR concept doesn't apply to TE/RB.
+  if (player.position === "TE" || player.position === "RB") value *= 0.5;
   value = clamp(value, 0, 1);
-  const confidence = sampleConfidence(player.games, player.targets);
+
+  // Signal-agreement confidence (4 binary signals).
+  const signalsTrue = [
+    aDOT < LOW_ADOT_THRESHOLD,
+    targetShare >= MEANINGFUL_TARGET_SHARE,
+    catchRate >= HIGH_CATCH_RATE,
+    snapShare >= 0.55,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 4);
+  const sampleConf = confidenceFromPlayerVolume(player);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.6 && player.position === "WR") tags.push("SLOT_VOLUME_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5 && player.position === "WR") {
+    tags.push("SLOT_VOLUME_LIKELY");
+  }
+  const smallSample =
+    player.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    player.targets < MIN_TARGETS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    conflicting: !anchorsMet && (aDotScore > 0.5 || targetShareScore > 0.5),
+    context: "slot role proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, target share ${(targetShare * 100).toFixed(0)}%, catch rate ${(catchRate * 100).toFixed(0)}% — ${value >= 0.6 ? "slot / short-area role likely" : "slot signal moderate"}`,
-    risk: confidence < 0.4 ? "Low sample size — slot role proxy unreliable" : undefined,
+    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, target share ${(targetShare * 100).toFixed(0)}%, catch rate ${(catchRate * 100).toFixed(0)}%, snap share ${(snapShare * 100).toFixed(0)}% — ${value >= 0.65 ? "slot / short-area role likely" : "slot signal moderate"}`,
+    risk,
     tags,
   };
 }
@@ -144,20 +191,47 @@ export function calculateDeepReceiverProxy(player: PlayerProxyInput): ProxyResul
   if (bail) return bail;
   const aDOT = divSafe(player.airYards, player.targets);
   const airYardsShare = divSafe(player.airYards, player.teamAirYards);
+  const targetShare = divSafe(player.targets, player.teamTargets);
 
-  const adotScore = clamp((aDOT - 10) / 5, 0, 1);
-  const airShareScore = clamp(airYardsShare / 0.25, 0, 1);
-  let value = 0.7 * adotScore + 0.3 * airShareScore;
-  if (player.position !== "WR") value *= 0.5;
+  const aDotScore = clamp((aDOT - DEEP_ADOT_THRESHOLD) / 4, 0, 1);
+  const airShareScore = clamp(airYardsShare / MEANINGFUL_AIR_YARDS_SHARE, 0, 1);
+  const volumeScore = clamp(targetShare / 0.16, 0, 1);
+
+  // Anchors: deep aDOT AND meaningful air-yards share.
+  const anchorsMet =
+    aDOT >= DEEP_ADOT_THRESHOLD &&
+    airYardsShare >= MEANINGFUL_AIR_YARDS_SHARE;
+  let value = 0.55 * aDotScore + 0.3 * airShareScore + 0.15 * volumeScore;
+  if (!anchorsMet) value = Math.min(value, 0.55);
+  if (player.position !== "WR") value *= 0.55;
   value = clamp(value, 0, 1);
-  const confidence = sampleConfidence(player.games, player.targets);
+
+  const signalsTrue = [
+    aDOT >= DEEP_ADOT_THRESHOLD,
+    airYardsShare >= MEANINGFUL_AIR_YARDS_SHARE,
+    targetShare >= 0.16,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 3);
+  const sampleConf = confidenceFromPlayerVolume(player);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.6 && player.position === "WR") tags.push("DEEP_THREAT_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5 && player.position === "WR") {
+    tags.push("DEEP_THREAT_LIKELY");
+  }
+  const smallSample =
+    player.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    player.targets < MIN_TARGETS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    context: "deep receiver proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, air-yards share ${(airYardsShare * 100).toFixed(0)}% — ${value >= 0.6 ? "deep-threat role likely" : "deep signal moderate"}`,
-    risk: confidence < 0.4 ? "Low sample size — deep receiver proxy unreliable" : undefined,
+    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, air-yards share ${(airYardsShare * 100).toFixed(0)}%, target share ${(targetShare * 100).toFixed(0)}% — ${value >= 0.65 ? "deep-threat role likely" : "deep signal moderate"}`,
+    risk,
     tags,
   };
 }
@@ -171,52 +245,117 @@ export function calculatePossessionReceiverProxy(
   const targetShare = divSafe(player.targets, player.teamTargets);
   const catchRate = divSafe(player.receptions, player.targets);
 
-  // Possession sweet spot: aDOT 8–12 + high target share + high catch rate.
   const adotSweetSpot = clamp(1 - Math.abs(aDOT - 10) / 4, 0, 1);
-  const volume = clamp((targetShare - 0.18) / 0.1, 0, 1);
-  const accuracy = clamp((catchRate - 0.66) / 0.14, 0, 1);
-  let value = 0.4 * adotSweetSpot + 0.3 * volume + 0.3 * accuracy;
-  if (player.position !== "WR" && player.position !== "TE") value *= 0.6;
+  const targetShareScore = clamp(
+    (targetShare - MEANINGFUL_TARGET_SHARE) /
+      (HIGH_TARGET_SHARE - MEANINGFUL_TARGET_SHARE),
+    0,
+    1,
+  );
+  const catchRateScore = clamp((catchRate - HIGH_CATCH_RATE + 0.05) / 0.15, 0, 1);
+
+  // Stability factor (mild — only when weekly target shares provided).
+  let stabilityFactor = 1;
+  let stabilityNote: string | undefined;
+  if (player.weekTargetShares && player.weekTargetShares.length >= 2) {
+    const sd = stddevArr(player.weekTargetShares);
+    const mean = meanArr(player.weekTargetShares);
+    const cv = mean > 0 ? sd / mean : 1;
+    stabilityFactor = clamp(1 - cv / 0.4, 0.6, 1);
+    if (cv > 0.4) stabilityNote = "target share unstable week-to-week";
+  }
+
+  // Anchors: catch rate high AND target share meaningful.
+  const anchorsMet =
+    catchRate >= HIGH_CATCH_RATE && targetShare >= MEANINGFUL_TARGET_SHARE;
+  let value =
+    (0.35 * adotSweetSpot + 0.3 * targetShareScore + 0.35 * catchRateScore) *
+    stabilityFactor;
+  if (!anchorsMet) value = Math.min(value, 0.55);
+  if (player.position !== "WR" && player.position !== "TE") value *= 0.5;
   value = clamp(value, 0, 1);
-  const confidence = sampleConfidence(player.games, player.targets);
+
+  const signalsTrue = [
+    aDOT >= MID_ADOT_LOW && aDOT <= MID_ADOT_HIGH,
+    targetShare >= MEANINGFUL_TARGET_SHARE,
+    catchRate >= HIGH_CATCH_RATE,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 3);
+  const sampleConf = confidenceFromPlayerVolume(player);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("POSSESSION_RECEIVER_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5) {
+    tags.push("POSSESSION_RECEIVER_LIKELY");
+  }
+  const smallSample =
+    player.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    player.targets < MIN_TARGETS_FOR_MEDIUM_CONFIDENCE;
+  const risk =
+    buildProxyAccuracyWarning({
+      confidence,
+      smallSample,
+      context: "possession receiver proxy",
+    }) ?? stabilityNote;
   return {
     value,
     confidence,
-    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, target share ${(targetShare * 100).toFixed(0)}%, catch rate ${(catchRate * 100).toFixed(0)}% — ${value >= 0.6 ? "possession-receiver role likely" : "possession signal moderate"}`,
-    risk: confidence < 0.4 ? "Low sample size — possession receiver proxy unreliable" : undefined,
+    explanation: `Proxy-based: aDOT ${aDOT.toFixed(1)}, target share ${(targetShare * 100).toFixed(0)}%, catch rate ${(catchRate * 100).toFixed(0)}% — ${value >= 0.65 ? "possession-receiver role likely" : "possession signal moderate"}`,
+    risk,
     tags,
   };
 }
 
+const MID_ADOT_LOW = 8;
+const MID_ADOT_HIGH = 12;
+
 export function calculateRbReceivingRoleProxy(
   player: PlayerProxyInput,
 ): ProxyResult {
-  const positionMul = positionConfidenceMultiplier(player.position, "RB");
-  if (positionMul === 0) {
-    return {
-      value: 0,
-      confidence: 0,
-      explanation: `Proxy-based: position ${player.position} — RB receiving proxy not applicable`,
-      risk: "Position is not RB",
-      tags: ["NOT_APPLICABLE"],
-    };
+  if (player.position !== "RB") {
+    return notApplicable(`position ${player.position} — RB receiving proxy not applicable`);
+  }
+  if (player.games === 0) {
+    return noSample("no games in window");
   }
   const recPerGame = divSafe(player.receptions, player.games);
   const targetShare = divSafe(player.targets, player.teamTargets);
+  const catchRate = divSafe(player.receptions, player.targets);
+
   const recScore = clamp((recPerGame - 1.5) / 3, 0, 1);
   const tsScore = clamp(targetShare / 0.12, 0, 1);
-  const value = clamp(0.6 * recScore + 0.4 * tsScore, 0, 1);
-  const confidence =
-    sampleConfidence(player.games, player.targets) * positionMul;
+  const catchScore = clamp((catchRate - LOW_CATCH_RATE) / 0.25, 0, 1);
+
+  // Anchors: meaningful rec/game AND meaningful TS.
+  const anchorsMet = recPerGame >= 2 && targetShare >= 0.08;
+  let value = 0.5 * recScore + 0.3 * tsScore + 0.2 * catchScore;
+  if (!anchorsMet) value = Math.min(value, 0.5);
+  value = clamp(value, 0, 1);
+
+  const signalsTrue = [
+    recPerGame >= 3,
+    targetShare >= 0.1,
+    catchRate >= 0.65,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 3);
+  const sampleConf = confidenceFromPlayerVolume(player);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("RECEIVING_RB_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("RECEIVING_RB_LIKELY");
+  const smallSample =
+    player.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    player.targets < MIN_TARGETS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    context: "receiving-RB proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: ${recPerGame.toFixed(1)} rec/game and ${(targetShare * 100).toFixed(0)}% team target share — ${value >= 0.6 ? "receiving-back role likely" : "receiving usage moderate"}`,
-    risk: confidence < 0.4 ? "Low sample size — receiving-RB proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${recPerGame.toFixed(1)} rec/game, ${(targetShare * 100).toFixed(0)}% target share, ${(catchRate * 100).toFixed(0)}% catch rate — ${value >= 0.65 ? "receiving-back role likely" : "receiving usage moderate"}`,
+    risk,
     tags,
   };
 }
@@ -224,32 +363,51 @@ export function calculateRbReceivingRoleProxy(
 export function calculateTeReceivingRoleProxy(
   player: PlayerProxyInput,
 ): ProxyResult {
-  const positionMul = positionConfidenceMultiplier(player.position, "TE");
-  if (positionMul === 0) {
-    return {
-      value: 0,
-      confidence: 0,
-      explanation: `Proxy-based: position ${player.position} — TE receiving proxy not applicable`,
-      risk: "Position is not TE",
-      tags: ["NOT_APPLICABLE"],
-    };
+  if (player.position !== "TE") {
+    return notApplicable(`position ${player.position} — TE receiving proxy not applicable`);
+  }
+  if (player.games === 0) {
+    return noSample("no games in window");
   }
   const recPerGame = divSafe(player.receptions, player.games);
   const targetShare = divSafe(player.targets, player.teamTargets);
   const snapShare = player.snapShare;
+
   const recScore = clamp((recPerGame - 2) / 4, 0, 1);
   const tsScore = clamp((targetShare - 0.1) / 0.12, 0, 1);
   const snapScore = clamp(snapShare / 0.65, 0, 1);
-  const value = clamp(0.5 * recScore + 0.3 * tsScore + 0.2 * snapScore, 0, 1);
-  const confidence =
-    sampleConfidence(player.games, player.targets) * positionMul;
+
+  // Anchors: meaningful TS OR meaningful rec/game (TEs can dominate
+  // either via volume or efficient red-zone usage).
+  const anchorsMet = targetShare >= 0.12 || recPerGame >= 3.5;
+  let value = 0.45 * recScore + 0.35 * tsScore + 0.2 * snapScore;
+  if (!anchorsMet) value = Math.min(value, 0.5);
+  // Thin target volume drives confidence down hard.
+  const thinTargets = player.targets < MIN_TARGETS_FOR_MEDIUM_CONFIDENCE;
+  if (thinTargets) value = Math.min(value, 0.65);
+  value = clamp(value, 0, 1);
+
+  const signalsTrue = [
+    recPerGame >= 3,
+    targetShare >= MEANINGFUL_TARGET_SHARE,
+    snapShare >= 0.65,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 3);
+  const sampleConf = confidenceFromPlayerVolume(player);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("RECEIVING_TE_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("RECEIVING_TE_LIKELY");
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample: thinTargets,
+    context: "receiving-TE proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: ${recPerGame.toFixed(1)} rec/game, ${(targetShare * 100).toFixed(0)}% target share, ${(snapShare * 100).toFixed(0)}% snap share — ${value >= 0.6 ? "receiving-TE role likely" : "receiving-TE signal moderate"}`,
-    risk: confidence < 0.4 ? "Low sample size — receiving-TE proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${recPerGame.toFixed(1)} rec/game, ${(targetShare * 100).toFixed(0)}% target share, ${(snapShare * 100).toFixed(0)}% snap share — ${value >= 0.65 ? "receiving-TE role likely" : "receiving-TE signal moderate"}`,
+    risk,
     tags,
   };
 }
@@ -258,65 +416,113 @@ export function calculateTargetShareStabilityProxy(
   player: PlayerProxyInput,
 ): ProxyResult {
   const weeks = player.weekTargetShares ?? [];
-  if (weeks.length < 2) {
+  if (weeks.length < MIN_WEEKS_FOR_STABILITY) {
     return {
       value: 0.5,
       confidence: 0.2,
-      explanation: "Proxy-based: not enough per-week target shares to evaluate stability",
-      risk: "Need ≥ 2 weeks of target shares for stability proxy",
+      explanation: `Proxy-based: only ${weeks.length} weeks of target share data — stability not estimable`,
+      risk: `Need ≥ ${MIN_WEEKS_FOR_STABILITY} weeks of target shares for stability proxy`,
       tags: ["NEEDS_MORE_WEEKS"],
     };
   }
   const m = meanArr(weeks);
   const sd = stddevArr(weeks);
   const cv = m > 0 ? sd / m : 1;
-  const value = clamp(1 - cv / 0.3, 0, 1);
-  const confidence = clamp(weeks.length / 5, 0.2, 0.9);
+  const stability = clamp(1 - cv / 0.3, 0, 1);
+  // Meaningfulness factor: a stable but tiny share is not valuable.
+  const meaningfulness = clamp(m / MEANINGFUL_TARGET_SHARE, 0, 1);
+  const value = clamp(stability * meaningfulness, 0, 1);
+
+  const sampleConf = clamp(weeks.length / 6, 0.2, PROXY_CONFIDENCE_MAX);
+  const agreementSignals = [
+    stability >= 0.6,
+    meaningfulness >= 0.7,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(agreementSignals, 2);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.75) tags.push("STABLE_TARGET_SHARE");
-  if (value <= 0.4) tags.push("VOLATILE_TARGET_SHARE");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("STABLE_TARGET_SHARE");
+  if (stability <= 0.4) tags.push("VOLATILE_TARGET_SHARE");
+  if (m < MEANINGFUL_TARGET_SHARE * 0.5) tags.push("TINY_SHARE_NOT_MEANINGFUL");
+
+  const smallSample = weeks.length < MIN_WEEKS_FOR_STABILITY + 1;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    context: "target-share stability proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: ${weeks.length} weeks · mean target share ${(m * 100).toFixed(0)}% · CV ${(cv * 100).toFixed(0)}% — ${value >= 0.75 ? "target share stable" : value <= 0.4 ? "target share volatile" : "target share moderately stable"}`,
-    risk: confidence < 0.4 ? "Few weeks observed — stability proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${weeks.length} weeks, mean share ${(m * 100).toFixed(0)}%, CV ${(cv * 100).toFixed(0)}% — ${value >= 0.65 ? "stable meaningful target share" : "stability signal moderate"}`,
+    risk,
     tags,
   };
 }
 
 // --- defense proxies ------------------------------------------------
 
-function defenseSampleConfidence(d: DefenseProxyInput): number {
-  // Defenses need more games than a single player needs targets — a
-  // 1-game pass-rate snapshot is dominated by game-script noise.
-  const total = d.passAttemptsFaced + d.rushAttemptsFaced;
-  const gameComponent = clamp(d.games / 6, 0, 1);
-  const obsComponent = clamp(total / 220, 0, 1);
-  return clamp(0.55 * gameComponent + 0.45 * obsComponent, 0, 0.95);
-}
-
 export function calculatePassFunnelProxy(d: DefenseProxyInput): ProxyResult {
   const total = d.passAttemptsFaced + d.rushAttemptsFaced;
   if (total === 0 || d.games === 0) {
-    return {
-      value: 0.5,
-      confidence: 0,
-      explanation: "Proxy-based: no attempts faced — pass funnel not estimable",
-      risk: "Empty defense sample",
-      tags: ["NO_SAMPLE"],
-    };
+    return noSample("no defensive plays in window");
   }
   const passRate = d.passAttemptsFaced / total;
-  // League pass rate ≈ 0.59; positive value = pass-funnel.
-  const value = clamp((passRate - 0.59) * 4 + 0.5, 0, 1);
-  const confidence = defenseSampleConfidence(d);
+  const passRateExcess = clamp(
+    (passRate - LEAGUE_AVG_PASS_RATE_FACED) * 5 + 0.4,
+    0,
+    1,
+  );
+
+  // EPA support: positive pass EPA allowed means defense IS actually
+  // vulnerable to passing, not just facing pass-heavy scripts.
+  let epaSupport: number | null = null;
+  if (d.epaPerDropbackAllowed !== undefined) {
+    epaSupport = clamp(0.5 + d.epaPerDropbackAllowed / 0.12, 0, 1);
+  }
+
+  const haveEpa = epaSupport !== null;
+  let value = haveEpa
+    ? 0.6 * passRateExcess + 0.4 * (epaSupport as number)
+    : passRateExcess;
+  // Without EPA, treat as script-driven and cap below "likely" band.
+  if (!haveEpa) value = Math.min(value, 0.58);
+  value = clamp(value, 0, 1);
+
+  const signalsTrue = [
+    passRate >= LEAGUE_AVG_PASS_RATE_FACED + 0.04,
+    haveEpa && (d.epaPerDropbackAllowed as number) >= 0,
+    haveEpa && (d.epaPerDropbackAllowed as number) >= 0.05,
+  ].filter(Boolean).length;
+  const totalSignals = haveEpa ? 3 : 1;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, totalSignals);
+  const sampleConf = confidenceFromDefenseVolume({
+    games: d.games,
+    totalPlaysFaced: total,
+  });
+  let confidence = finalConfidence(sampleConf, agreement);
+  if (!haveEpa) confidence = Math.min(confidence, 0.5);
+  confidence = clamp(confidence, 0, PROXY_CONFIDENCE_MAX);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("PASS_FUNNEL_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("PASS_FUNNEL_LIKELY");
+  if (!haveEpa) tags.push("PASS_FUNNEL_SCRIPT_FALLBACK");
+
+  const smallSample =
+    d.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    total < MIN_DEFENSIVE_PLAYS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    fallbackData: !haveEpa,
+    context: "pass funnel proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: defense faces ${(passRate * 100).toFixed(0)}% pass (league ~59%) — ${value >= 0.6 ? "pass funnel likely" : "pass / run mix near league avg"}`,
-    risk: confidence < 0.4 ? "Low sample — pass-funnel proxy unreliable" : undefined,
+    explanation: `Proxy-based: defense faces ${(passRate * 100).toFixed(0)}% pass (league ${(LEAGUE_AVG_PASS_RATE_FACED * 100).toFixed(0)}%)${haveEpa ? `, EPA allowed ${(d.epaPerDropbackAllowed as number).toFixed(3)}` : " (no EPA support, may be script-driven)"} — ${value >= 0.65 ? "pass funnel likely" : "pass-funnel signal moderate"}`,
+    risk,
     tags,
   };
 }
@@ -324,24 +530,60 @@ export function calculatePassFunnelProxy(d: DefenseProxyInput): ProxyResult {
 export function calculateRunFunnelProxy(d: DefenseProxyInput): ProxyResult {
   const total = d.passAttemptsFaced + d.rushAttemptsFaced;
   if (total === 0 || d.games === 0) {
-    return {
-      value: 0.5,
-      confidence: 0,
-      explanation: "Proxy-based: no attempts faced — run funnel not estimable",
-      risk: "Empty defense sample",
-      tags: ["NO_SAMPLE"],
-    };
+    return noSample("no defensive plays in window");
   }
   const runRate = d.rushAttemptsFaced / total;
-  const value = clamp((runRate - 0.41) * 4 + 0.5, 0, 1);
-  const confidence = defenseSampleConfidence(d);
+  const runRateExcess = clamp(
+    (runRate - LEAGUE_AVG_RUSH_RATE_FACED) * 5 + 0.4,
+    0,
+    1,
+  );
+
+  // EPA support: positive rush EPA allowed = real run vulnerability.
+  let epaSupport: number | null = null;
+  if (d.epaPerRushAllowed !== undefined) {
+    epaSupport = clamp(0.5 + d.epaPerRushAllowed / 0.1, 0, 1);
+  }
+  const haveEpa = epaSupport !== null;
+  let value = haveEpa
+    ? 0.6 * runRateExcess + 0.4 * (epaSupport as number)
+    : runRateExcess;
+  if (!haveEpa) value = Math.min(value, 0.58);
+  value = clamp(value, 0, 1);
+
+  const signalsTrue = [
+    runRate >= LEAGUE_AVG_RUSH_RATE_FACED + 0.04,
+    haveEpa && (d.epaPerRushAllowed as number) >= 0,
+    haveEpa && (d.epaPerRushAllowed as number) >= 0.03,
+  ].filter(Boolean).length;
+  const totalSignals = haveEpa ? 3 : 1;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, totalSignals);
+  const sampleConf = confidenceFromDefenseVolume({
+    games: d.games,
+    totalPlaysFaced: total,
+  });
+  let confidence = finalConfidence(sampleConf, agreement);
+  if (!haveEpa) confidence = Math.min(confidence, 0.5);
+  confidence = clamp(confidence, 0, PROXY_CONFIDENCE_MAX);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("RUN_FUNNEL_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("RUN_FUNNEL_LIKELY");
+  if (!haveEpa) tags.push("RUN_FUNNEL_SCRIPT_FALLBACK");
+
+  const smallSample =
+    d.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    total < MIN_DEFENSIVE_PLAYS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    fallbackData: !haveEpa,
+    context: "run funnel proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: defense faces ${(runRate * 100).toFixed(0)}% run (league ~41%) — ${value >= 0.6 ? "run funnel likely" : "pass / run mix near league avg"}`,
-    risk: confidence < 0.4 ? "Low sample — run-funnel proxy unreliable" : undefined,
+    explanation: `Proxy-based: defense faces ${(runRate * 100).toFixed(0)}% rush (league ${(LEAGUE_AVG_RUSH_RATE_FACED * 100).toFixed(0)}%)${haveEpa ? `, EPA allowed ${(d.epaPerRushAllowed as number).toFixed(3)}` : " (no EPA support, may be script-driven)"} — ${value >= 0.65 ? "run funnel likely" : "run-funnel signal moderate"}`,
+    risk,
     tags,
   };
 }
@@ -351,53 +593,93 @@ export function calculateDeepPassSuppressionProxy(
 ): ProxyResult {
   const total = d.passAttemptsFaced + d.rushAttemptsFaced;
   if (total === 0 || d.games === 0) {
-    return {
-      value: 0.5,
-      confidence: 0,
-      explanation: "Proxy-based: no defense sample — deep suppression not estimable",
-      risk: "Empty defense sample",
-      tags: ["NO_SAMPLE"],
-    };
+    return noSample("no defensive plays in window");
   }
-  // Primary signal: deep completions allowed vs league expected.
-  let primary: number | null = null;
+  // Tier 1: deep completions allowed vs league expected.
+  let primaryValue: number | null = null;
   if (
     d.deepCompletionsAllowed !== undefined &&
     d.deepCompletionsLeagueExpected !== undefined &&
     d.deepCompletionsLeagueExpected > 0
   ) {
     const ratio = d.deepCompletionsAllowed / d.deepCompletionsLeagueExpected;
-    primary = clamp(1 - ratio, 0, 1);
+    primaryValue = clamp(1 - ratio, 0, 1);
   }
-  // Secondary signal: EPA per dropback allowed (lower = better).
-  let secondary: number | null = null;
+  // Tier 2: EPA per dropback allowed (lower = better).
+  let secondaryValue: number | null = null;
   if (d.epaPerDropbackAllowed !== undefined) {
-    secondary = clamp((0.1 - d.epaPerDropbackAllowed) / 0.2, 0, 1);
+    secondaryValue = clamp((0.08 - d.epaPerDropbackAllowed) / 0.16, 0, 1);
   }
+  // Tier 3: WR receiving yards allowed (weak fallback only).
+  let tertiaryValue: number | null = null;
+  if (d.receivingYardsAllowedToWR !== undefined) {
+    const ydsPerGame = d.receivingYardsAllowedToWR / Math.max(d.games, 1);
+    tertiaryValue = clamp((150 - ydsPerGame) / 100, 0, 1);
+  }
+
   let value: number;
-  if (primary !== null && secondary !== null) {
-    value = 0.7 * primary + 0.3 * secondary;
-  } else if (primary !== null) {
-    value = primary;
-  } else if (secondary !== null) {
-    value = secondary;
+  let usedFallback: boolean;
+  if (primaryValue !== null && secondaryValue !== null) {
+    value = 0.75 * primaryValue + 0.25 * secondaryValue;
+    usedFallback = false;
+  } else if (primaryValue !== null) {
+    value = primaryValue;
+    usedFallback = false;
+  } else if (secondaryValue !== null) {
+    value = secondaryValue;
+    usedFallback = true;
+  } else if (tertiaryValue !== null) {
+    value = tertiaryValue;
+    usedFallback = true;
   } else {
     return {
       value: 0.5,
       confidence: 0.15,
-      explanation: "Proxy-based: no deep-completions or EPA data — deep suppression not estimable",
+      explanation:
+        "Proxy-based: no deep-completion / EPA / WR-yards data — deep suppression not estimable",
       risk: "Need deep completion or EPA-allowed data",
       tags: ["NEEDS_MORE_DATA"],
     };
   }
-  const confidence = defenseSampleConfidence(d);
+  value = clamp(value, 0, 1);
+
+  const sampleConf = confidenceFromDefenseVolume({
+    games: d.games,
+    totalPlaysFaced: total,
+  });
+  // Reduce confidence when fallback data is used.
+  const agreementSignals = [
+    primaryValue !== null && primaryValue >= 0.55,
+    secondaryValue !== null && secondaryValue >= 0.55,
+    tertiaryValue !== null && tertiaryValue >= 0.55,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(
+    agreementSignals,
+    [primaryValue, secondaryValue, tertiaryValue].filter((v) => v !== null).length,
+  );
+  let confidence = finalConfidence(sampleConf, agreement);
+  if (usedFallback) confidence = Math.min(confidence, 0.55);
+  confidence = clamp(confidence, 0, PROXY_CONFIDENCE_MAX);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("DEEP_SUPPRESSION_LIKELY");
+  if (value >= 0.65 && confidence >= 0.5)
+    tags.push("DEEP_SUPPRESSION_LIKELY");
+  if (usedFallback) tags.push("DEEP_SUPPRESSION_FALLBACK");
+
+  const smallSample =
+    d.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE ||
+    total < MIN_DEFENSIVE_PLAYS_FOR_MEDIUM_CONFIDENCE;
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    fallbackData: usedFallback,
+    context: "deep pass suppression proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: deep completions allowed vs league baseline — ${value >= 0.6 ? "deep pass suppression likely" : "deep coverage near league avg"}`,
-    risk: confidence < 0.4 ? "Low sample — deep suppression proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${primaryValue !== null ? "deep completions allowed vs league baseline" : usedFallback ? "EPA / WR-yards fallback signal" : "deep suppression not estimable"} — ${value >= 0.65 ? "deep pass suppression likely" : "deep coverage near league avg"}`,
+    risk,
     tags,
   };
 }
@@ -408,31 +690,101 @@ export function calculatePressureRiskProxy(
   offense: OffenseProxyInput,
   defense: DefenseProxyInput,
 ): ProxyResult {
-  if (offense.teamPassAttempts === 0 || defense.passAttemptsFaced === 0) {
-    return {
-      value: 0.5,
-      confidence: 0.1,
-      explanation: "Proxy-based: not enough dropback / sack data — pressure risk not estimable",
-      risk: "Empty pressure sample",
-      tags: ["NO_SAMPLE"],
-    };
+  const haveOffense = offense.teamPassAttempts > 0 && offense.games > 0;
+  const haveDefense = defense.passAttemptsFaced > 0 && defense.games > 0;
+  if (!haveOffense && !haveDefense) {
+    return noSample("no offense or defense pass-rush data");
   }
-  const offSackRate = offense.sacksTaken / offense.teamPassAttempts;
-  const defSackRate = defense.sacksGenerated / defense.passAttemptsFaced;
-  // League sack rate ≈ 6%.
-  const combined = (offSackRate + defSackRate) / 2;
-  const value = clamp((combined - 0.05) * 12, 0, 1);
-  const confidence = Math.min(
-    sampleConfidence(offense.games, offense.teamPassAttempts),
-    sampleConfidence(defense.games, defense.passAttemptsFaced),
+
+  // Offense side: sacks taken per game / per dropback.
+  const offSackRate = haveOffense
+    ? offense.sacksTaken / offense.teamPassAttempts
+    : LEAGUE_AVG_SACK_RATE;
+  const offSackPerGame = haveOffense
+    ? offense.sacksTaken / offense.games
+    : null;
+
+  // Defense side.
+  const defSackRate = haveDefense
+    ? defense.sacksGenerated / defense.passAttemptsFaced
+    : LEAGUE_AVG_SACK_RATE;
+  const defSackPerGame = haveDefense
+    ? defense.sacksGenerated / defense.games
+    : null;
+
+  // Combined value uses both rates and per-game counts.
+  const combinedRate = (offSackRate + defSackRate) / 2;
+  let value = clamp((combinedRate - LEAGUE_AVG_SACK_RATE) * 14, 0, 1);
+
+  // If only one side present, the signal is weak.
+  const oneSidedOnly = !haveOffense || !haveDefense;
+  if (oneSidedOnly) value = Math.min(value, 0.55);
+
+  // Blitz support (optional).
+  let blitzSupportTag: string | undefined;
+  if (
+    defense.blitzPctEstimate !== undefined &&
+    defense.blitzPctEstimate >= 0.35
+  ) {
+    blitzSupportTag = "blitz_pressure_proxy";
+    value = Math.min(value + 0.05, 1);
+  }
+
+  value = clamp(value, 0, 1);
+
+  const sampleConf = Math.min(
+    haveOffense
+      ? confidenceFromSampleSize({
+          games: offense.games,
+          observations: offense.teamPassAttempts,
+          minGames: MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+          minObservations: 100,
+        })
+      : 0.2,
+    haveDefense
+      ? confidenceFromSampleSize({
+          games: defense.games,
+          observations: defense.passAttemptsFaced,
+          minGames: MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+          minObservations: 100,
+        })
+      : 0.2,
   );
+  const signalsTrue = [
+    haveOffense && offSackRate >= LEAGUE_AVG_SACK_RATE,
+    haveDefense && defSackRate >= LEAGUE_AVG_SACK_RATE,
+    blitzSupportTag !== undefined,
+  ].filter(Boolean).length;
+  const totalSignals =
+    (haveOffense ? 1 : 0) +
+    (haveDefense ? 1 : 0) +
+    (defense.blitzPctEstimate !== undefined ? 1 : 0);
+  const agreement = confidenceFromSignalAgreement(signalsTrue, Math.max(totalSignals, 1));
+  let confidence = finalConfidence(sampleConf, agreement);
+  if (oneSidedOnly) confidence = Math.min(confidence, 0.45);
+  confidence = clamp(confidence, 0, PROXY_CONFIDENCE_MAX);
+
   const tags: string[] = [];
-  if (value >= 0.6) tags.push("PRESSURE_RISK_HIGH");
+  if (value >= 0.65 && confidence >= 0.5) tags.push("PRESSURE_RISK_HIGH");
+  if (blitzSupportTag) tags.push(blitzSupportTag);
+  if (oneSidedOnly) tags.push("PRESSURE_ONE_SIDED");
+
+  const smallSample =
+    (haveOffense && offense.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE) ||
+    (haveDefense && defense.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE);
+  const baseWarning = buildProxyAccuracyWarning({
+    confidence,
+    smallSample,
+    fallbackData: oneSidedOnly,
+    context: "pressure risk proxy",
+  });
+  const sackCaveat = "Sack rate is an imperfect proxy for true pressure rate";
+  const risk = baseWarning ? `${baseWarning}; ${sackCaveat}` : sackCaveat;
   return {
     value,
     confidence,
-    explanation: `Proxy-based: offense sack rate ${(offSackRate * 100).toFixed(1)}%, defense sack rate ${(defSackRate * 100).toFixed(1)}% — ${value >= 0.6 ? "pressure risk elevated" : "pressure near league avg"}`,
-    risk: confidence < 0.4 ? "Low sample — pressure proxy unreliable" : undefined,
+    explanation: `Proxy-based: offense sack rate ${(offSackRate * 100).toFixed(1)}%${offSackPerGame !== null ? ` (${offSackPerGame.toFixed(1)}/game)` : ""}, defense sack rate ${(defSackRate * 100).toFixed(1)}%${defSackPerGame !== null ? ` (${defSackPerGame.toFixed(1)}/game)` : ""}${oneSidedOnly ? " — one-sided signal only" : ""} — ${value >= 0.65 ? "pressure risk elevated" : "pressure near league avg"}`,
+    risk,
     tags,
   };
 }
@@ -442,38 +794,68 @@ export function calculateQuickGameProxy(
 ): ProxyResult {
   if (offense.quickGamePctEstimate !== undefined) {
     const value = clamp(offense.quickGamePctEstimate, 0, 1);
-    const confidence = clamp(offense.games / 6, 0.3, 0.85);
+    const sampleConf = confidenceFromSampleSize({
+      games: offense.games,
+      observations: offense.teamPassAttempts || 1,
+      minGames: MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+      minObservations: 80,
+    });
+    const confidence = clamp(sampleConf, 0.3, PROXY_CONFIDENCE_MAX);
+    const tags: string[] = [];
+    if (value >= 0.6 && confidence >= 0.5) tags.push("QUICK_GAME_OFFENSE");
     return {
       value,
       confidence,
       explanation: `Proxy-based: explicit quick-game estimate ${(value * 100).toFixed(0)}%`,
-      risk: confidence < 0.4 ? "Low sample — quick-game proxy unreliable" : undefined,
-      tags: value >= 0.6 ? ["QUICK_GAME_OFFENSE"] : [],
+      risk: buildProxyAccuracyWarning({
+        confidence,
+        smallSample: offense.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+        context: "quick game proxy (explicit estimate)",
+      }),
+      tags,
     };
   }
   if (offense.teamPassAttempts === 0 || offense.games === 0) {
-    return {
-      value: 0.5,
-      confidence: 0.1,
-      explanation: "Proxy-based: no offense sample — quick-game not estimable",
-      risk: "Empty offense sample",
-      tags: ["NO_SAMPLE"],
-    };
+    return noSample("no offense pass-attempt data");
   }
+  // Indirect inference: high attempts + low sack rate.
   const attemptsPerGame = offense.teamPassAttempts / offense.games;
   const sackRate = offense.sacksTaken / offense.teamPassAttempts;
-  // High attempts + low sack rate → quick-game / short-passing.
   const attemptScore = clamp((attemptsPerGame - 28) / 10, 0, 1);
   const protectionScore = clamp((0.08 - sackRate) / 0.05, 0, 1);
-  const value = clamp(0.55 * attemptScore + 0.45 * protectionScore, 0, 1);
-  const confidence = sampleConfidence(offense.games, offense.teamPassAttempts);
-  const tags: string[] = [];
-  if (value >= 0.6) tags.push("QUICK_GAME_OFFENSE");
+  let value = 0.55 * attemptScore + 0.45 * protectionScore;
+  // Indirect inference: cap below "high confidence" band.
+  value = Math.min(value, 0.75);
+  value = clamp(value, 0, 1);
+
+  const sampleConf = confidenceFromSampleSize({
+    games: offense.games,
+    observations: offense.teamPassAttempts,
+    minGames: MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+    minObservations: 100,
+  });
+  const signalsTrue = [
+    attemptsPerGame >= 35,
+    sackRate <= 0.05,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 2);
+  let confidence = finalConfidence(sampleConf, agreement);
+  // Indirect inference: cap confidence at 0.55.
+  confidence = Math.min(confidence, 0.55);
+
+  const tags: string[] = ["QUICK_GAME_INDIRECT"];
+  if (value >= 0.6 && confidence >= 0.45) tags.push("QUICK_GAME_OFFENSE");
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample: offense.games < MIN_GAMES_FOR_MEDIUM_CONFIDENCE,
+    fallbackData: true,
+    context: "quick game proxy (indirect)",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: ${attemptsPerGame.toFixed(1)} pass att/game, ${(sackRate * 100).toFixed(1)}% sack rate — ${value >= 0.6 ? "quick-game / short-passing offense" : "quick-game signal moderate"}`,
-    risk: confidence < 0.4 ? "Low sample — quick-game proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${attemptsPerGame.toFixed(1)} pass att/game, ${(sackRate * 100).toFixed(1)}% sack rate — ${value >= 0.6 ? "quick-game / short-passing offense (indirect inference)" : "quick-game signal weak"}`,
+    risk,
     tags,
   };
 }
@@ -482,12 +864,12 @@ export function calculateRushingVolumeStabilityProxy(
   offense: OffenseProxyInput,
 ): ProxyResult {
   const weeks = offense.weekRushingAttempts ?? [];
-  if (weeks.length < 2) {
+  if (weeks.length < MIN_WEEKS_FOR_STABILITY) {
     return {
       value: 0.5,
       confidence: 0.2,
-      explanation: "Proxy-based: not enough weekly rushing samples — stability not estimable",
-      risk: "Need ≥ 2 weeks of rushing attempts",
+      explanation: `Proxy-based: only ${weeks.length} weeks of rushing attempt data — stability not estimable`,
+      risk: `Need ≥ ${MIN_WEEKS_FOR_STABILITY} weeks of rushing attempts for stability proxy`,
       tags: ["NEEDS_MORE_WEEKS"],
     };
   }
@@ -495,15 +877,27 @@ export function calculateRushingVolumeStabilityProxy(
   const sd = stddevArr(weeks);
   const cv = m > 0 ? sd / m : 1;
   const value = clamp(1 - cv / 0.3, 0, 1);
-  const confidence = clamp(weeks.length / 5, 0.2, 0.9);
+  const sampleConf = clamp(weeks.length / 6, 0.2, PROXY_CONFIDENCE_MAX);
+  const signalsTrue = [
+    cv <= 0.15,
+    m >= 22,
+  ].filter(Boolean).length;
+  const agreement = confidenceFromSignalAgreement(signalsTrue, 2);
+  const confidence = finalConfidence(sampleConf, agreement);
+
   const tags: string[] = [];
-  if (value >= 0.7) tags.push("STABLE_RUSH_VOLUME");
+  if (value >= 0.7 && confidence >= 0.5) tags.push("STABLE_RUSH_VOLUME");
   if (value <= 0.4) tags.push("VOLATILE_RUSH_VOLUME");
+  const risk = buildProxyAccuracyWarning({
+    confidence,
+    smallSample: weeks.length < MIN_WEEKS_FOR_STABILITY + 1,
+    context: "rushing volume stability proxy",
+  });
   return {
     value,
     confidence,
-    explanation: `Proxy-based: ${weeks.length} weeks · mean ${m.toFixed(1)} rush att · CV ${(cv * 100).toFixed(0)}% — ${value >= 0.7 ? "stable rushing volume" : value <= 0.4 ? "volatile rushing volume" : "moderate rushing stability"}`,
-    risk: confidence < 0.4 ? "Few weeks observed — stability proxy unreliable" : undefined,
+    explanation: `Proxy-based: ${weeks.length} weeks, mean ${m.toFixed(1)} rush att, CV ${(cv * 100).toFixed(0)}% — ${value >= 0.7 ? "stable rushing volume" : value <= 0.4 ? "volatile rushing volume" : "moderate rushing stability"}`,
+    risk,
     tags,
   };
 }

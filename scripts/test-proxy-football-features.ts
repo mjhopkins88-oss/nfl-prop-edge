@@ -203,11 +203,15 @@ section("5. Receiving TE proxy fires for high-volume receiving TE");
 // --- 6. Pass-funnel defense proxy -----------------------------------
 section("6. Pass-funnel defense proxy fires when ≥ 65% pass attempts faced");
 {
+  // Tightened calibration now requires EPA support — a defense
+  // facing pass-heavy schedules without genuine vulnerability would
+  // hit the script-driven false-positive cap.
   const defense: DefenseProxyInput = {
     games: 6,
     passAttemptsFaced: 230,
     rushAttemptsFaced: 120, // ~66% pass
     sacksGenerated: 14,
+    epaPerDropbackAllowed: 0.08,
   };
   const r = calculatePassFunnelProxy(defense);
   check("6 explanation prefixed with Proxy-based", explainsAsProxy(r));
@@ -224,6 +228,7 @@ section("7. Run-funnel defense proxy fires when ≥ 50% rush attempts faced");
     passAttemptsFaced: 170,
     rushAttemptsFaced: 180, // ~51% rush
     sacksGenerated: 10,
+    epaPerRushAllowed: 0.05,
   };
   const r = calculateRunFunnelProxy(defense);
   check("7 explanation prefixed with Proxy-based", explainsAsProxy(r));
