@@ -5,6 +5,7 @@ import {
 import { getRiskInputsForProp } from "./risk-inputs";
 import {
   getGameById,
+  getMatchupNotes,
   getPlayerById,
   getPropById,
   getPropDetail,
@@ -99,7 +100,7 @@ export function getOpportunityDetail(
     ...opp,
     recentLogs: detail.recentLogs,
     altLines: detail.altLines,
-    matchupNotes: detail.matchupNotes,
+    matchupNotes: getMatchupNotes(id),
   };
 }
 

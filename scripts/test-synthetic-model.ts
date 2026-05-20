@@ -533,6 +533,11 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value : value + " ".repeat(width - value.length);
 }
 
+const useColor = process.stdout.isTTY === true;
+const C_GREEN = useColor ? "\x1b[32m" : "";
+const C_RED = useColor ? "\x1b[31m" : "";
+const C_RESET = useColor ? "\x1b[0m" : "";
+
 let passCount = 0;
 const failures: string[] = [];
 
@@ -571,7 +576,8 @@ for (let i = 0; i < scenarios.length; i++) {
       : false);
   const ok = okQualified && okReco && okDisq;
 
-  const status = ok ? "PASS" : "FAIL";
+  const statusColor = ok ? C_GREEN : C_RED;
+  const status = `${statusColor}${ok ? "PASS" : "FAIL"}${C_RESET}`;
   console.log(
     `\n[${status}] #${pad(String(i + 1), 2)} ${s.scenarioName} (${s.propType}, ${s.playerName})`,
   );
@@ -593,7 +599,11 @@ for (let i = 0; i < scenarios.length; i++) {
   }
 }
 
-console.log(`\n${passCount}/${scenarios.length} scenarios passed.`);
+const summaryColor =
+  passCount === scenarios.length ? C_GREEN : C_RED;
+console.log(
+  `\n${summaryColor}${passCount}/${scenarios.length} scenarios passed.${C_RESET}`,
+);
 if (failures.length > 0) {
   console.log("\nFailures:");
   for (const f of failures) {

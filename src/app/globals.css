@@ -3,31 +3,77 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --cream-base: #fbf6ec;
 }
 
 html,
 body {
-  background: theme("colors.ink.950");
-  color: #e7ecf3;
   min-height: 100%;
+  color: #1a1714;
+  background-color: var(--cream-base);
 }
 
 body {
   font-feature-settings: "ss01", "cv11";
-  background-image: radial-gradient(
-      circle at 0% 0%,
-      rgba(79, 140, 255, 0.08) 0%,
-      transparent 38%
-    ),
-    radial-gradient(
-      circle at 100% 0%,
-      rgba(22, 211, 148, 0.06) 0%,
-      transparent 35%
-    );
+  background-image:
+    /* tiny dot grid */
+    radial-gradient(rgba(70, 60, 50, 0.07) 1.1px, transparent 1.1px),
+    /* warm coral blob top-left */
+    radial-gradient(900px 600px at 0% -5%, rgba(255, 197, 159, 0.55), transparent 60%),
+    /* gold blob top-right */
+    radial-gradient(820px 620px at 105% 0%, rgba(255, 232, 184, 0.55), transparent 62%),
+    /* mint/teal blob bottom-left */
+    radial-gradient(820px 700px at -5% 105%, rgba(198, 232, 218, 0.5), transparent 65%),
+    /* sky blob bottom-right */
+    radial-gradient(900px 700px at 105% 105%, rgba(199, 226, 240, 0.5), transparent 65%);
+  background-size:
+    22px 22px,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%;
   background-attachment: fixed;
+  background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Generic glass-card surface */
+.glass {
+  background-color: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow:
+    0 1px 2px rgba(120, 90, 40, 0.04),
+    0 12px 32px -16px rgba(80, 60, 30, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.glass-tight {
+  background-color: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(10px) saturate(130%);
+  -webkit-backdrop-filter: blur(10px) saturate(130%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.glass-strong {
+  background-color: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow:
+    0 2px 4px rgba(120, 90, 40, 0.06),
+    0 28px 56px -22px rgba(80, 60, 30, 0.2),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+}
+
+/* Subtle chip / pill helper */
+.chip-shadow {
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.04);
 }
