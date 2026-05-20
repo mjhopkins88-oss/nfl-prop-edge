@@ -497,6 +497,125 @@ Counterfactual outcomes on PASSes let us:
 3. Decide which markets to expand, tighten, or remove without
    waiting for live betting evidence.
 
+## Football Matchup Intelligence Layer
+
+A static, code-first football-knowledge layer that translates matchup
+concepts into prop-specific projection adjustments and scorecard
+explanations.
+
+### What it does
+
+- Encodes 10 defensive archetypes (pass-funnel zone, two-high deep
+  suppression, pressure-with-four, blitz-heavy, man-heavy, strong run
+  defense, weak secondary explosive, …), 10 player-role archetypes
+  (slot volume WR, outside deep WR, possession WR, receiving TE,
+  receiving RB, bell-cow RB, mobile QB, pocket QB, …), and 6 weather
+  archetypes (dome neutral, windy outdoor, cold windy, rainy, extreme
+  weather, warm fast track).
+- Computes per-dimension adjustments for **defensive funnel**,
+  **coverage style**, **pass-rush / OL interaction**, **receiver
+  role**, **run game**, and **weather**.
+- Returns a `MatchupAdjustmentOutput` with:
+  - `projectedMeanMultiplier` (reported but informational — see below)
+  - `projectedStdDevMultiplier` (applied — widens uncertainty, ≥ 1.0)
+  - `confidenceAdjustment` / `dataQualityAdjustment` / `riskAdjustment`
+  - `reasons[]`, `risks[]`, `matchupTags[]`
+  - `propImpacts` — labels (`STRONG_POSITIVE` / `POSITIVE` / `NEUTRAL`
+    / `UNCERTAIN` / `NEGATIVE` / `STRONG_NEGATIVE`) for **every** V1
+    prop type so the UI can show a holistic matchup snapshot.
+
+### What it does NOT do
+
+- **Never forces an OVER or UNDER recommendation by itself.**
+  - The `projectedMeanMultiplier` is reported on the scorecard
+    component but is **not applied** to qualification math. A strong
+    positive matchup can support an already-qualifying bet but cannot
+    push a thin edge over the threshold.
+  - The `projectedStdDevMultiplier` is clamped to ≥ 1.0, so applying
+    it can only widen uncertainty (push a thin edge below threshold),
+    never narrow it (push a thin edge above threshold).
+- Does not change the model scorecard's decision authority. The
+  scorecard still owns recommendation/qualified/edge math.
+- Does not call any APIs. Static archetypes only.
+
+### Why it doesn't force bets
+
+The point of matchup intelligence is to **enrich reasoning and
+calibrate uncertainty**, not replace the edge / risk-gate decision
+engine. Football matchups are noisy and qualitative; treating them as
+direct projection inputs would let small archetype mismatches qualify
+bets that the rigorous edge model wouldn't have. The framework
+instead:
+
+1. Lists matchup reasons next to the scorecard's edge math when a bet
+   qualifies (positive support).
+2. Lists matchup risks in the scorecard's risk list when conditions
+   are unfavorable (downside surfacing).
+3. Widens σ when matchup volatility is high so a marginal edge shrinks
+   and may fall under threshold (downgrade only).
+4. Drags confidence lightly when the matchup is hostile (display only,
+   doesn't unqualify a bet on its own).
+
+### How it supports prop-specific reasoning
+
+Per-dimension rules (excerpt — full list in
+`src/lib/model/matchup-intelligence.ts`):
+
+- **Pass funnel** supports `PASSING_ATTEMPTS` / `PASSING_COMPLETIONS`
+  **only if game script supports passing** (team not heavily trailing).
+- **Run funnel** supports `RUSHING_ATTEMPTS` / `RUSHING_YARDS` **only
+  if team is not likely to trail heavily**.
+- **Two-high / deep suppression** downgrades `PASSING_YARDS` /
+  `RECEIVING_YARDS`; supports short-area `RECEPTIONS`; mildly
+  supports rushing efficiency (light boxes).
+- **Pressure × pressure-sensitive QB**: passing yards and receiving
+  yards downgraded more than passing completions.
+- **Blitz + short-area role (slot / TE / RB)**: small `RECEPTIONS`
+  boost (checkdown environment).
+- **OL injury risk**: deep passing and rushing efficiency downgraded
+  with confidence drag.
+- **Mobile-QB cannibalization**: RB rushing attempts / yards
+  downgraded with confidence drag.
+- **Yardage props** receive a larger σ widening cap (up to +30%);
+  **volume props** are capped tighter (+15%) since they're already
+  more sensitive to role / pace / script in the upstream scorecard.
+- **Low data quality** caps the entire matchup adjustment toward
+  neutral.
+- **Low role stability** dampens role-dependent matchup signals.
+- **Dome status trumps** any weather signal — forces neutral.
+
+### How it integrates with the existing scorecard
+
+`ScorecardInput` accepts an optional `matchupAdjustment` field. When
+provided, `buildPropDecisionScorecard()`:
+
+1. Multiplies `projectedStdDev` by `projectedStdDevMultiplier` before
+   running the normal-CDF math.
+2. Appends matchup reasons to `passReasons` (when the bet qualifies).
+3. Appends matchup risks to the scorecard's `risks` list.
+4. Adds the matchup `confidenceAdjustment` to the final confidence
+   (clamped within the existing bounds).
+5. Attaches the optional `matchupComponent` to the output for UI
+   display.
+
+The `/props/[id]` page renders a **Football Matchup Intelligence**
+section automatically when `scorecard.matchupComponent` is present —
+showing defensive archetype, player role, weather archetype, mean
+shift (informational), σ widening (applied), confidence Δ, per-prop
+impact map, reasons, risks, and matchup tags.
+
+### How it will later be fed by real data
+
+Today the archetypes are hand-tuned static profiles meant to be
+referenced as defaults; the scoring functions read from explicit
+`MatchupIntelligenceInput` fields rather than the archetype constants
+directly. When real ingestion is wired up (nflverse splits, sharp
+coverage reports, weather), the upstream feature pipeline will
+populate `DefensiveFunnelProfile` / `CoverageProfile` /
+`PressureProfile` / etc. from actual data and pass the resulting
+`MatchupAdjustmentOutput` into the scorecard. The framework's
+architecture doesn't change — only the data source.
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a

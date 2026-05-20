@@ -32,5 +32,7 @@ export function buildScorecardInputFromFeatureRow(
     injuryContextScore: row.injuryContextScore,
     correlationExposureScore: row.correlationExposureScore,
     coachingTransition: row.coachingTransition,
+    matchupAdjustment: row.matchupAdjustment,
+    matchupComponent: row.matchupComponent,
   };
 }

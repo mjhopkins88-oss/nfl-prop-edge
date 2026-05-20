@@ -23,6 +23,7 @@ import EdgeBadge from "@/components/EdgeBadge";
 import RecommendationPill from "@/components/RecommendationPill";
 import ConfidenceMeter from "@/components/ConfidenceMeter";
 import ScorecardDetailPanel from "@/components/ScorecardDetailPanel";
+import MatchupIntelligencePanel from "@/components/MatchupIntelligencePanel";
 import { ArrowLeftIcon, ClockIcon } from "@/components/icons";
 
 export function generateStaticParams() {
@@ -177,6 +178,10 @@ export default async function PropDetailPage({
       </section>
 
       <ScorecardDetailPanel scorecard={scorecard} />
+
+      {scorecard.matchupComponent && (
+        <MatchupIntelligencePanel component={scorecard.matchupComponent} />
+      )}
 
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="glass-strong rounded-2xl p-5 lg:col-span-2">
