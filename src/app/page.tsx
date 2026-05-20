@@ -1,9 +1,13 @@
 import PropFilters from "@/components/PropFilters";
-import PropTable from "@/components/PropTable";
+import OpportunityList from "@/components/OpportunityList";
 import StatCard from "@/components/StatCard";
-import { getProps } from "@/lib/mock-data";
-import type { PropMarket, PropType, Position, Recommendation } from "@/lib/types";
-import { getPlayerById } from "@/lib/mock-data";
+import {
+  getOpportunities,
+  selectedEdge,
+  warnIfInvalidOpportunities,
+  type PropOpportunity,
+} from "@/lib/model/prop-opportunity";
+import type { PropType, Position, Recommendation } from "@/lib/types";
 
 const PROP_TYPE_VALUES = new Set<PropType>([
   "PASSING_ATTEMPTS",
@@ -34,38 +38,43 @@ function parseFilters(raw: Search) {
       ? (raw.position as Position)
       : undefined;
   const recommendation =
-    raw.recommendation && RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
+    raw.recommendation &&
+    RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
       ? (raw.recommendation as Recommendation)
       : undefined;
-  const sort = raw.sort === "confidence" || raw.sort === "player" ? raw.sort : "edge";
+  const sort =
+    raw.sort === "confidence" || raw.sort === "player" ? raw.sort : "edge";
   return { propType, position, recommendation, sort };
 }
 
 function applyFilters(
-  props: PropMarket[],
+  opps: PropOpportunity[],
   filters: ReturnType<typeof parseFilters>,
-): PropMarket[] {
-  let result = props;
-  if (filters.propType) result = result.filter((p) => p.propType === filters.propType);
+): PropOpportunity[] {
+  let result = opps;
+  if (filters.propType) {
+    result = result.filter((o) => o.prop.propType === filters.propType);
+  }
   if (filters.position) {
-    result = result.filter((p) => {
-      const player = getPlayerById(p.playerId);
-      return player?.position === filters.position;
-    });
+    result = result.filter((o) => o.player.position === filters.position);
   }
   if (filters.recommendation) {
-    result = result.filter((p) => p.recommendation === filters.recommendation);
+    result = result.filter(
+      (o) => o.scorecard.recommendation === filters.recommendation,
+    );
   }
   if (filters.sort === "confidence") {
-    result = [...result].sort((a, b) => b.confidence - a.confidence);
+    result = [...result].sort((a, b) => b.scorecard.confidence - a.scorecard.confidence);
   } else if (filters.sort === "player") {
-    result = [...result].sort((a, b) => {
-      const pa = getPlayerById(a.playerId)?.fullName ?? "";
-      const pb = getPlayerById(b.playerId)?.fullName ?? "";
-      return pa.localeCompare(pb);
-    });
+    result = [...result].sort((a, b) =>
+      a.player.fullName.localeCompare(b.player.fullName),
+    );
   } else {
-    result = [...result].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
+    result = [...result].sort(
+      (a, b) =>
+        Math.abs(selectedEdge(b.scorecard)) -
+        Math.abs(selectedEdge(a.scorecard)),
+    );
   }
   return result;
 }
@@ -77,15 +86,22 @@ export default async function DashboardPage({
 }) {
   const raw = await searchParams;
   const filters = parseFilters(raw);
-  const all = getProps();
+  const all = getOpportunities();
+  warnIfInvalidOpportunities(all);
   const filtered = applyFilters(all, filters);
 
-  const playable = all.filter((p) => p.recommendation !== "PASS");
-  const positiveEdges = playable.filter((p) => p.edge >= 0.04);
+  const qualified = all.filter((o) => o.scorecard.qualified);
+  const positiveEdges = all.filter(
+    (o) => selectedEdge(o.scorecard) >= o.scorecard.edgeThreshold,
+  );
   const avgEdge =
-    playable.reduce((acc, p) => acc + Math.abs(p.edge), 0) / Math.max(playable.length, 1);
-  const topEdgeProp = [...playable].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge))[0];
-  const topPlayer = topEdgeProp ? getPlayerById(topEdgeProp.playerId) : undefined;
+    qualified.reduce((acc, o) => acc + Math.abs(selectedEdge(o.scorecard)), 0) /
+    Math.max(qualified.length, 1);
+  const topOpp = [...qualified].sort(
+    (a, b) =>
+      Math.abs(selectedEdge(b.scorecard)) - Math.abs(selectedEdge(a.scorecard)),
+  )[0];
+  const topEdge = topOpp ? selectedEdge(topOpp.scorecard) : 0;
 
   return (
     <div className="space-y-6">
@@ -95,7 +111,8 @@ export default async function DashboardPage({
         </h1>
         <p className="mt-1 text-sm text-ink-400">
           Lower-variance markets only — passing, receiving, and rushing volume.
-          Edges compare our projection to current book pricing across major sportsbooks.
+          Every prop is scored by the model decision engine: edge, gates, and a
+          plain-English explanation.
         </p>
       </section>
 
@@ -103,7 +120,7 @@ export default async function DashboardPage({
         <StatCard
           label="Tracked markets"
           value={`${all.length}`}
-          hint={`${playable.length} actionable`}
+          hint={`${qualified.length} qualified`}
         />
         <StatCard
           label="Positive edges"
@@ -112,15 +129,15 @@ export default async function DashboardPage({
           tone="positive"
         />
         <StatCard
-          label="Avg model edge"
+          label="Avg qualified edge"
           value={`${(avgEdge * 100).toFixed(1)}%`}
-          hint="across actionable props"
+          hint={qualified.length > 0 ? "across qualified props" : "no qualified plays"}
         />
         <StatCard
           label="Top edge"
-          value={topEdgeProp ? `${(Math.abs(topEdgeProp.edge) * 100).toFixed(1)}%` : "—"}
-          hint={topPlayer?.fullName}
-          tone={topEdgeProp && topEdgeProp.edge > 0 ? "positive" : "negative"}
+          value={topOpp ? `${(Math.abs(topEdge) * 100).toFixed(1)}%` : "—"}
+          hint={topOpp?.player.fullName}
+          tone={topOpp && topEdge > 0 ? "positive" : "neutral"}
         />
       </section>
 
@@ -133,7 +150,7 @@ export default async function DashboardPage({
           </h2>
           <span className="text-xs text-ink-500">{filtered.length} shown</span>
         </div>
-        <PropTable props={filtered} />
+        <OpportunityList opportunities={filtered} />
       </section>
     </div>
   );

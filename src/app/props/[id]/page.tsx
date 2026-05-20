@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPropDetail, getProps } from "@/lib/mock-data";
+import { getProps } from "@/lib/mock-data";
+import {
+  getOpportunityDetail,
+  selectedEdge,
+  selectedModelProbability,
+  selectedNoVigProbability,
+  selectedSideOdds,
+} from "@/lib/model/prop-opportunity";
 import {
   PROP_TYPE_LABEL,
   PROP_TYPE_UNIT,
-  americanOddsToImpliedProb,
   edgeTone,
   formatAmericanOdds,
   formatEdge,
@@ -16,6 +22,7 @@ import TeamBadge from "@/components/TeamBadge";
 import EdgeBadge from "@/components/EdgeBadge";
 import RecommendationPill from "@/components/RecommendationPill";
 import ConfidenceMeter from "@/components/ConfidenceMeter";
+import ScorecardDetailPanel from "@/components/ScorecardDetailPanel";
 
 export function generateStaticParams() {
   return getProps().map((p) => ({ id: p.id }));
@@ -37,14 +44,15 @@ export default async function PropDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const detail = getPropDetail(id);
+  const detail = getOpportunityDetail(id);
   if (!detail) notFound();
 
-  const isHome = detail.game.homeTeamAbbr === detail.player.teamAbbr;
-  const opponentAbbr = isHome ? detail.game.awayTeamAbbr : detail.game.homeTeamAbbr;
-  const statKey = STAT_KEY[detail.propType];
-  const unit = PROP_TYPE_UNIT[detail.propType];
-  const kickoffDate = new Date(detail.game.kickoff).toLocaleString("en-US", {
+  const { prop, player, team, opponent, game, scorecard } = detail;
+  const isHome = game.homeTeamAbbr === player.teamAbbr;
+  const opponentAbbr = isHome ? game.awayTeamAbbr : game.homeTeamAbbr;
+  const statKey = STAT_KEY[prop.propType];
+  const unit = PROP_TYPE_UNIT[prop.propType];
+  const kickoffDate = new Date(game.kickoff).toLocaleString("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -55,20 +63,21 @@ export default async function PropDetailPage({
 
   const logValues = detail.recentLogs.map((log) => Number(log[statKey] ?? 0));
   const logAvg =
-    logValues.length > 0 ? logValues.reduce((a, b) => a + b, 0) / logValues.length : 0;
-  const overCount = logValues.filter((v) => v > detail.line).length;
+    logValues.length > 0
+      ? logValues.reduce((a, b) => a + b, 0) / logValues.length
+      : 0;
+  const overCount = logValues.filter((v) => v > prop.line).length;
   const hitRateLastN = logValues.length > 0 ? overCount / logValues.length : 0;
-  const maxBar = Math.max(detail.line, ...logValues, 1);
+  const maxBar = Math.max(prop.line, ...logValues, 1);
 
-  const projVsLine = detail.projection - detail.line;
-  const projVsLinePct = (projVsLine / detail.line) * 100;
-  const modelOver = detail.modelHitRateOver;
-  const bookOver = detail.bookImpliedOver;
-  const recommendedOdds =
-    detail.recommendation === "UNDER" ? detail.underOdds : detail.overOdds;
-  const recommendedImpliedProb = americanOddsToImpliedProb(recommendedOdds);
-  const recommendedModelProb =
-    detail.recommendation === "UNDER" ? 1 - modelOver : modelOver;
+  const projVsLine = prop.projection - prop.line;
+  const projVsLinePct = (projVsLine / prop.line) * 100;
+  const modelOver = scorecard.modelOverProbability;
+  const noVigOver = scorecard.noVigOverProbability;
+  const edge = selectedEdge(scorecard);
+  const modelSideProb = selectedModelProbability(scorecard);
+  const noVigSideProb = selectedNoVigProbability(scorecard);
+  const sideOdds = selectedSideOdds(prop, scorecard);
 
   return (
     <div className="space-y-6">
@@ -82,72 +91,81 @@ export default async function PropDetailPage({
       <section className="rounded-2xl border border-ink-800 bg-ink-900/60 p-6 shadow-card">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
-            <TeamBadge abbr={detail.player.teamAbbr} size="lg" />
+            <TeamBadge abbr={player.teamAbbr} size="lg" />
             <div>
               <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-ink-400">
-                <span>{detail.player.position}</span>
+                <span>{player.position}</span>
                 <span>·</span>
-                <span>{detail.team.city} {detail.team.name}</span>
+                <span>
+                  {team.city} {team.name}
+                </span>
               </div>
               <h1 className="mt-0.5 text-2xl font-semibold text-white">
-                {detail.player.fullName}
+                {player.fullName}
               </h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink-300">
-                <span>{PROP_TYPE_LABEL[detail.propType]}</span>
+                <span>{PROP_TYPE_LABEL[prop.propType]}</span>
                 <span className="text-ink-600">·</span>
                 <span className="tabular text-white">
-                  {formatLine(detail.line)} {unit}
+                  {formatLine(prop.line)} {unit}
                 </span>
                 <span className="text-ink-600">·</span>
-                <span className="text-ink-400">{detail.sportsbook}</span>
+                <span className="text-ink-400">{prop.sportsbook}</span>
               </div>
               <div className="mt-3 flex items-center gap-2 text-xs text-ink-400">
                 <span>{isHome ? "vs" : "@"}</span>
                 <TeamBadge abbr={opponentAbbr} size="sm" />
-                <span>{detail.opponent.city} {detail.opponent.name}</span>
+                <span>
+                  {opponent.city} {opponent.name}
+                </span>
                 <span className="text-ink-600">·</span>
-                <span>Week {detail.game.week} · {kickoffDate}</span>
+                <span>
+                  Week {game.week} · {kickoffDate}
+                </span>
               </div>
             </div>
           </div>
 
           <div className="flex flex-col items-start gap-3 sm:flex-row lg:flex-col lg:items-end">
-            <RecommendationPill rec={detail.recommendation} size="lg" />
+            <RecommendationPill rec={scorecard.recommendation} size="lg" />
             <div className="flex items-center gap-2">
-              <span className="text-[11px] uppercase tracking-wider text-ink-400">Edge</span>
-              <EdgeBadge edge={detail.edge} size="lg" />
+              <span className="text-[11px] uppercase tracking-wider text-ink-400">
+                Edge
+              </span>
+              <EdgeBadge edge={edge} size="lg" />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] uppercase tracking-wider text-ink-400">Confidence</span>
-              <ConfidenceMeter value={detail.confidence} />
+              <span className="text-[11px] uppercase tracking-wider text-ink-400">
+                Confidence
+              </span>
+              <ConfidenceMeter value={scorecard.confidence} />
             </div>
           </div>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Metric
-            label="Market line"
-            value={`${formatLine(detail.line)} ${unit}`}
-          />
+          <Metric label="Market line" value={`${formatLine(prop.line)} ${unit}`} />
           <Metric
             label="Model projection"
-            value={`${formatProjection(detail.projection, detail.propType)} ${unit}`}
+            value={`${formatProjection(prop.projection, prop.propType)} ${unit}`}
             sub={`${projVsLine >= 0 ? "+" : ""}${projVsLine.toFixed(1)} vs line · ${projVsLinePct >= 0 ? "+" : ""}${projVsLinePct.toFixed(1)}%`}
             tone={projVsLine >= 0 ? "positive" : "negative"}
           />
           <Metric
             label="Model hit rate (over)"
             value={`${(modelOver * 100).toFixed(1)}%`}
-            sub={`Book implied: ${(bookOver * 100).toFixed(1)}%`}
+            sub={`No-vig: ${(noVigOver * 100).toFixed(1)}%`}
           />
           <Metric
-            label="Recommended side edge"
-            value={formatEdge(Math.max(recommendedModelProb - recommendedImpliedProb, 0))}
-            sub={`Model ${(recommendedModelProb * 100).toFixed(1)}% vs book ${(recommendedImpliedProb * 100).toFixed(1)}%`}
-            tone={edgeTone(recommendedModelProb - recommendedImpliedProb)}
+            label={`${scorecard.selectedSide} side edge`}
+            value={formatEdge(edge)}
+            sub={`Model ${(modelSideProb * 100).toFixed(1)}% vs market ${(noVigSideProb * 100).toFixed(1)}% @ ${formatAmericanOdds(sideOdds)}`}
+            tone={edgeTone(edge)}
           />
         </div>
       </section>
+
+      <ScorecardDetailPanel scorecard={scorecard} />
 
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="rounded-xl border border-ink-800 bg-ink-900/60 p-5 shadow-card lg:col-span-2">
@@ -157,9 +175,13 @@ export default async function PropDetailPage({
             </h2>
             <span className="text-xs text-ink-500">
               Last {detail.recentLogs.length} games · Avg{" "}
-              <span className="tabular text-white">{logAvg.toFixed(1)} {unit}</span>{" "}
+              <span className="tabular text-white">
+                {logAvg.toFixed(1)} {unit}
+              </span>{" "}
               · Over rate{" "}
-              <span className="tabular text-white">{(hitRateLastN * 100).toFixed(0)}%</span>
+              <span className="tabular text-white">
+                {(hitRateLastN * 100).toFixed(0)}%
+              </span>
             </span>
           </div>
           <div className="overflow-x-auto">
@@ -168,7 +190,9 @@ export default async function PropDetailPage({
                 <tr>
                   <th className="py-2 pr-4 text-left font-medium">Week</th>
                   <th className="py-2 pr-4 text-left font-medium">Opp</th>
-                  <th className="py-2 pr-4 text-right font-medium">{PROP_TYPE_LABEL[detail.propType]}</th>
+                  <th className="py-2 pr-4 text-right font-medium">
+                    {PROP_TYPE_LABEL[prop.propType]}
+                  </th>
                   <th className="py-2 pr-4 text-right font-medium">vs Line</th>
                   <th className="py-2 text-left font-medium">Distribution</th>
                 </tr>
@@ -176,7 +200,7 @@ export default async function PropDetailPage({
               <tbody className="divide-y divide-ink-800">
                 {detail.recentLogs.map((log) => {
                   const value = Number(log[statKey] ?? 0);
-                  const diff = value - detail.line;
+                  const diff = value - prop.line;
                   return (
                     <tr key={`${log.season}-${log.week}`}>
                       <td className="py-2 pr-4 text-ink-300">W{log.week}</td>
@@ -201,7 +225,11 @@ export default async function PropDetailPage({
                         </span>
                       </td>
                       <td className="py-2">
-                        <DistributionBar value={value} line={detail.line} max={maxBar} />
+                        <DistributionBar
+                          value={value}
+                          line={prop.line}
+                          max={maxBar}
+                        />
                       </td>
                     </tr>
                   );
@@ -217,15 +245,15 @@ export default async function PropDetailPage({
           </h2>
           <div className="space-y-4">
             <ProbBar
-              label="Model probability"
+              label="Model probability (over)"
               value={modelOver}
-              caption={`Over ${formatLine(detail.line)}`}
+              caption={`Over ${formatLine(prop.line)}`}
               accent="positive"
             />
             <ProbBar
-              label="Book implied probability"
-              value={bookOver}
-              caption={`Over @ ${formatAmericanOdds(detail.overOdds)}`}
+              label="No-vig market probability"
+              value={noVigOver}
+              caption={`Over @ ${formatAmericanOdds(prop.overOdds)}`}
               accent="neutral"
             />
             <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
@@ -233,11 +261,11 @@ export default async function PropDetailPage({
                 Projection range (±1σ)
               </div>
               <div className="tabular mt-1 text-base text-white">
-                {(detail.projection - detail.projectionStdDev).toFixed(1)} –{" "}
-                {(detail.projection + detail.projectionStdDev).toFixed(1)} {unit}
+                {(prop.projection - prop.projectionStdDev).toFixed(1)} –{" "}
+                {(prop.projection + prop.projectionStdDev).toFixed(1)} {unit}
               </div>
               <div className="mt-1 text-[11px] text-ink-400">
-                σ = {detail.projectionStdDev.toFixed(1)} {unit}
+                σ = {prop.projectionStdDev.toFixed(1)} {unit}
               </div>
             </div>
           </div>
@@ -257,18 +285,24 @@ export default async function PropDetailPage({
                   <th className="py-2 pr-4 text-right font-medium">Line</th>
                   <th className="py-2 pr-4 text-right font-medium">Over</th>
                   <th className="py-2 pr-4 text-right font-medium">Under</th>
-                  <th className="py-2 text-right font-medium">Best for {detail.recommendation === "UNDER" ? "Under" : "Over"}</th>
+                  <th className="py-2 text-right font-medium">
+                    Best for {scorecard.selectedSide === "UNDER" ? "Under" : "Over"}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-800">
                 {detail.altLines.map((alt) => {
                   const bestOddsForSide =
-                    detail.recommendation === "UNDER" ? alt.underOdds : alt.overOdds;
+                    scorecard.selectedSide === "UNDER"
+                      ? alt.underOdds
+                      : alt.overOdds;
                   const bestOddsAll = detail.altLines.reduce(
                     (acc, x) =>
                       Math.max(
                         acc,
-                        detail.recommendation === "UNDER" ? x.underOdds : x.overOdds,
+                        scorecard.selectedSide === "UNDER"
+                          ? x.underOdds
+                          : x.overOdds,
                       ),
                     -Infinity,
                   );
