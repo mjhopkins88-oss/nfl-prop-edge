@@ -201,6 +201,100 @@ export default function BacktestPage() {
                 />
               </FixturePanel>
             )}
+            {fixture.byLineBucket.length > 0 && (
+              <FixturePanel title="Performance by line bucket">
+                <SimpleTable
+                  rows={fixture.byLineBucket.map((b) => ({
+                    label: b.bucketLabel,
+                    bets: b.bets,
+                    hitRate: b.hitRate,
+                    roiPct: b.roiPct,
+                  }))}
+                />
+              </FixturePanel>
+            )}
+            {fixture.byPostmortem.length > 0 && (
+              <FixturePanel title="Performance by postmortem tag">
+                <SimpleTable
+                  rows={fixture.byPostmortem.map((b) => ({
+                    label: prettyTag(b.bucketLabel),
+                    bets: b.evaluated,
+                    hitRate: b.hitRate,
+                    roiPct: b.roiPct,
+                  }))}
+                />
+              </FixturePanel>
+            )}
+            {fixture.byQualifiedVsPassed.length > 0 && (
+              <FixturePanel title="Qualified bets vs passed props">
+                <SimpleTable
+                  rows={fixture.byQualifiedVsPassed.map((b) => ({
+                    label: b.bucketLabel,
+                    bets: b.evaluated,
+                    hitRate: b.hitRate,
+                    roiPct: b.roiPct,
+                  }))}
+                />
+              </FixturePanel>
+            )}
+          </div>
+
+          <div className="mt-6 rounded-2xl bg-white/70 p-4 ring-1 ring-ink-200/40 backdrop-blur">
+            <div className="mb-3 flex items-center gap-2">
+              <SparkleIcon className="h-4 w-4 text-amber-700" />
+              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700">
+                Model improvement signals
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <AuditCell label="Best prop type" value={fixture.audit.bestPropType} positive />
+              <AuditCell label="Worst prop type" value={fixture.audit.worstPropType} negative />
+              <AuditCell label="Best line bucket" value={fixture.audit.bestLineBucket} positive />
+              <AuditCell label="Worst line bucket" value={fixture.audit.worstLineBucket} negative />
+              <AuditCell
+                label="Highest-ROI edge bucket"
+                value={fixture.audit.highestRoiEdgeBucket}
+                positive
+              />
+              <AuditCell
+                label="Lowest-ROI edge bucket"
+                value={fixture.audit.lowestRoiEdgeBucket}
+                negative
+              />
+              <AuditCell
+                label="Filter that saved the most losses"
+                value={fixture.audit.filterSavedMostLosses && prettyTag(fixture.audit.filterSavedMostLosses)}
+                positive
+              />
+              <AuditCell
+                label="Filter that may be too conservative"
+                value={fixture.audit.filterTooConservative && prettyTag(fixture.audit.filterTooConservative)}
+                negative
+              />
+              <AuditCell
+                label="Best confidence tier"
+                value={fixture.audit.bestConfidenceTier}
+                positive
+              />
+              <AuditCell
+                label="PASS counterfactual hit rate"
+                value={
+                  typeof fixture.audit.passCounterfactualHitRate === "number"
+                    ? `${(fixture.audit.passCounterfactualHitRate * 100).toFixed(0)}%`
+                    : undefined
+                }
+              />
+            </div>
+            {fixture.audit.notes.length > 0 && (
+              <ul className="mt-4 space-y-1 text-xs text-ink-700">
+                {fixture.audit.notes.map((n, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amber-600" />
+                    <span>{n}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
       )}
@@ -668,5 +762,41 @@ function SimpleTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+function prettyTag(tag: string): string {
+  return tag
+    .toLowerCase()
+    .split("_")
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(" ");
+}
+
+function AuditCell({
+  label,
+  value,
+  positive,
+  negative,
+}: {
+  label: string;
+  value: string | undefined;
+  positive?: boolean;
+  negative?: boolean;
+}) {
+  const tone = positive
+    ? "text-sea-700"
+    : negative
+      ? "text-coral-700"
+      : "text-ink-900";
+  return (
+    <div className="rounded-xl bg-white/70 px-3 py-2 ring-1 ring-ink-200/40">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-500">
+        {label}
+      </div>
+      <div className={`mt-0.5 text-sm font-semibold ${tone}`}>
+        {value ?? "—"}
+      </div>
+    </div>
   );
 }

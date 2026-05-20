@@ -1,8 +1,8 @@
 /**
  * Backtest metrics & bucketed summaries.
  *
- * Pure math; no IO. Consumes `BacktestGradedResult[]` and produces
- * aggregates plus the per-bucket slices that the report / page show.
+ * Pure math; no IO. Consumes `BacktestEvaluatedProp[]` and produces
+ * the aggregates + slices the report and page show.
  */
 
 import type { PropType } from "../types";
@@ -11,10 +11,18 @@ import type {
   BacktestConfidenceBucketSummary,
   BacktestDisqualifierSummary,
   BacktestEdgeBucketSummary,
-  BacktestGradedResult,
+  BacktestEvaluatedProp,
+  BacktestModelAuditSummary,
+  BacktestPerformanceBreakdown,
   BacktestPropTypeSummary,
   BacktestWeatherRiskBucketSummary,
 } from "./types";
+import {
+  getCoachingUncertaintyBucket,
+  getLineBucket,
+  getRiskBucket,
+  getWeatherRiskBucket,
+} from "./line-buckets";
 
 const PROP_TYPES: PropType[] = [
   "PASSING_ATTEMPTS",
@@ -26,71 +34,74 @@ const PROP_TYPES: PropType[] = [
   "RUSHING_YARDS",
 ];
 
-export function calculateHitRate(results: BacktestGradedResult[]): number {
-  const bets = results.filter((r) => r.bet && r.outcome !== "PUSH" && r.outcome !== "NO_RESULT");
+const isBet = (r: BacktestEvaluatedProp) => r.qualified && r.recommendation !== "PASS";
+const isDecided = (r: BacktestEvaluatedProp) =>
+  r.result === "WIN" || r.result === "LOSS" || r.result === "PUSH";
+
+export function calculateHitRate(
+  results: BacktestEvaluatedProp[],
+): number {
+  const bets = results.filter(
+    (r) => isBet(r) && r.result !== "PUSH" && r.result !== "NO_RESULT",
+  );
   if (bets.length === 0) return 0;
-  const wins = bets.filter((r) => r.outcome === "WIN").length;
+  const wins = bets.filter((r) => r.result === "WIN").length;
   return wins / bets.length;
 }
 
-export function calculateROI(results: BacktestGradedResult[]): number {
-  const bets = results.filter((r) => r.bet);
+export function calculateROI(results: BacktestEvaluatedProp[]): number {
+  const bets = results.filter(isBet);
   if (bets.length === 0) return 0;
   const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
   return profit / bets.length;
 }
 
-export function calculateAverageEdge(results: BacktestGradedResult[]): number {
-  const bets = results.filter((r) => r.bet);
+export function calculateAverageEdge(
+  results: BacktestEvaluatedProp[],
+): number {
+  const bets = results.filter(isBet);
   if (bets.length === 0) return 0;
-  return bets.reduce((acc, r) => acc + r.edgeAtRecommendation, 0) / bets.length;
+  return bets.reduce((acc, r) => acc + r.edge, 0) / bets.length;
 }
 
 export function calculateAverageExpectedValue(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): number {
-  // EV per unit = modelProb * payout - (1 - modelProb) (i.e. lose 1u).
-  // We approximate modelProb from the scorecard.
-  const bets = results.filter((r) => r.bet);
+  const bets = results.filter(isBet);
   if (bets.length === 0) return 0;
   let total = 0;
   for (const r of bets) {
-    const sc = r.candidate.scorecard;
     const modelProb =
-      sc.recommendation === "OVER"
-        ? sc.modelOverProbability
-        : sc.modelUnderProbability;
-    const odds =
-      sc.recommendation === "OVER" ? sc.overOdds : sc.underOdds;
-    const payout = odds > 0 ? odds / 100 : 100 / -odds;
+      r.selectedSide === "OVER"
+        ? r.modelOverProbability
+        : r.modelUnderProbability;
+    const payout = americanPayout(r.selectedOdds);
     total += modelProb * payout - (1 - modelProb);
   }
   return total / bets.length;
 }
 
-export function calculateBrierScore(results: BacktestGradedResult[]): number {
-  // Brier across qualified bets with a graded outcome.
-  const scored = results.filter(
-    (r) =>
-      r.bet &&
-      (r.outcome === "WIN" || r.outcome === "LOSS" || r.outcome === "PUSH"),
-  );
+export function calculateBrierScore(
+  results: BacktestEvaluatedProp[],
+): number {
+  const scored = results.filter((r) => isBet(r) && isDecided(r));
   if (scored.length === 0) return 0;
   let sum = 0;
   for (const r of scored) {
-    const sc = r.candidate.scorecard;
     const modelProb =
-      sc.recommendation === "OVER"
-        ? sc.modelOverProbability
-        : sc.modelUnderProbability;
-    const actual = r.outcome === "WIN" ? 1 : r.outcome === "PUSH" ? 0.5 : 0;
+      r.selectedSide === "OVER"
+        ? r.modelOverProbability
+        : r.modelUnderProbability;
+    const actual = r.result === "WIN" ? 1 : r.result === "PUSH" ? 0.5 : 0;
     sum += (modelProb - actual) ** 2;
   }
   return sum / scored.length;
 }
 
-export function calculateMaxDrawdown(results: BacktestGradedResult[]): number {
-  const bets = results.filter((r) => r.bet);
+export function calculateMaxDrawdown(
+  results: BacktestEvaluatedProp[],
+): number {
+  const bets = results.filter(isBet);
   let running = 0;
   let peak = 0;
   let maxDd = 0;
@@ -103,48 +114,108 @@ export function calculateMaxDrawdown(results: BacktestGradedResult[]): number {
   return maxDd;
 }
 
-function summarizeBets(bets: BacktestGradedResult[]) {
-  const wins = bets.filter((r) => r.outcome === "WIN").length;
-  const losses = bets.filter((r) => r.outcome === "LOSS").length;
-  const pushes = bets.filter((r) => r.outcome === "PUSH").length;
-  const decided = wins + losses + pushes;
+// --- generic per-bucket aggregator -----------------------------------
+
+function aggregate(
+  bucketLabel: string,
+  evaluated: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown {
+  const bets = evaluated.filter(isBet);
+  const wins = bets.filter((r) => r.result === "WIN").length;
+  const losses = bets.filter((r) => r.result === "LOSS").length;
+  const pushes = bets.filter((r) => r.result === "PUSH").length;
+  const passes = evaluated.filter((r) => !isBet(r)).length;
   const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
-  const decidedNoPush = wins + losses;
+  const decided = wins + losses;
+  const averageEdge =
+    evaluated.length > 0
+      ? evaluated.reduce((acc, r) => acc + r.edge, 0) / evaluated.length
+      : 0;
+  const averageEvUnits =
+    bets.length > 0
+      ? bets.reduce((acc, r) => {
+          const p =
+            r.selectedSide === "OVER"
+              ? r.modelOverProbability
+              : r.modelUnderProbability;
+          return acc + (p * americanPayout(r.selectedOdds) - (1 - p));
+        }, 0) / bets.length
+      : 0;
+  const averageProfitLossUnits =
+    bets.length > 0 ? profit / bets.length : 0;
+  const averageModelProbability =
+    evaluated.length > 0
+      ? evaluated.reduce((acc, r) => {
+          const p =
+            r.selectedSide === "OVER"
+              ? r.modelOverProbability
+              : r.modelUnderProbability;
+          return acc + p;
+        }, 0) / evaluated.length
+      : 0;
+  const averageMarketProbability =
+    evaluated.length > 0
+      ? evaluated.reduce((acc, r) => {
+          const noVigOver =
+            r.marketOverProbability /
+            (r.marketOverProbability + r.marketUnderProbability || 1);
+          const p =
+            r.selectedSide === "OVER" ? noVigOver : 1 - noVigOver;
+          return acc + p;
+        }, 0) / evaluated.length
+      : 0;
   return {
+    bucketLabel,
+    evaluated: evaluated.length,
     bets: bets.length,
     wins,
     losses,
     pushes,
-    profitUnits: profit,
+    passes,
+    hitRate: decided > 0 ? wins / decided : 0,
     roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
-    hitRate: decidedNoPush > 0 ? wins / decidedNoPush : 0,
-    decided,
+    averageEdge,
+    averageEvUnits,
+    averageProfitLossUnits,
+    averageModelProbability,
+    averageMarketProbability,
+    profitUnits: profit,
   };
 }
 
+function americanPayout(odds: number): number {
+  return odds > 0 ? odds / 100 : 100 / -odds;
+}
+
+// --- legacy-shape summaries (kept for backwards compatibility) -------
+
 export function summarizeByPropType(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestPropTypeSummary[] {
   return PROP_TYPES.map((pt) => {
-    const evaluated = results.filter((r) => r.candidate.propType === pt);
-    const bets = evaluated.filter((r) => r.bet);
-    const s = summarizeBets(bets);
+    const evaluated = results.filter((r) => r.propType === pt);
+    const bets = evaluated.filter(isBet);
+    const wins = bets.filter((r) => r.result === "WIN").length;
+    const losses = bets.filter((r) => r.result === "LOSS").length;
+    const pushes = bets.filter((r) => r.result === "PUSH").length;
+    const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+    const decided = wins + losses;
     return {
       propType: pt,
       evaluated: evaluated.length,
-      bets: s.bets,
-      wins: s.wins,
-      losses: s.losses,
-      pushes: s.pushes,
-      hitRate: s.hitRate,
-      roiPct: s.roiPct,
-      profitUnits: s.profitUnits,
+      bets: bets.length,
+      wins,
+      losses,
+      pushes,
+      hitRate: decided > 0 ? wins / decided : 0,
+      roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+      profitUnits: profit,
     };
   }).filter((s) => s.evaluated > 0);
 }
 
 export function summarizeByPrimaryDisqualifier(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestDisqualifierSummary[] {
   const counts = new Map<string, number>();
   for (const r of results) {
@@ -158,75 +229,76 @@ export function summarizeByPrimaryDisqualifier(
 }
 
 function simplifyDisqualifier(raw: string): string {
-  // Collapse score values so "Edge of +3.5% on OVER below 4.0% threshold"
-  // groups with "Edge of +2.5% on OVER below 4.0% threshold".
   if (raw.toLowerCase().startsWith("edge of")) return "Edge below threshold";
-  // "Injury context score 0.30 below 0.55 gate" → "Injury context gate"
   const m = raw.match(/^([A-Za-z\s/]+?)\s+score\s+\d/i);
   if (m) return `${m[1].trim()} gate`;
   return raw;
 }
 
-const EDGE_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+const EDGE_BUCKETS_LEGACY: Array<{ label: string; lo: number; hi: number }> = [
   { label: "< 0%", lo: -Infinity, hi: 0 },
   { label: "0–2%", lo: 0, hi: 0.02 },
   { label: "2–4%", lo: 0.02, hi: 0.04 },
   { label: "4–6%", lo: 0.04, hi: 0.06 },
-  { label: "6–10%", lo: 0.06, hi: 0.10 },
-  { label: "≥ 10%", lo: 0.10, hi: Infinity },
+  { label: "6–10%", lo: 0.06, hi: 0.1 },
+  { label: "≥ 10%", lo: 0.1, hi: Infinity },
 ];
 
 export function summarizeByEdgeBucket(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestEdgeBucketSummary[] {
-  return EDGE_BUCKETS.map((b) => {
+  return EDGE_BUCKETS_LEGACY.map((b) => {
     const inBucket = results.filter(
-      (r) => r.edgeAtRecommendation >= b.lo && r.edgeAtRecommendation < b.hi,
+      (r) => r.edge >= b.lo && r.edge < b.hi,
     );
-    const bets = inBucket.filter((r) => r.bet);
-    const s = summarizeBets(bets);
+    const bets = inBucket.filter(isBet);
+    const wins = bets.filter((r) => r.result === "WIN").length;
+    const losses = bets.filter((r) => r.result === "LOSS").length;
+    const pushes = bets.filter((r) => r.result === "PUSH").length;
+    const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+    const decided = wins + losses;
     return {
       label: b.label,
       loEdge: b.lo === -Infinity ? -1 : b.lo,
       hiEdge: b.hi === Infinity ? 1 : b.hi,
-      bets: s.bets,
-      wins: s.wins,
-      losses: s.losses,
-      pushes: s.pushes,
-      hitRate: s.hitRate,
-      roiPct: s.roiPct,
-      profitUnits: s.profitUnits,
+      bets: bets.length,
+      wins,
+      losses,
+      pushes,
+      hitRate: decided > 0 ? wins / decided : 0,
+      roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+      profitUnits: profit,
     };
   }).filter((s) => s.bets > 0 || s.wins > 0 || s.losses > 0);
 }
 
 export function summarizeByConfidenceBucket(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestConfidenceBucketSummary[] {
   const tiers: Array<"High" | "Medium" | "Low"> = ["High", "Medium", "Low"];
   return tiers.map((tier) => {
-    const bets = results.filter((r) => {
-      if (!r.bet) return false;
-      const c = r.candidate.scorecard.confidence;
-      if (tier === "High") return c >= 0.8;
-      if (tier === "Medium") return c >= 0.6 && c < 0.8;
-      return c < 0.6;
-    });
-    const s = summarizeBets(bets);
+    const bets = results.filter(
+      (r) => isBet(r) && r.confidenceBucket === tier,
+    );
+    const wins = bets.filter((r) => r.result === "WIN").length;
+    const losses = bets.filter((r) => r.result === "LOSS").length;
+    const pushes = bets.filter((r) => r.result === "PUSH").length;
+    const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+    const decided = wins + losses;
     return {
       label: tier,
-      bets: s.bets,
-      wins: s.wins,
-      losses: s.losses,
-      pushes: s.pushes,
-      hitRate: s.hitRate,
-      roiPct: s.roiPct,
-      profitUnits: s.profitUnits,
+      bets: bets.length,
+      wins,
+      losses,
+      pushes,
+      hitRate: decided > 0 ? wins / decided : 0,
+      roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+      profitUnits: profit,
     };
   });
 }
 
-const COACHING_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+const COACHING_BUCKETS_LEGACY: Array<{ label: string; lo: number; hi: number }> = [
   { label: "None / low (< 20)", lo: 0, hi: 20 },
   { label: "Mild (20–39)", lo: 20, hi: 40 },
   { label: "Moderate (40–59)", lo: 40, hi: 60 },
@@ -235,58 +307,303 @@ const COACHING_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
 ];
 
 export function summarizeByCoachingUncertaintyBucket(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestCoachingUncertaintyBucketSummary[] {
-  return COACHING_BUCKETS.map((b) => {
-    const bets = results.filter((r) => {
-      if (!r.bet) return false;
-      const ct = r.candidate.scorecard.coachingTransition;
-      const penalty = ct?.scores.coachingUncertaintyPenalty ?? 0;
-      return penalty >= b.lo && penalty < b.hi;
-    });
-    const s = summarizeBets(bets);
+  return COACHING_BUCKETS_LEGACY.map((b) => {
+    const bets = results.filter(
+      (r) =>
+        isBet(r) &&
+        r.coachingUncertaintyScore >= b.lo &&
+        r.coachingUncertaintyScore < b.hi,
+    );
+    const wins = bets.filter((r) => r.result === "WIN").length;
+    const losses = bets.filter((r) => r.result === "LOSS").length;
+    const pushes = bets.filter((r) => r.result === "PUSH").length;
+    const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+    const decided = wins + losses;
     return {
       label: b.label,
       loPenalty: b.lo,
       hiPenalty: b.hi,
-      bets: s.bets,
-      wins: s.wins,
-      losses: s.losses,
-      pushes: s.pushes,
-      hitRate: s.hitRate,
-      roiPct: s.roiPct,
-      profitUnits: s.profitUnits,
+      bets: bets.length,
+      wins,
+      losses,
+      pushes,
+      hitRate: decided > 0 ? wins / decided : 0,
+      roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+      profitUnits: profit,
     };
   }).filter((b) => b.bets > 0);
 }
 
-const WEATHER_BUCKETS: Array<{ label: string; lo: number; hi: number }> = [
+const WEATHER_BUCKETS_LEGACY: Array<{ label: string; lo: number; hi: number }> = [
   { label: "Risk (< 0.50)", lo: 0, hi: 0.5 },
   { label: "Borderline (0.50–0.74)", lo: 0.5, hi: 0.75 },
   { label: "Clean (≥ 0.75)", lo: 0.75, hi: 1.01 },
 ];
 
 export function summarizeByWeatherRiskBucket(
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): BacktestWeatherRiskBucketSummary[] {
-  return WEATHER_BUCKETS.map((b) => {
-    const bets = results.filter((r) => {
-      if (!r.bet) return false;
-      const w = r.candidate.scorecard.weatherEnvironmentScore;
-      return w >= b.lo && w < b.hi;
-    });
-    const s = summarizeBets(bets);
+  return WEATHER_BUCKETS_LEGACY.map((b) => {
+    const bets = results.filter(
+      (r) =>
+        isBet(r) &&
+        r.weatherRiskScore >= b.lo &&
+        r.weatherRiskScore < b.hi,
+    );
+    const wins = bets.filter((r) => r.result === "WIN").length;
+    const losses = bets.filter((r) => r.result === "LOSS").length;
+    const pushes = bets.filter((r) => r.result === "PUSH").length;
+    const profit = bets.reduce((acc, r) => acc + r.profitLossUnits, 0);
+    const decided = wins + losses;
     return {
       label: b.label,
       loScore: b.lo,
       hiScore: b.hi,
-      bets: s.bets,
-      wins: s.wins,
-      losses: s.losses,
-      pushes: s.pushes,
-      hitRate: s.hitRate,
-      roiPct: s.roiPct,
-      profitUnits: s.profitUnits,
+      bets: bets.length,
+      wins,
+      losses,
+      pushes,
+      hitRate: decided > 0 ? wins / decided : 0,
+      roiPct: bets.length > 0 ? (profit / bets.length) * 100 : 0,
+      profitUnits: profit,
     };
   }).filter((b) => b.bets > 0);
+}
+
+// --- extended-shape breakdowns ---------------------------------------
+
+export function summarizeByLineBucket(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    const key = `${r.propType} · ${r.lineBucket}`;
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+export function summarizeByPostmortem(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    for (const tag of r.postmortemTags) {
+      const arr = buckets.get(tag) ?? [];
+      arr.push(r);
+      buckets.set(tag, arr);
+    }
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+export function summarizeByRecommendationSide(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const sides: Array<"OVER" | "UNDER"> = ["OVER", "UNDER"];
+  return sides
+    .map((s) =>
+      aggregate(
+        s,
+        results.filter((r) => r.selectedSide === s),
+      ),
+    )
+    .filter((b) => b.evaluated > 0);
+}
+
+export function summarizeByRoleStability(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    const key = getRiskBucket(r.roleStabilityScore);
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+export function summarizeByQualifiedVsPassed(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const qualified = results.filter(isBet);
+  const passed = results.filter((r) => !isBet(r));
+  return [
+    aggregate("Qualified bets", qualified),
+    aggregate("Passed (not bet)", passed),
+  ];
+}
+
+// --- new bucket helpers wrapping the rich aggregator ------------------
+
+export function summarizeByPropTypeRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  return PROP_TYPES.map((pt) =>
+    aggregate(
+      pt,
+      results.filter((r) => r.propType === pt),
+    ),
+  ).filter((b) => b.evaluated > 0);
+}
+
+export function summarizeByEdgeBucketRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  return EDGE_BUCKETS_LEGACY.map((b) =>
+    aggregate(
+      b.label,
+      results.filter((r) => r.edge >= b.lo && r.edge < b.hi),
+    ),
+  ).filter((b) => b.evaluated > 0);
+}
+
+export function summarizeByConfidenceBucketRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const tiers: Array<"High" | "Medium" | "Low"> = ["High", "Medium", "Low"];
+  return tiers.map((tier) =>
+    aggregate(
+      tier,
+      results.filter((r) => r.confidenceBucket === tier),
+    ),
+  );
+}
+
+export function summarizeByDisqualifierRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    if (!r.primaryDisqualifier) continue;
+    const key = simplifyDisqualifier(r.primaryDisqualifier);
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+export function summarizeByCoachingUncertaintyRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    const key = getCoachingUncertaintyBucket(r.coachingUncertaintyScore);
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+export function summarizeByWeatherRiskRich(
+  results: BacktestEvaluatedProp[],
+): BacktestPerformanceBreakdown[] {
+  const buckets = new Map<string, BacktestEvaluatedProp[]>();
+  for (const r of results) {
+    const key = getWeatherRiskBucket(r.weatherRiskScore);
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([label, group]) => aggregate(label, group))
+    .sort((a, b) => b.evaluated - a.evaluated);
+}
+
+// --- model audit -----------------------------------------------------
+
+export function buildModelAuditSummary(
+  results: BacktestEvaluatedProp[],
+  byPropType: BacktestPropTypeSummary[],
+  byLineBucket: BacktestPerformanceBreakdown[],
+  byEdgeBucket: BacktestEdgeBucketSummary[],
+  byConfidence: BacktestConfidenceBucketSummary[],
+  byPostmortem: BacktestPerformanceBreakdown[],
+): BacktestModelAuditSummary {
+  const notes: string[] = [];
+  const propTypeWithBets = byPropType.filter((s) => s.bets >= 1);
+  const bestPropType = propTypeWithBets.sort(
+    (a, b) => b.roiPct - a.roiPct,
+  )[0]?.propType;
+  const worstPropType = propTypeWithBets.sort(
+    (a, b) => a.roiPct - b.roiPct,
+  )[0]?.propType;
+  const lineBucketWithBets = byLineBucket.filter((b) => b.bets >= 1);
+  const bestLineBucket = lineBucketWithBets.sort(
+    (a, b) => b.roiPct - a.roiPct,
+  )[0]?.bucketLabel;
+  const worstLineBucket = lineBucketWithBets.sort(
+    (a, b) => a.roiPct - b.roiPct,
+  )[0]?.bucketLabel;
+  const edgeWithBets = byEdgeBucket.filter((b) => b.bets >= 1);
+  const highestRoiEdgeBucket = edgeWithBets.sort(
+    (a, b) => b.roiPct - a.roiPct,
+  )[0]?.label;
+  const lowestRoiEdgeBucket = edgeWithBets.sort(
+    (a, b) => a.roiPct - b.roiPct,
+  )[0]?.label;
+  const confWithBets = byConfidence.filter((b) => b.bets >= 1);
+  const bestConfidenceTier = confWithBets.sort(
+    (a, b) => b.roiPct - a.roiPct,
+  )[0]?.label;
+
+  // Filter signal interpretation: which postmortem tags fired most?
+  const filterCorrectlyAvoided = byPostmortem.find(
+    (b) => b.bucketLabel === "FILTER_CORRECTLY_AVOIDED",
+  );
+  const filterTooConservative = byPostmortem.find(
+    (b) => b.bucketLabel === "FILTER_TOO_CONSERVATIVE",
+  );
+  if (filterCorrectlyAvoided) {
+    notes.push(
+      `Filters correctly avoided ${filterCorrectlyAvoided.evaluated} prop${filterCorrectlyAvoided.evaluated === 1 ? "" : "s"} that would have lost.`,
+    );
+  }
+  if (filterTooConservative) {
+    notes.push(
+      `Filters may have been too conservative on ${filterTooConservative.evaluated} prop${filterTooConservative.evaluated === 1 ? "" : "s"} the model leaned toward correctly.`,
+    );
+  }
+
+  const passes = results.filter((r) => r.result === "PASS");
+  const passWins = passes.filter(
+    (r) => r.counterfactualResult === "WIN",
+  ).length;
+  const passDecided = passes.filter(
+    (r) =>
+      r.counterfactualResult === "WIN" || r.counterfactualResult === "LOSS",
+  ).length;
+  const passCounterfactualHitRate =
+    passDecided > 0 ? passWins / passDecided : undefined;
+
+  return {
+    bestPropType,
+    worstPropType,
+    bestLineBucket,
+    worstLineBucket,
+    bestConfidenceTier,
+    filterSavedMostLosses: filterCorrectlyAvoided?.bucketLabel,
+    filterTooConservative: filterTooConservative?.bucketLabel,
+    highestRoiEdgeBucket,
+    lowestRoiEdgeBucket,
+    passCounterfactualHitRate,
+    notes,
+  };
 }

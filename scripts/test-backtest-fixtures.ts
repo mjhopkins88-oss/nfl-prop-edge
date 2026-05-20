@@ -115,7 +115,7 @@ check(
 );
 
 const coachingContextResults = results.filter(
-  (r) => r.candidate.scorecard.coachingTransition !== undefined,
+  (r) => r.scorecardSnapshot.coachingTransition !== undefined,
 );
 check(
   "at least one prop carries coaching transition context",

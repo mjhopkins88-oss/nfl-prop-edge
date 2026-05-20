@@ -1,5 +1,6 @@
 /**
- * Backtest reporting — writes the summary + per-bet results to disk.
+ * Backtest reporting — writes the summary + per-bet results + per-
+ * bucket breakdowns to disk.
  *
  * Pure file IO; no API calls.
  */
@@ -7,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type {
-  BacktestGradedResult,
+  BacktestEvaluatedProp,
   BacktestSummary,
 } from "./types";
 
@@ -18,59 +19,81 @@ export function writeSummaryJson(filePath: string, summary: BacktestSummary): vo
 
 export function writeResultsJson(
   filePath: string,
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): void {
   ensureDir(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(results, null, 2));
 }
 
+export function writeBreakdownJson<T>(filePath: string, data: T): void {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
 const RESULTS_CSV_COLUMNS = [
-  "propMarketId",
-  "playerName",
-  "teamAbbr",
-  "opponentAbbr",
-  "propType",
+  "id",
   "season",
   "week",
-  "marketLine",
+  "playerName",
+  "team",
+  "opponent",
+  "propType",
+  "line",
+  "lineBucket",
+  "selectedSide",
+  "selectedOdds",
+  "edge",
+  "edgeBucket",
+  "confidence",
+  "confidenceBucket",
   "recommendation",
   "qualified",
-  "bet",
-  "edgeAtRecommendation",
-  "actualStat",
-  "outcome",
-  "profitLossUnits",
   "primaryDisqualifier",
+  "actualStat",
+  "result",
+  "profitLossUnits",
+  "counterfactualResult",
+  "counterfactualProfitLossUnits",
+  "postmortemTags",
 ];
 
 export function writeResultsCsv(
   filePath: string,
-  results: BacktestGradedResult[],
+  results: BacktestEvaluatedProp[],
 ): void {
   ensureDir(path.dirname(filePath));
   const lines = [RESULTS_CSV_COLUMNS.join(",")];
   for (const r of results) {
-    const c = r.candidate;
     const row = {
-      propMarketId: c.propMarketId,
-      playerName: c.playerName,
-      teamAbbr: c.teamAbbr,
-      opponentAbbr: c.opponentAbbr,
-      propType: c.propType,
-      season: c.season,
-      week: c.week,
-      marketLine: c.marketLine,
+      id: r.id,
+      season: r.season,
+      week: r.week,
+      playerName: r.playerName,
+      team: r.team,
+      opponent: r.opponent,
+      propType: r.propType,
+      line: r.line,
+      lineBucket: r.lineBucket,
+      selectedSide: r.selectedSide,
+      selectedOdds: r.selectedOdds,
+      edge: r.edge.toFixed(4),
+      edgeBucket: r.edgeBucket,
+      confidence: r.confidence.toFixed(3),
+      confidenceBucket: r.confidenceBucket,
       recommendation: r.recommendation,
       qualified: r.qualified,
-      bet: r.bet,
-      edgeAtRecommendation: r.edgeAtRecommendation.toFixed(4),
-      actualStat: r.actualStat ?? "",
-      outcome: r.outcome,
-      profitLossUnits: r.profitLossUnits.toFixed(4),
       primaryDisqualifier: r.primaryDisqualifier ?? "",
+      actualStat: r.actualStat ?? "",
+      result: r.result,
+      profitLossUnits: r.profitLossUnits.toFixed(4),
+      counterfactualResult: r.counterfactualResult,
+      counterfactualProfitLossUnits: r.counterfactualProfitLossUnits.toFixed(4),
+      postmortemTags: r.postmortemTags.join("|"),
     };
     lines.push(
-      RESULTS_CSV_COLUMNS.map((c2) => csvEscape((row as Record<string, unknown>)[c2])).join(","),
+      RESULTS_CSV_COLUMNS.map((c) =>
+        csvEscape((row as Record<string, unknown>)[c]),
+      ).join(","),
     );
   }
   fs.writeFileSync(filePath, lines.join("\n") + "\n");

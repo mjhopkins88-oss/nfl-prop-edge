@@ -18,6 +18,7 @@ import { buildPregameFeatureRow } from "./feature-builder";
 import { buildScorecardInputFromFeatureRow } from "./projection-adapter";
 import { gradeBacktestResults } from "./grading";
 import {
+  buildModelAuditSummary,
   calculateAverageEdge,
   calculateAverageExpectedValue,
   calculateBrierScore,
@@ -27,8 +28,13 @@ import {
   summarizeByCoachingUncertaintyBucket,
   summarizeByConfidenceBucket,
   summarizeByEdgeBucket,
+  summarizeByLineBucket,
+  summarizeByPostmortem,
   summarizeByPrimaryDisqualifier,
   summarizeByPropType,
+  summarizeByQualifiedVsPassed,
+  summarizeByRecommendationSide,
+  summarizeByRoleStability,
   summarizeByWeatherRiskBucket,
 } from "./metrics";
 import {
@@ -37,7 +43,7 @@ import {
 } from "./data-loader";
 import type {
   BacktestCandidate,
-  BacktestGradedResult,
+  BacktestEvaluatedProp,
   BacktestScope,
   BacktestSummary,
 } from "./types";
@@ -66,7 +72,7 @@ export interface RunBacktestArgs {
 
 export interface RunBacktestOutput {
   summary: BacktestSummary;
-  results: BacktestGradedResult[];
+  results: BacktestEvaluatedProp[];
 }
 
 export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
@@ -131,12 +137,15 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
     playerWeekStats: fixtures.playerWeekStats,
   });
 
+  const isBet = (r: BacktestEvaluatedProp) =>
+    r.qualified && r.recommendation !== "PASS";
+
   const evaluated = results.length;
-  const qualifiedBets = results.filter((r) => r.bet).length;
-  const passes = results.filter((r) => !r.bet).length;
-  const wins = results.filter((r) => r.outcome === "WIN").length;
-  const losses = results.filter((r) => r.outcome === "LOSS").length;
-  const pushes = results.filter((r) => r.outcome === "PUSH").length;
+  const qualifiedBets = results.filter(isBet).length;
+  const passes = results.filter((r) => !isBet(r)).length;
+  const wins = results.filter((r) => r.result === "WIN").length;
+  const losses = results.filter((r) => r.result === "LOSS").length;
+  const pushes = results.filter((r) => r.result === "PUSH").length;
 
   const byPropType = summarizeByPropType(results);
   const byDisqualifier = summarizeByPrimaryDisqualifier(results);
@@ -144,6 +153,11 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
   const byConfidence = summarizeByConfidenceBucket(results);
   const byCoachingUncertainty = summarizeByCoachingUncertaintyBucket(results);
   const byWeatherRisk = summarizeByWeatherRiskBucket(results);
+  const byLineBucket = summarizeByLineBucket(results);
+  const byPostmortem = summarizeByPostmortem(results);
+  const byRecommendationSide = summarizeByRecommendationSide(results);
+  const byRoleStability = summarizeByRoleStability(results);
+  const byQualifiedVsPassed = summarizeByQualifiedVsPassed(results);
 
   const propTypeWithBets = byPropType.filter((s) => s.bets >= 2);
   const bestPropType =
@@ -156,6 +170,15 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
   const profitUnits = results.reduce(
     (acc, r) => acc + r.profitLossUnits,
     0,
+  );
+
+  const audit = buildModelAuditSummary(
+    results,
+    byPropType,
+    byLineBucket,
+    byEdgeBucket,
+    byConfidence,
+    byPostmortem,
   );
 
   const summary: BacktestSummary = {
@@ -183,6 +206,12 @@ export function runBacktest(args: RunBacktestArgs): RunBacktestOutput {
     byConfidence,
     byCoachingUncertainty,
     byWeatherRisk,
+    byLineBucket,
+    byPostmortem,
+    byRecommendationSide,
+    byRoleStability,
+    byQualifiedVsPassed,
+    audit,
   };
 
   return { summary, results };
