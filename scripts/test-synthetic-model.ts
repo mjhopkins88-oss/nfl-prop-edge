@@ -3,11 +3,9 @@ import {
   getPrimaryDisqualifier,
   type ScorecardInput,
 } from "../src/lib/model/model-scorecard";
-import {
-  SAMPLE_NEW_HC_OC_QB,
-  SAMPLE_SAME_STAFF,
-  type CoachingContinuityInput,
-} from "../src/lib/model/coaching-transition";
+import { buildCoachingTransitionScorecard } from "../src/lib/model/coaching-transition";
+import { TEAM_COACHING_TRANSITIONS } from "../src/lib/model/coaching-transition-data";
+import type { CoachingTransitionScorecard } from "../src/lib/model/coaching-transition-types";
 import type { PropType, Recommendation } from "../src/lib/types";
 
 interface Scenario {
@@ -17,7 +15,7 @@ interface Scenario {
   marketLine: number;
   overOdds: number;
   underOdds: number;
-  coachingContext?: CoachingContinuityInput;
+  coachingTransition?: CoachingTransitionScorecard;
   projectedMean: number;
   projectedStdDev: number;
   dataQualityScore: number;
@@ -533,9 +531,8 @@ const scenarios: Scenario[] = [
       primaryDisqualifierIncludes: "edge",
     },
   },
-  // 21. QUALIFY OVER — coaching context provided, full continuity does
-  // not degrade the projection. Coaching transition scorecard attaches
-  // but adds no uncertainty penalty worth flagging.
+  // 21. QUALIFY OVER — coaching context provided, BUF high continuity
+  // bumps threshold by 0 pp (penalty 18 < 20). Edge still clears.
   {
     scenarioName: "PY-OVER-coaching-continuity",
     playerName: "Patrick Mahomes",
@@ -546,14 +543,17 @@ const scenarios: Scenario[] = [
     projectedMean: 268,
     projectedStdDev: 45,
     ...risks(),
-    coachingContext: SAMPLE_SAME_STAFF,
+    coachingTransition: buildCoachingTransitionScorecard(
+      TEAM_COACHING_TRANSITIONS.BUF,
+      3,
+    ),
     expected: { qualified: true, recommendation: "OVER" },
   },
-  // 22. PASS — coaching chaos (new HC + new OC + new QB) inflates σ
-  // enough to drag a thin OVER edge under the 4.0% threshold.
+  // 22. PASS — TEN coaching reset (penalty 65) bumps the edge threshold
+  // by 1.5 pp to 5.5%, dragging a thin ~4.9% edge under it.
   {
     scenarioName: "PY-coaching-uncertainty-flips-to-pass",
-    playerName: "Bryce Young",
+    playerName: "Will Levis",
     propType: "PASSING_YARDS",
     marketLine: 248.5,
     overOdds: -110,
@@ -561,7 +561,10 @@ const scenarios: Scenario[] = [
     projectedMean: 254,
     projectedStdDev: 45,
     ...risks(),
-    coachingContext: SAMPLE_NEW_HC_OC_QB,
+    coachingTransition: buildCoachingTransitionScorecard(
+      TEAM_COACHING_TRANSITIONS.TEN,
+      2,
+    ),
     expected: {
       qualified: false,
       recommendation: "PASS",
@@ -601,7 +604,7 @@ for (let i = 0; i < scenarios.length; i++) {
     weatherEnvironmentScore: s.weatherEnvironmentScore,
     injuryContextScore: s.injuryContextScore,
     correlationExposureScore: s.correlationExposureScore,
-    coachingContext: s.coachingContext,
+    coachingTransition: s.coachingTransition,
   };
 
   const sc = buildPropDecisionScorecard(input);

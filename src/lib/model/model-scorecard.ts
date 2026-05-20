@@ -1,12 +1,7 @@
 import type { PropType, Recommendation } from "../types";
 import { americanOddsToImpliedProb } from "../prop-utils";
-import {
-  buildCoachingTransitionScorecard,
-  applyCoachingAdjustmentToProp,
-  type CoachHistoricalTendencyProfile,
-  type CoachingContinuityInput,
-  type CoachingTransitionScorecard,
-} from "./coaching-transition";
+import { edgeThresholdBumpFromPenalty } from "./coaching-transition";
+import type { CoachingTransitionScorecard } from "./coaching-transition-types";
 
 export type Side = "OVER" | "UNDER";
 
@@ -59,9 +54,7 @@ export interface ScorecardInput {
   injuryContextScore: number;
   correlationExposureScore: number;
   edgeThreshold?: number;
-  coachingContext?: CoachingContinuityInput;
-  coachProfile?: CoachHistoricalTendencyProfile;
-  teamProfile?: CoachHistoricalTendencyProfile;
+  coachingTransition?: CoachingTransitionScorecard;
 }
 
 export interface PropDecisionScorecard {
@@ -209,7 +202,14 @@ function evaluateRisks(input: ScorecardInput): RiskFinding[] {
 export function buildPropDecisionScorecard(
   input: ScorecardInput,
 ): PropDecisionScorecard {
-  const edgeThreshold = input.edgeThreshold ?? DEFAULT_EDGE_THRESHOLD;
+  const baseEdgeThreshold = input.edgeThreshold ?? DEFAULT_EDGE_THRESHOLD;
+  const coachingTransition = input.coachingTransition;
+  const coachingThresholdBumpPp = coachingTransition
+    ? edgeThresholdBumpFromPenalty(
+        coachingTransition.scores.coachingUncertaintyPenalty,
+      )
+    : 0;
+  const edgeThreshold = baseEdgeThreshold + coachingThresholdBumpPp / 100;
 
   const marketOverProbability = americanOddsToImpliedProb(input.overOdds);
   const marketUnderProbability = americanOddsToImpliedProb(input.underOdds);
@@ -218,30 +218,8 @@ export function buildPropDecisionScorecard(
     overround > 0 ? marketOverProbability / overround : 0.5;
   const noVigUnderProbability = 1 - noVigOverProbability;
 
-  const coachingTransition = input.coachingContext
-    ? buildCoachingTransitionScorecard(
-        input.coachingContext,
-        input.coachProfile,
-        input.teamProfile,
-      )
-    : undefined;
-  const coachingAdjustment = coachingTransition
-    ? applyCoachingAdjustmentToProp(
-        input.propType,
-        coachingTransition,
-        input.coachProfile,
-      )
-    : undefined;
-
-  const adjustedMean = coachingAdjustment
-    ? input.projectedMean * coachingAdjustment.meanMultiplier
-    : input.projectedMean;
-  const adjustedStdDev = coachingAdjustment
-    ? input.projectedStdDev * coachingAdjustment.stdDevMultiplier
-    : input.projectedStdDev;
-
-  const std = Math.max(adjustedStdDev, 1e-6);
-  const z = (input.marketLine - adjustedMean) / std;
+  const std = Math.max(input.projectedStdDev, 1e-6);
+  const z = (input.marketLine - input.projectedMean) / std;
   const modelUnderProbability = clamp(normalCdf(z), 0, 1);
   const modelOverProbability = 1 - modelUnderProbability;
 
@@ -317,7 +295,10 @@ export function buildPropDecisionScorecard(
     );
   }
 
-  const volatilityLevel = classifyVolatility(adjustedMean, adjustedStdDev);
+  const volatilityLevel = classifyVolatility(
+    input.projectedMean,
+    input.projectedStdDev,
+  );
   if (volatilityLevel === "high") {
     risks.push(
       `High projection variance (σ ${input.projectedStdDev.toFixed(1)} on μ ${input.projectedMean.toFixed(1)})`,
@@ -325,8 +306,13 @@ export function buildPropDecisionScorecard(
   }
 
   if (coachingTransition) {
-    for (const r of coachingTransition.reasons) passReasons.push(r);
-    for (const r of coachingTransition.risks) risks.push(r);
+    if (coachingThresholdBumpPp > 0) {
+      const bumpReason = `Edge threshold bumped to ${formatUnsignedPct(edgeThreshold)} for coaching uncertainty (penalty ${coachingTransition.scores.coachingUncertaintyPenalty})`;
+      if (qualified) passReasons.push(bumpReason);
+      else failReasons.push(bumpReason);
+    }
+    for (const w of coachingTransition.warnings) risks.push(w);
+    if (qualified) passReasons.push(coachingTransition.summary);
   }
 
   const reasons = qualified ? [...passReasons] : [...failReasons];
@@ -334,7 +320,7 @@ export function buildPropDecisionScorecard(
   const edgeMagnitude = Math.abs(selectedEdge);
   const edgeStrength = clamp(edgeMagnitude / 0.2, 0, 1);
   const coachingConfidenceDrag = coachingTransition
-    ? coachingTransition.coachingUncertaintyPenalty * 0.5
+    ? (coachingTransition.scores.coachingUncertaintyPenalty / 100) * 0.5
     : 0;
   const confidence = qualified
     ? clamp(
