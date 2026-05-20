@@ -298,6 +298,70 @@ Outputs always go to `data/backtests/<season>/`:
 per-qualified `BetCandidate`, and per-`(propType, week)` `BacktestResult`
 rows to Postgres.
 
+## Algorithm Holes and Future Feature Improvements
+
+V1's projection engine works — it blends recent vs season means, applies
+a few weather and injury adjustments inline, and ships. But it leaves
+real signal on the table. We catalogued the holes and the data sources
+that close them in `src/lib/model/feature-framework.ts`.
+
+The framework defines **seven feature groups**. Each group has:
+
+- a typed `*Inputs` interface listing the raw signals it needs;
+- a `NEUTRAL_*_INPUTS` constant for the "no data" baseline;
+- a `score*(inputs, propType) → FeatureScore` placeholder that returns
+  neutral today, with the intended scoring logic and the data source
+  written into the docstring as `TODO:`s;
+
+plus a common `FeatureScore` output (`meanMultiplier`,
+`sigmaMultiplier`, `edgeAdjustment`, `exposurePenalty`,
+`qualificationBlock`, `notes`) and an `aggregateFeatureScores(...)`
+combinator so the projection / probability / bet-sizing layers consume
+a single rolled-up score.
+
+### What's missing in V1
+
+| Group | V1 today | What we're leaving on the table |
+| --- | --- | --- |
+| **Role stability** | recent-vs-season blend only | Snap / route / target / carry-share trends; teammate-absence boosts and teammate-return penalties from a snap feed (not just CSV flags). |
+| **Game script** | nothing | Spread, total, projected pass/rush rate, blowout risk, trailing-pass volume boost. A WR on a 14-pt favorite vs. on a 14-pt dog should not project the same. |
+| **Pace** | hardcoded 64 plays/game | Offense seconds-per-play, neutral pace, opponent plays-allowed. Volume markets shift ±15% in either direction. |
+| **Market context** | snapshot line treated as truth | Opening line, current line, line movement, multi-book outlier detection, Kalshi liquidity / spread penalty. Today a stale outlier book and a 6-cent move are invisible. |
+| **Weather / environment** | basic wind / precip thresholds inline | Forecast uncertainty (widens σ), per-game retractable-roof state, temperature-driven yards-per-attempt. |
+| **Injury / role context** | manual CSV flags only | Paid injury feed with practice-participation %, snap projections, real-time inactives. Today the CSV is the single source of truth. |
+| **Correlation / exposure** | nothing | Same-game exposure cap, same-team pass-volume cap (correlated bets compound), max-bets-per-game flag. Backtest grades each prop independently; live play would silently concentrate. |
+
+### How each hole gets closed
+
+| Group | Data source | Status |
+| --- | --- | --- |
+| Role stability | `data/processed/snap_counts.csv`, planned `team_week_stats.csv`, `data/manual/injury_flags.csv` | Snap-counts + injuries scaffolded; team-week stats are planned (PBP aggregator stub in `ingest-nfl-history.py`). |
+| Game script | `data/processed/games.csv` (`spread_line`, `total_line`), `team_week_stats.csv` | Games CSV column exists; team-week aggregation planned. |
+| Pace | `team_week_stats.csv` (`seconds_per_play_off`, `plays_offense`, `plays_defense`) | Planned model — column names pinned in the Python stub. |
+| Market context | `prop_quotes.csv` with multiple snapshots per market, `kalshi_orderbook.csv` | Single-snapshot pulls scaffolded; closing-line pull + depth-aware liquidity scoring are TODO. |
+| Weather | `weather_snapshots.csv` | Shipped — the V1 inline logic is the de-facto placeholder; `scoreWeather()` will be the drop-in replacement. |
+| Injury | `injury_flags.csv` + future paid feed | Manual flags shipped; paid feed is TBD. |
+| Correlation | `BetCandidate` rows in Postgres | Schema exists; the "what bets are already on this game" aggregator is TODO. |
+
+### Adopting the framework
+
+Every group's scorer returns `NEUTRAL_FEATURE_SCORE` today, so adopting
+the framework is reversible and incremental:
+
+1. Build each group's `score*` function against its planned data source.
+2. Have `projection-engine.ts` call `scoreAll(inputs, propType)` and
+   apply the aggregate's `meanMultiplier` and `sigmaMultiplier` instead
+   of the current inline weather / injury blocks.
+3. The probability engine adds `aggregate.edgeAdjustment` before its
+   threshold check and honors `aggregate.qualificationBlock`.
+4. A new bet-sizing layer reads `aggregate.exposurePenalty` to size or
+   skip the wager.
+5. Per-group scores stay accessible via `groups` so the UI can show
+   **which** feature moved the projection, not just the final number.
+
+Each step is a self-contained commit that doesn't change behaviour for
+groups that still return neutral.
+
 ## Staying under API credit limits
 
 | Source | Pricing | Mitigation |
