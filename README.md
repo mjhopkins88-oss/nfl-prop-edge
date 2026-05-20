@@ -16,6 +16,11 @@ UX and modeling story before wiring in real odds and projection feeds.
   projection breakdown (mean ± σ, model vs book implied probability), last 5
   game logs with line-relative distribution, line shopping across sportsbooks,
   and matchup notes.
+- **Experimental Game Edge at `/game-edge`.** A SEPARATE experimental
+  model for game-level moneyline + spread markets. Surfaces upset
+  watch / playable ML / spread value / pass labels. Does not affect
+  player prop logic. See the "Experimental Game Edge Model" section
+  below.
 - **Mock data first.** All numbers come from `src/lib/mock-data.ts` so the app
   runs without any external API or database connection. The Prisma schema and
   seed script are ready for when the live data pipeline lands.
@@ -868,6 +873,127 @@ Like the proxy validation layer, the cap settings here are
 hypotheses. Backtesting will eventually tell us whether 2/3/5/8/10/12pp
 caps are too tight, too loose, or about right. The intent is to
 arrive at cap levels through evidence, not vibes.
+
+## Experimental Game Edge Model
+
+The Game Edge model is a **separate experimental track** for
+game-level markets (moneyline + spread). It is not part of the
+player prop scorecard and never feeds into player prop
+recommendations. Player prop logic is unchanged.
+
+### What it evaluates
+
+For each game it produces:
+
+- per-side moneyline edge and confidence-adjusted edge
+- per-side spread cover probability and confidence-adjusted edge
+- an upset score (0–100) — descriptive, not prescriptive
+- a single recommendation across moneyline vs spread, gated on
+  confidence-adjusted edge
+
+Recommendation labels:
+
+- `Strong ML Value` (≥8pp confidence-adjusted ML edge)
+- `Playable ML Value` (clears ML threshold but below 8pp)
+- `Upset Watch` (high upset score but no price clears threshold)
+- `Spread Value` (clears spread threshold)
+- `Cover Watch` (positive spread edge below threshold)
+- `Pass / No Edge` (no path clears, no upset signal)
+- `Pass / Too Much Uncertainty` (data quality or risk too low)
+
+### Why it's separate
+
+Game-level math (full-game win probability, margin-based cover
+probability) is fundamentally different from prop-level math (per-
+prop volume / yardage projection). Mixing them in one decision path
+would obscure both. The Game Edge model:
+
+- lives under `/game-edge` in the UI, labeled "Experimental Game
+  Edge Model" and routed independently from the player prop pages
+- has its own scorecard type (`GameEdgeScorecard`) and its own
+  decision logic (`buildGameEdge` in
+  `src/lib/model/game-edge-model.ts`)
+- reuses `buildMarketAnchoredProbability` for moneyline cap
+  discipline — so it inherits the same anchor + cap behavior as the
+  prop model, just applied to full-game win probability
+
+### Market is the baseline
+
+Like the player prop model, the Game Edge model treats market
+probability as the baseline. Capped football-context components are
+applied around the no-vig market probability — not on top of an
+independent point estimate. Same discipline, applied at game level.
+
+### Upset score is descriptive
+
+The upset score (0–100) summarizes how many upset-friendly signals
+fire (dog pass-rush advantage, favorite QB instability, weather
+compression, dog run-game advantage, favorite coaching uncertainty,
+favorite injury risk, dog rest advantage, large spread) and how
+many disqualifying signals fire (dog QB instability, dog OL
+continuity, dog cannot run, favorite trench dominance, dog cannot
+pressure, high total, dog injury risk, low data quality).
+
+A high upset score is a **prompt to look closer**. It does not
+force a play. The only way the model recommends a play is if the
+confidence-adjusted edge clears its threshold. If the ML is too
+expensive (e.g., -650 with only 4pp edge), the model labels it
+`Upset Watch` (or `Pass / No Edge`) — never a forced underdog ML.
+
+### Spread and moneyline are independent
+
+Spread cover probability is computed from expected home margin
+(log-odds × ~4.5 NFL points per logit) plus an empirical sigma (10
++ adjustments for total / weather / coaching). Cover probability is
+a normal-CDF approximation. The spread path can recommend a play
+while the moneyline path does not, and vice versa — they are
+evaluated as separate candidates and the highest confidence-
+adjusted edge wins.
+
+### Recommendation thresholds (initial hypothesis)
+
+| Path                 | Confidence-adjusted edge threshold |
+|----------------------|------------------------------------|
+| ML favorite          | 3pp                                |
+| ML underdog          | 5pp                                |
+| ML longshot (<30%)   | 7pp                                |
+| Spread (either side) | 4pp (6pp when uncertainty elevated)|
+| Upset Watch          | upset score ≥ 55                   |
+
+These thresholds are hypotheses, not certainties. They will be
+tuned by backtesting before any live use.
+
+### Key-number awareness
+
+Spreads near key NFL numbers (2.5, 3, 3.5, 6.5, 7, 7.5, 9.5, 10,
+10.5, 13.5, 14, 14.5) are flagged with `keyNumberRisk = true`. A
+half-point line move at a key number changes cover probability
+materially, so any positive cover edge sitting on a key number is
+flagged in the risks list.
+
+### Hard PASS gates
+
+- Data quality below 0.45 → `Pass / Too Much Uncertainty`
+- Composite risk below 0.45 → `Pass / Too Much Uncertainty`
+
+These mirror the prop scorecard's PASS posture — when the data
+isn't good enough, the model doesn't pretend it is.
+
+### Where to find it
+
+- types: `src/lib/model/game-edge-types.ts`
+- model: `src/lib/model/game-edge-model.ts`
+- display helpers: `src/lib/model/game-edge-scorecard.ts`
+- fixture data: `src/lib/model/game-edge-data.ts`
+- test runner: `scripts/test-game-edge-model.ts`
+- UI: `/game-edge` (list) and `/game-edge/[id]` (detail)
+
+### Status
+
+Experimental. No backtest yet. Fixture-driven. **Do not use for
+real bets until the model has been validated against historical
+game data** — and even then, this remains a research project, not
+investment advice.
 
 ## V1 Qualification Logic
 
