@@ -1,0 +1,33 @@
+stadiumName,team,city,state,latitude,longitude,roofType,surface
+State Farm Stadium,ARI,Glendale,AZ,33.5276,-112.2626,retractable,grass
+Mercedes-Benz Stadium,ATL,Atlanta,GA,33.7553,-84.4006,retractable,turf
+M&T Bank Stadium,BAL,Baltimore,MD,39.2780,-76.6227,outdoor,grass
+Highmark Stadium,BUF,Orchard Park,NY,42.7738,-78.7870,outdoor,turf
+Bank of America Stadium,CAR,Charlotte,NC,35.2258,-80.8528,outdoor,turf
+Soldier Field,CHI,Chicago,IL,41.8623,-87.6167,outdoor,grass
+Paycor Stadium,CIN,Cincinnati,OH,39.0954,-84.5160,outdoor,turf
+Cleveland Browns Stadium,CLE,Cleveland,OH,41.5061,-81.6995,outdoor,grass
+AT&T Stadium,DAL,Arlington,TX,32.7473,-97.0945,retractable,turf
+Empower Field at Mile High,DEN,Denver,CO,39.7439,-105.0201,outdoor,grass
+Ford Field,DET,Detroit,MI,42.3400,-83.0456,dome,turf
+Lambeau Field,GB,Green Bay,WI,44.5013,-88.0622,outdoor,grass
+NRG Stadium,HOU,Houston,TX,29.6847,-95.4107,retractable,turf
+Lucas Oil Stadium,IND,Indianapolis,IN,39.7601,-86.1639,retractable,turf
+EverBank Stadium,JAX,Jacksonville,FL,30.3239,-81.6373,outdoor,grass
+Arrowhead Stadium,KC,Kansas City,MO,39.0489,-94.4839,outdoor,grass
+SoFi Stadium,LAC,Inglewood,CA,33.9534,-118.3387,dome,turf
+SoFi Stadium,LAR,Inglewood,CA,33.9534,-118.3387,dome,turf
+Allegiant Stadium,LV,Paradise,NV,36.0908,-115.1834,dome,grass
+Hard Rock Stadium,MIA,Miami Gardens,FL,25.9580,-80.2389,outdoor,grass
+U.S. Bank Stadium,MIN,Minneapolis,MN,44.9737,-93.2581,dome,turf
+Gillette Stadium,NE,Foxborough,MA,42.0909,-71.2643,outdoor,turf
+Caesars Superdome,NO,New Orleans,LA,29.9511,-90.0812,dome,turf
+MetLife Stadium,NYG,East Rutherford,NJ,40.8136,-74.0744,outdoor,turf
+MetLife Stadium,NYJ,East Rutherford,NJ,40.8136,-74.0744,outdoor,turf
+Lincoln Financial Field,PHI,Philadelphia,PA,39.9008,-75.1675,outdoor,grass
+Acrisure Stadium,PIT,Pittsburgh,PA,40.4467,-80.0158,outdoor,grass
+Lumen Field,SEA,Seattle,WA,47.5952,-122.3316,outdoor,turf
+Levi's Stadium,SF,Santa Clara,CA,37.4032,-121.9698,outdoor,grass
+Raymond James Stadium,TB,Tampa,FL,27.9759,-82.5033,outdoor,grass
+Nissan Stadium,TEN,Nashville,TN,36.1665,-86.7713,outdoor,turf
+Northwest Stadium,WAS,Landover,MD,38.9077,-76.8645,outdoor,grass

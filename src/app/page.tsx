@@ -1,9 +1,23 @@
 import PropFilters from "@/components/PropFilters";
-import PropTable from "@/components/PropTable";
+import PropCard from "@/components/PropCard";
 import StatCard from "@/components/StatCard";
-import { getProps } from "@/lib/mock-data";
-import type { PropMarket, PropType, Position, Recommendation } from "@/lib/types";
-import { getPlayerById } from "@/lib/mock-data";
+import DashboardSidebar from "@/components/DashboardSidebar";
+import {
+  ActivityIcon,
+  ChartBarIcon,
+  SparkleIcon,
+  TargetIcon,
+} from "@/components/icons";
+import {
+  getDashboardSummary,
+  getPropOpportunities,
+} from "@/lib/data/props";
+import type {
+  Position,
+  PropOpportunitySort,
+  PropType,
+  Recommendation,
+} from "@/lib/data/types";
 
 const PROP_TYPE_VALUES = new Set<PropType>([
   "PASSING_ATTEMPTS",
@@ -16,6 +30,7 @@ const PROP_TYPE_VALUES = new Set<PropType>([
 ]);
 const POSITION_VALUES = new Set<Position>(["QB", "RB", "WR", "TE"]);
 const RECOMMENDATION_VALUES = new Set<Recommendation>(["OVER", "UNDER", "PASS"]);
+const SORT_VALUES = new Set<PropOpportunitySort>(["edge", "confidence", "player"]);
 
 type Search = {
   propType?: string;
@@ -37,37 +52,11 @@ function parseFilters(raw: Search) {
     raw.recommendation && RECOMMENDATION_VALUES.has(raw.recommendation as Recommendation)
       ? (raw.recommendation as Recommendation)
       : undefined;
-  const sort = raw.sort === "confidence" || raw.sort === "player" ? raw.sort : "edge";
+  const sort: PropOpportunitySort =
+    raw.sort && SORT_VALUES.has(raw.sort as PropOpportunitySort)
+      ? (raw.sort as PropOpportunitySort)
+      : "edge";
   return { propType, position, recommendation, sort };
-}
-
-function applyFilters(
-  props: PropMarket[],
-  filters: ReturnType<typeof parseFilters>,
-): PropMarket[] {
-  let result = props;
-  if (filters.propType) result = result.filter((p) => p.propType === filters.propType);
-  if (filters.position) {
-    result = result.filter((p) => {
-      const player = getPlayerById(p.playerId);
-      return player?.position === filters.position;
-    });
-  }
-  if (filters.recommendation) {
-    result = result.filter((p) => p.recommendation === filters.recommendation);
-  }
-  if (filters.sort === "confidence") {
-    result = [...result].sort((a, b) => b.confidence - a.confidence);
-  } else if (filters.sort === "player") {
-    result = [...result].sort((a, b) => {
-      const pa = getPlayerById(a.playerId)?.fullName ?? "";
-      const pb = getPlayerById(b.playerId)?.fullName ?? "";
-      return pa.localeCompare(pb);
-    });
-  } else {
-    result = [...result].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
-  }
-  return result;
 }
 
 export default async function DashboardPage({
@@ -76,64 +65,99 @@ export default async function DashboardPage({
   searchParams: Promise<Search>;
 }) {
   const raw = await searchParams;
-  const filters = parseFilters(raw);
-  const all = getProps();
-  const filtered = applyFilters(all, filters);
+  const { propType, position, recommendation, sort } = parseFilters(raw);
 
-  const playable = all.filter((p) => p.recommendation !== "PASS");
-  const positiveEdges = playable.filter((p) => p.edge >= 0.04);
-  const avgEdge =
-    playable.reduce((acc, p) => acc + Math.abs(p.edge), 0) / Math.max(playable.length, 1);
-  const topEdgeProp = [...playable].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge))[0];
-  const topPlayer = topEdgeProp ? getPlayerById(topEdgeProp.playerId) : undefined;
+  const summary = getDashboardSummary();
+  const opportunities = getPropOpportunities({
+    filter: { propType, position, recommendation },
+    sort,
+  });
 
   return (
-    <div className="space-y-6">
-      <section>
-        <h1 className="text-2xl font-semibold tracking-tight text-white">
-          Player prop opportunities
-        </h1>
-        <p className="mt-1 text-sm text-ink-400">
-          Lower-variance markets only — passing, receiving, and rushing volume.
-          Edges compare our projection to current book pricing across major sportsbooks.
-        </p>
+    <div className="space-y-8">
+      <section className="relative overflow-hidden rounded-3xl">
+        <div className="relative">
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/65 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700 ring-1 ring-amber-200/60 backdrop-blur">
+            <SparkleIcon className="h-3 w-3" />
+            Week 11 · 2025 · Lower-variance markets
+          </div>
+          <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">
+            Find the cleanest edges in the
+            <span className="bg-gradient-to-r from-amber-600 via-coral-500 to-rose-500 bg-clip-text text-transparent">
+              {" "}
+              NFL player prop slate
+            </span>
+            .
+          </h1>
+          <p className="mt-3 max-w-2xl text-sm text-ink-700">
+            Volume-driven props only — passing, receiving, rushing. Our model
+            projections, every book&apos;s pricing, and a transparent edge score
+            so you can sort by what actually matters.
+          </p>
+        </div>
       </section>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Tracked markets"
-          value={`${all.length}`}
-          hint={`${playable.length} actionable`}
+          value={`${summary.trackedMarkets}`}
+          hint={`${summary.actionableMarkets} actionable`}
+          icon={<ChartBarIcon className="h-4 w-4" />}
+          accent="amber"
         />
         <StatCard
           label="Positive edges"
-          value={`${positiveEdges.length}`}
-          hint=">= +4.0% over market"
+          value={`${summary.positiveEdges}`}
+          hint=">= +4.0% vs market"
           tone="positive"
+          icon={<SparkleIcon className="h-4 w-4" />}
+          accent="teal"
         />
         <StatCard
           label="Avg model edge"
-          value={`${(avgEdge * 100).toFixed(1)}%`}
+          value={`${(summary.averageEdge * 100).toFixed(1)}%`}
           hint="across actionable props"
+          icon={<ActivityIcon className="h-4 w-4" />}
+          accent="blue"
         />
         <StatCard
           label="Top edge"
-          value={topEdgeProp ? `${(Math.abs(topEdgeProp.edge) * 100).toFixed(1)}%` : "—"}
-          hint={topPlayer?.fullName}
-          tone={topEdgeProp && topEdgeProp.edge > 0 ? "positive" : "negative"}
+          value={summary.topEdge ? `${(summary.topEdge.value * 100).toFixed(1)}%` : "—"}
+          hint={summary.topEdge?.playerName}
+          tone={summary.topEdge?.positive ? "positive" : "negative"}
+          icon={<TargetIcon className="h-4 w-4" />}
+          accent="coral"
         />
       </section>
 
       <PropFilters />
 
-      <section>
-        <div className="mb-2 flex items-baseline justify-between">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-ink-400">
-            Opportunities
-          </h2>
-          <span className="text-xs text-ink-500">{filtered.length} shown</span>
+      <section className="grid gap-6 xl:grid-cols-3">
+        <div className="xl:col-span-2">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-ink-600">
+              Opportunities
+            </h2>
+            <span className="text-xs text-ink-500">
+              {opportunities.length} shown · sorted by{" "}
+              <span className="text-ink-700">
+                {sort === "edge" ? "top edge" : sort === "confidence" ? "confidence" : "player A-Z"}
+              </span>
+            </span>
+          </div>
+          {opportunities.length === 0 ? (
+            <div className="glass rounded-2xl p-10 text-center text-sm text-ink-500">
+              No props match these filters yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+              {opportunities.map((opp) => (
+                <PropCard key={opp.id} opp={opp} />
+              ))}
+            </div>
+          )}
         </div>
-        <PropTable props={filtered} />
+        <DashboardSidebar />
       </section>
     </div>
   );

@@ -69,6 +69,18 @@ export interface PropMarket {
   edge: number;
   confidence: number;
   recommendation: Recommendation;
+  /** Full per-group feature view (populated by feature-scoring). */
+  featureSet: import("./model/feature-framework").PropFeatureSet;
+  /** 0..100 — how much real signal fed the feature scorers. */
+  dataQualityScore: number;
+  /** 0..100 — aggregated risk; higher = walk away faster. */
+  riskScore: number;
+  /** Top reasons surfaced to the UI (feature + matchup driven). */
+  reasons: string[];
+  /** Top risks surfaced to the UI (feature + matchup driven). */
+  risks: string[];
+  /** Empty if `recommendation` is OVER or UNDER; populated when PASS. */
+  passReasons: string[];
 }
 
 export interface LineQuote {
@@ -85,5 +97,62 @@ export interface PropDetail extends PropMarket {
   game: Game;
   recentLogs: GameLog[];
   altLines: LineQuote[];
-  matchupNotes: string[];
+  whatWouldChangeRec: string[];
+  expectedValue: number;
+}
+
+export interface BacktestMarketSlice {
+  propType: PropType;
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export type ConfidenceTier = "High" | "Medium" | "Low";
+
+export interface BacktestConfidenceSlice {
+  tier: ConfidenceTier;
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export interface BacktestEdgeBucketSlice {
+  bucket: string; // e.g. "4–6%", "6–8%", "8–10%", "10%+"
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+/** Generic per-feature-bucket slice shared by role/script/weather/etc. */
+export interface BacktestFeatureBucketSlice {
+  bucket: string; // e.g. "High (70+)", "Medium (40-70)", "Low (<40)"
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
+export interface BacktestSummary {
+  windowLabel: string;
+  totalPlays: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  unitsStaked: number;
+  unitsReturn: number;
+  roiPct: number;
+  byMarket: BacktestMarketSlice[];
+  byConfidence: BacktestConfidenceSlice[];
+  byEdgeBucket: BacktestEdgeBucketSlice[];
+  byRoleStability: BacktestFeatureBucketSlice[];
+  byGameScript: BacktestFeatureBucketSlice[];
+  byWeatherRisk: BacktestFeatureBucketSlice[];
+  byInjuryUncertainty: BacktestFeatureBucketSlice[];
+  byDataQuality: BacktestFeatureBucketSlice[];
+  bestMarket: BacktestMarketSlice;
+  worstMarket: BacktestMarketSlice;
 }

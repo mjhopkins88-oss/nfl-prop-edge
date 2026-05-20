@@ -1,4 +1,5 @@
 import type {
+  BacktestSummary,
   Game,
   GameLog,
   LineQuote,
@@ -7,6 +8,32 @@ import type {
   PropMarket,
   Team,
 } from "./types";
+import {
+  type FullFeatureInputs,
+  type PropFeatureSet,
+  NEUTRAL_CORRELATION_INPUTS,
+  NEUTRAL_GAMESCRIPT_INPUTS,
+  NEUTRAL_INJURY_INPUTS,
+  NEUTRAL_MARKET_INPUTS,
+  NEUTRAL_PACE_INPUTS,
+  NEUTRAL_ROLE_INPUTS,
+  NEUTRAL_WEATHER_INPUTS,
+} from "./model/feature-framework";
+import {
+  calculateCorrelationExposureScore,
+  calculateGameScriptScore,
+  calculateInjuryContextScore,
+  calculateMarketContextScore,
+  calculateOverallDataQualityScore,
+  calculatePaceScore,
+  calculateRiskScore,
+  calculateRoleStabilityScore,
+  calculateWeatherEnvironmentScore,
+  deriveFeatureReasons,
+  deriveFeatureRisks,
+  qualifyWithFeatures,
+} from "./model/feature-scoring";
+import { validateProps } from "./model/validation";
 
 export const teams: Record<string, Team> = {
   KC: {
@@ -181,9 +208,18 @@ export const players: Player[] = [
   { id: "jjefferson", fullName: "Justin Jefferson", position: "WR", jersey: 18, teamAbbr: "MIN" },
 ];
 
-type RawProp = Omit<PropMarket, "id"> & { id: string };
+type RawProp = Omit<
+  PropMarket,
+  | "id"
+  | "featureSet"
+  | "dataQualityScore"
+  | "riskScore"
+  | "reasons"
+  | "risks"
+  | "passReasons"
+> & { id: string };
 
-export const propMarkets: PropMarket[] = (
+const rawPropMarkets = (
   [
     {
       id: "mahomes-passyds-buf",
@@ -611,7 +647,7 @@ export const propMarkets: PropMarket[] = (
       recommendation: "PASS",
     },
   ] satisfies RawProp[]
-).map((p) => p as PropMarket);
+).map((p) => p as RawProp);
 
 const recentLogsByPlayer: Record<string, GameLog[]> = {
   mahomes: [
@@ -811,6 +847,26 @@ function alternateBook(current: string, offset: number): string {
   return filtered[offset % filtered.length];
 }
 
+const risksByProp: Record<string, string[]> = {
+  "mahomes-passyds-buf": [
+    "Bills can shorten the game with Cook on the ground if KC trails early.",
+    "Snow/wind reports could cap deep-shot rate.",
+  ],
+  "kelce-rec-buf": [
+    "Variance in 1H usage — KC has dialed Kelce back in low-leverage spots.",
+    "Possible game-script blowout reduces Q4 volume.",
+  ],
+  "saquon-rushyds-dal": [
+    "Negative-script worry if Eagles fall behind a wounded Dallas team unlikely but possible.",
+  ],
+  "henry-rushatt-cin": [
+    "Possible split with Justice Hill in passing situations.",
+  ],
+  "cmc-rec-sea": [
+    "Kittle red-zone usage trending up; could siphon underneath targets.",
+  ],
+};
+
 const matchupNotesByProp: Record<string, string[]> = {
   "mahomes-passyds-buf": [
     "Bills defense allowing 7.4 yards per attempt to QBs over last 4 weeks (28th).",
@@ -837,6 +893,68 @@ const matchupNotesByProp: Record<string, string[]> = {
 export function getProps(): PropMarket[] {
   return propMarkets;
 }
+
+export function getRecentLogsFromMock(playerId: string): GameLog[] {
+  return recentLogsByPlayer[playerId] ?? [];
+}
+
+export const backtestMockSummary: BacktestSummary = {
+  windowLabel: "Weeks 1–10, 2025 season",
+  totalPlays: 247,
+  wins: 132,
+  losses: 107,
+  pushes: 8,
+  unitsStaked: 247,
+  unitsReturn: 265.4,
+  roiPct: 7.5,
+  byMarket: [
+    { propType: "PASSING_YARDS", plays: 38, hitRate: 0.605, roiUnits: 4.2, roiPct: 11.1 },
+    { propType: "PASSING_ATTEMPTS", plays: 24, hitRate: 0.583, roiUnits: 2.1, roiPct: 8.8 },
+    { propType: "PASSING_COMPLETIONS", plays: 22, hitRate: 0.591, roiUnits: 1.6, roiPct: 7.3 },
+    { propType: "RECEPTIONS", plays: 41, hitRate: 0.488, roiUnits: -0.9, roiPct: -2.2 },
+    { propType: "RECEIVING_YARDS", plays: 45, hitRate: 0.578, roiUnits: 3.4, roiPct: 7.6 },
+    { propType: "RUSHING_ATTEMPTS", plays: 33, hitRate: 0.545, roiUnits: 1.1, roiPct: 3.3 },
+    { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
+  ],
+  byConfidence: [
+    { tier: "High", plays: 74, hitRate: 0.622, roiUnits: 11.1, roiPct: 15.0 },
+    { tier: "Medium", plays: 118, hitRate: 0.542, roiUnits: 5.9, roiPct: 5.0 },
+    { tier: "Low", plays: 55, hitRate: 0.491, roiUnits: 1.4, roiPct: 2.5 },
+  ],
+  byEdgeBucket: [
+    { bucket: "4–6%", plays: 92, hitRate: 0.522, roiUnits: 2.1, roiPct: 2.3 },
+    { bucket: "6–8%", plays: 78, hitRate: 0.564, roiUnits: 5.4, roiPct: 6.9 },
+    { bucket: "8–10%", plays: 49, hitRate: 0.612, roiUnits: 6.7, roiPct: 13.7 },
+    { bucket: "10%+", plays: 28, hitRate: 0.643, roiUnits: 4.2, roiPct: 15.0 },
+  ],
+  byRoleStability: [
+    { bucket: "High (70+)", plays: 81, hitRate: 0.617, roiUnits: 9.4, roiPct: 11.6 },
+    { bucket: "Medium (40-70)", plays: 132, hitRate: 0.530, roiUnits: 6.8, roiPct: 5.2 },
+    { bucket: "Low (<40)", plays: 34, hitRate: 0.471, roiUnits: 2.2, roiPct: 6.5 },
+  ],
+  byGameScript: [
+    { bucket: "Positive script", plays: 96, hitRate: 0.594, roiUnits: 9.1, roiPct: 9.5 },
+    { bucket: "Neutral script", plays: 113, hitRate: 0.531, roiUnits: 6.6, roiPct: 5.8 },
+    { bucket: "Negative script", plays: 38, hitRate: 0.474, roiUnits: 2.7, roiPct: 7.1 },
+  ],
+  byWeatherRisk: [
+    { bucket: "Indoor / clean", plays: 168, hitRate: 0.583, roiUnits: 13.1, roiPct: 7.8 },
+    { bucket: "Moderate (wind 10-18)", plays: 56, hitRate: 0.554, roiUnits: 3.7, roiPct: 6.6 },
+    { bucket: "Severe (wind 18+ / precip)", plays: 23, hitRate: 0.435, roiUnits: 1.6, roiPct: 7.0 },
+  ],
+  byInjuryUncertainty: [
+    { bucket: "Low (no flag)", plays: 174, hitRate: 0.580, roiUnits: 14.2, roiPct: 8.2 },
+    { bucket: "Medium (teammate flag)", plays: 51, hitRate: 0.529, roiUnits: 3.1, roiPct: 6.1 },
+    { bucket: "High (player Q/D)", plays: 22, hitRate: 0.500, roiUnits: 1.1, roiPct: 5.0 },
+  ],
+  byDataQuality: [
+    { bucket: "High (≥70)", plays: 104, hitRate: 0.615, roiUnits: 11.8, roiPct: 11.3 },
+    { bucket: "Medium (40-70)", plays: 121, hitRate: 0.554, roiUnits: 5.8, roiPct: 4.8 },
+    { bucket: "Low (<40)", plays: 22, hitRate: 0.455, roiUnits: 0.8, roiPct: 3.6 },
+  ],
+  bestMarket: { propType: "RUSHING_YARDS", plays: 44, hitRate: 0.591, roiUnits: 6.9, roiPct: 15.7 },
+  worstMarket: { propType: "RECEPTIONS", plays: 41, hitRate: 0.488, roiUnits: -0.9, roiPct: -2.2 },
+};
 
 export function getPropById(id: string): PropMarket | undefined {
   return propMarkets.find((p) => p.id === id);
@@ -867,6 +985,10 @@ export function getPropDetail(id: string): PropDetail | undefined {
     game.homeTeamAbbr === player.teamAbbr ? game.awayTeamAbbr : game.homeTeamAbbr;
   const opponent = getTeam(opponentAbbr);
   if (!opponent) return undefined;
+
+  // The enriched PropMarket already carries reasons / risks / passReasons
+  // / featureSet (computed at module-load by enrichRawProp). PropDetail
+  // adds the view-only fields that need other entity joins.
   return {
     ...prop,
     player,
@@ -875,7 +997,8 @@ export function getPropDetail(id: string): PropDetail | undefined {
     game,
     recentLogs: recentLogsByPlayer[player.id] ?? [],
     altLines: altLinesByProp[prop.id] ?? defaultAltLines(prop),
-    matchupNotes: matchupNotesByProp[prop.id] ?? defaultMatchupNotes(prop, player.fullName, opponent.abbreviation),
+    whatWouldChangeRec: computeWhatWouldChangeRec(prop),
+    expectedValue: computeExpectedValue(prop),
   };
 }
 
@@ -886,3 +1009,261 @@ function defaultMatchupNotes(prop: PropMarket, playerName: string, opponent: str
     `Edge held since latest line refresh — confidence rated ${prop.confidence >= 0.7 ? "high" : prop.confidence >= 0.6 ? "medium" : "low"}.`,
   ];
 }
+
+function defaultRisks(prop: PropMarket): string[] {
+  if (prop.confidence < 0.6) {
+    return [
+      "Volatile usage profile — single-game variance can swing outcome.",
+      "Game-script uncertainty could compress projected volume.",
+    ];
+  }
+  if (prop.confidence < 0.7) {
+    return ["Some opponent-adjusted noise; watch for late inactives."];
+  }
+  return ["Standard variance — no major red flags flagged by the model."];
+}
+
+function computeWhatWouldChangeRec(prop: PropMarket): string[] {
+  const side = prop.recommendation;
+  const delta = Math.abs(prop.projection - prop.line);
+  if (side === "PASS") {
+    return [
+      "Edge expands beyond ±4%: market enters our actionable threshold.",
+      "Confidence climbs above 65%: lower-variance signal qualifies.",
+    ];
+  }
+  const direction = side === "OVER" ? "above" : "below";
+  const breakeven = prop.projection.toFixed(1);
+  const flipLine = (
+    side === "OVER" ? prop.line + delta : prop.line - delta
+  ).toFixed(1);
+  return [
+    `Line moves ${direction} ~${breakeven}: edge approaches zero.`,
+    `Our projection ${side === "OVER" ? "drops" : "rises"} past ${flipLine}: recommendation flips.`,
+    `${side === "OVER" ? "Over" : "Under"} price tightens by ~15 cents: EV evaporates.`,
+    `Confidence drops below ${Math.max(50, Math.round(prop.confidence * 100 - 15))}%: strategy filter marks as PASS.`,
+  ];
+}
+
+function computeExpectedValue(prop: PropMarket): number {
+  const odds = prop.recommendation === "UNDER" ? prop.underOdds : prop.overOdds;
+  const payout = odds > 0 ? odds / 100 : 100 / -odds;
+  const modelProb =
+    prop.recommendation === "UNDER" ? 1 - prop.modelHitRateOver : prop.modelHitRateOver;
+  return modelProb * payout - (1 - modelProb);
+}
+
+// =====================================================================
+// Feature framework integration
+// =====================================================================
+//
+// Each raw prop gets enriched with a full feature set at module-load
+// time. Defaults come from the game-level data (spread / total / dome
+// flag). Per-prop overrides below paint the demo scenarios called out
+// in the spec — "strong edge that qualifies", "strong edge that fails
+// due to role instability", etc.
+
+/** Per-prop scenario overrides for feature inputs (sparse). */
+const propFeatureInputs: Record<string, Partial<FullFeatureInputs>> = {
+  // Strong edge, qualifies cleanly.
+  "mahomes-passyds-buf": {
+    roleStability: {
+      ...NEUTRAL_ROLE_INPUTS,
+      snapShareTrend: 0.02,
+      targetShareTrend: 0.01,
+    },
+    gameScript: {
+      ...NEUTRAL_GAMESCRIPT_INPUTS,
+      spread: -2.5,
+      total: 48.5,
+      trailingPassVolumeBoost: 1.2,
+      projectedPassRate: 0.62,
+    },
+    pace: { ...NEUTRAL_PACE_INPUTS, projectedTotalPlays: 67 },
+    injuryContext: {
+      ...NEUTRAL_INJURY_INPUTS,
+      playerInjuryUncertainty: 0,
+      defensiveBackInjuryScore: 0.2,
+    },
+  },
+  // Strong edge but role instability forces PASS (target share collapsing).
+  "kelce-rec-buf": {
+    roleStability: {
+      ...NEUTRAL_ROLE_INPUTS,
+      snapShareTrend: -0.06,
+      targetShareTrend: -0.10,
+      routeParticipationTrend: -0.05,
+      teammateReturnPenalty: false,
+    },
+    gameScript: { ...NEUTRAL_GAMESCRIPT_INPUTS, spread: -2.5, total: 48.5 },
+  },
+  // Strong edge but injury uncertainty forces PASS.
+  "lamar-passyds-cin": {
+    injuryContext: {
+      ...NEUTRAL_INJURY_INPUTS,
+      playerInjuryUncertainty: 0.8,
+    },
+    gameScript: { ...NEUTRAL_GAMESCRIPT_INPUTS, spread: -4, total: 49.5 },
+  },
+  // Already PASS — edge below threshold; surface that in the framework too.
+  "jjefferson-recyds-det": {
+    roleStability: { ...NEUTRAL_ROLE_INPUTS, snapShareTrend: 0.01 },
+    gameScript: { ...NEUTRAL_GAMESCRIPT_INPUTS, spread: 3, total: 51 },
+  },
+  // Strong edge but weather risk forces PASS (high wind at outdoor BAL).
+  "chase-rec-bal": {
+    weatherEnvironment: {
+      ...NEUTRAL_WEATHER_INPUTS,
+      windSpeed: 22,
+      windGust: 38,
+      temperature: 41,
+      precipitation: 0.06,
+      domeRoofFlag: false,
+      weatherImpactEligible: true,
+      weatherUncertainty: 0.4,
+    },
+    injuryContext: {
+      ...NEUTRAL_INJURY_INPUTS,
+      defensiveBackInjuryScore: 0.6,
+    },
+  },
+  // Strong edge but correlation exposure forces PASS (3rd bet on CIN-BAL).
+  "henry-rushatt-cin": {
+    correlationExposure: {
+      ...NEUTRAL_CORRELATION_INPUTS,
+      sameGameExposure: 3,
+      sameTeamPassVolumeExposure: 0,
+      maxBetsPerGame: 3,
+    },
+    gameScript: { ...NEUTRAL_GAMESCRIPT_INPUTS, spread: -4, total: 49.5 },
+  },
+  // Clean qualifier — strong edge, no negatives.
+  "saquon-rushyds-dal": {
+    roleStability: {
+      ...NEUTRAL_ROLE_INPUTS,
+      carryShareTrend: 0.03,
+      snapShareTrend: 0.02,
+    },
+    gameScript: { ...NEUTRAL_GAMESCRIPT_INPUTS, spread: -3, total: 47.5 },
+    injuryContext: {
+      ...NEUTRAL_INJURY_INPUTS,
+      offensiveLineInjuryScore: 0.1,
+    },
+  },
+};
+
+/**
+ * Build default feature inputs from a prop's game / stadium context.
+ * Most prop inputs stay null; we populate game-level signals (spread,
+ * total, dome flag) so even "default" props have a baseline data
+ * quality > 0 and a meaningful game-script score.
+ */
+function defaultFeatureInputsForProp(prop: RawProp): FullFeatureInputs {
+  const game = games.find((g) => g.id === prop.gameId);
+  const player = players.find((p) => p.id === prop.playerId);
+  const stadiumTeam = game?.homeTeamAbbr;
+  const stadiumIsDome = stadiumTeam
+    ? ["DET", "MIN", "NO", "LV", "LAC", "LAR"].includes(stadiumTeam)
+    : false;
+  void player;
+
+  return {
+    roleStability: { ...NEUTRAL_ROLE_INPUTS },
+    gameScript: {
+      ...NEUTRAL_GAMESCRIPT_INPUTS,
+      spread: game?.spread ?? null,
+      total: game?.total ?? null,
+    },
+    pace: { ...NEUTRAL_PACE_INPUTS },
+    marketContext: { ...NEUTRAL_MARKET_INPUTS, lineMovement: 0 },
+    weatherEnvironment: {
+      ...NEUTRAL_WEATHER_INPUTS,
+      domeRoofFlag: stadiumIsDome,
+      weatherImpactEligible: !stadiumIsDome,
+      windSpeed: stadiumIsDome ? null : 8,
+      temperature: stadiumIsDome ? null : 52,
+      precipitation: stadiumIsDome ? null : 0,
+    },
+    injuryContext: { ...NEUTRAL_INJURY_INPUTS, playerInjuryUncertainty: 0 },
+    correlationExposure: { ...NEUTRAL_CORRELATION_INPUTS },
+  };
+}
+
+function buildFeatureSet(prop: RawProp, inputs: FullFeatureInputs): PropFeatureSet {
+  return {
+    roleStability: calculateRoleStabilityScore(inputs.roleStability),
+    gameScript: calculateGameScriptScore(inputs.gameScript, prop.propType),
+    pace: calculatePaceScore(inputs.pace),
+    marketContext: calculateMarketContextScore(
+      inputs.marketContext,
+      prop.recommendation,
+    ),
+    weatherEnvironment: calculateWeatherEnvironmentScore(
+      inputs.weatherEnvironment,
+      prop.propType,
+    ),
+    injuryContext: calculateInjuryContextScore(
+      inputs.injuryContext,
+      prop.propType,
+    ),
+    correlationExposure: calculateCorrelationExposureScore(
+      inputs.correlationExposure,
+    ),
+  };
+}
+
+function enrichRawProp(raw: RawProp): PropMarket {
+  const defaults = defaultFeatureInputsForProp(raw);
+  const overrides = propFeatureInputs[raw.id] ?? {};
+  // Merge: scenario overrides win at the per-group level.
+  const merged: FullFeatureInputs = {
+    roleStability: overrides.roleStability ?? defaults.roleStability,
+    gameScript: overrides.gameScript ?? defaults.gameScript,
+    pace: overrides.pace ?? defaults.pace,
+    marketContext: overrides.marketContext ?? defaults.marketContext,
+    weatherEnvironment:
+      overrides.weatherEnvironment ?? defaults.weatherEnvironment,
+    injuryContext: overrides.injuryContext ?? defaults.injuryContext,
+    correlationExposure:
+      overrides.correlationExposure ?? defaults.correlationExposure,
+  };
+
+  const featureSet = buildFeatureSet(raw, merged);
+  const dataQualityScore = calculateOverallDataQualityScore(featureSet);
+  const riskScore = calculateRiskScore(featureSet);
+
+  // Re-derive recommendation through the feature-aware gate. The hand-
+  // set recommendation on the raw prop is only a hint about intent —
+  // the gate decides whether we actually bet.
+  const qualification = qualifyWithFeatures({
+    propType: raw.propType,
+    edge: raw.edge,
+    featureSet,
+  });
+
+  const matchupNotes = matchupNotesByProp[raw.id] ?? [];
+  const reasons = [
+    ...deriveFeatureReasons(featureSet),
+    ...matchupNotes,
+  ];
+  const presetRisks = risksByProp[raw.id] ?? [];
+  const risks = [...deriveFeatureRisks(featureSet), ...presetRisks];
+
+  return {
+    ...raw,
+    recommendation: qualification.recommendation,
+    passReasons: qualification.passReasons,
+    featureSet,
+    dataQualityScore,
+    riskScore,
+    reasons,
+    risks,
+  };
+}
+
+/** The enriched, framework-aware prop catalog the UI consumes. */
+export const propMarkets: PropMarket[] = rawPropMarkets.map(enrichRawProp);
+
+// Validate at module load — surface any missing fields in the warning
+// log so we catch regressions when adding new mock props.
+validateProps(propMarkets);
