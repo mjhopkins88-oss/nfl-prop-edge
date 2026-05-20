@@ -47,7 +47,7 @@ export default function OpportunityCard({
   const topRisks = getTopRisks(scorecard, 2);
 
   return (
-    <article className="rounded-2xl border border-ink-800 bg-ink-900/60 p-5 shadow-card backdrop-blur transition hover:border-ink-700">
+    <article className="glass-strong relative overflow-hidden rounded-2xl p-5 transition hover:shadow-glass-lg">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <Link
           href={`/props/${prop.id}`}
@@ -55,31 +55,31 @@ export default function OpportunityCard({
         >
           <TeamBadge abbr={player.teamAbbr} size="md" />
           <div className="leading-tight">
-            <div className="text-[11px] uppercase tracking-wider text-ink-400">
+            <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-500">
               {player.position} · {team.city} {team.name}
-              <span className="mx-1.5 text-ink-600">·</span>
+              <span className="mx-1.5 text-ink-300">·</span>
               <span>{isHome ? "vs" : "@"}</span>{" "}
-              <span className="text-ink-300">{opponent.abbreviation}</span>
-              <span className="mx-1.5 text-ink-600">·</span>
+              <span className="text-ink-700">{opponent.abbreviation}</span>
+              <span className="mx-1.5 text-ink-300">·</span>
               Week {game.week}
             </div>
-            <div className="mt-0.5 text-base font-semibold text-white group-hover:text-accent">
+            <div className="mt-0.5 text-base font-semibold text-ink-900 group-hover:text-amber-700">
               {player.fullName}
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-300">
-              <span className="text-white">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-700">
+              <span className="font-medium text-ink-900">
                 {PROP_TYPE_LABEL[prop.propType]}
               </span>
-              <span className="text-ink-600">·</span>
-              <span className="tabular text-white">
+              <span className="text-ink-300">·</span>
+              <span className="tabular font-semibold text-ink-900">
                 {formatLine(prop.line)} {unit}
               </span>
-              <span className="text-ink-600">·</span>
-              <span className="tabular text-ink-400">
+              <span className="text-ink-300">·</span>
+              <span className="tabular text-ink-600">
                 O {formatAmericanOdds(prop.overOdds)} / U{" "}
                 {formatAmericanOdds(prop.underOdds)}
               </span>
-              <span className="text-ink-600">·</span>
+              <span className="text-ink-300">·</span>
               <span className="text-ink-500">{prop.sportsbook}</span>
             </div>
           </div>
@@ -89,8 +89,10 @@ export default function OpportunityCard({
           <RecommendationPill rec={scorecard.recommendation} size="lg" />
           <span
             className={clsx(
-              "text-[11px] uppercase tracking-wider",
-              scorecard.qualified ? "text-edge-positive" : "text-ink-500",
+              "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ring-1",
+              scorecard.qualified
+                ? "bg-sea-50 text-sea-700 ring-sea-200"
+                : "bg-ink-100/80 text-ink-600 ring-ink-200/60",
             )}
           >
             {scorecard.qualified ? "Qualified" : "Not qualified"}
@@ -99,11 +101,15 @@ export default function OpportunityCard({
       </header>
 
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Model prob" value={pct(modelProb)} sub={scorecard.selectedSide} />
+        <Metric
+          label="Model prob"
+          value={pct(modelProb)}
+          sub={scorecard.selectedSide}
+        />
         <Metric
           label="Market (no-vig)"
           value={pct(noVigProb)}
-          sub={`${formatAmericanOdds(sideOdds)}`}
+          sub={formatAmericanOdds(sideOdds)}
         />
         <Metric
           label="Edge"
@@ -111,15 +117,15 @@ export default function OpportunityCard({
           tone={edgeTone(edge)}
           sub={`Threshold ${pct(scorecard.edgeThreshold)}`}
         />
-        <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
-          <div className="text-[11px] uppercase tracking-wider text-ink-400">
+        <div className="rounded-xl bg-white/70 p-3 ring-1 ring-ink-200/50">
+          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-500">
             Confidence
           </div>
           <div className="mt-1.5">
             <ConfidenceMeter value={scorecard.confidence} />
           </div>
           <div className="mt-1 text-[11px] text-ink-500">
-            Projection {formatProjection(prop.projection, prop.propType)} ±{" "}
+            Proj {formatProjection(prop.projection, prop.propType)} ±{" "}
             {prop.projectionStdDev.toFixed(1)} {unit}
           </div>
         </div>
@@ -127,12 +133,12 @@ export default function OpportunityCard({
 
       <div className="mt-3">
         {scorecard.qualified ? (
-          <div className="flex items-center gap-1.5 text-xs text-edge-positive">
+          <div className="flex items-center gap-1.5 rounded-lg bg-sea-50/60 px-3 py-1.5 text-xs font-medium text-sea-800 ring-1 ring-sea-200/50">
             <Check />
             Edge clears threshold and all risk gates pass.
           </div>
         ) : (
-          <div className="flex items-start gap-1.5 text-xs text-edge-negative">
+          <div className="flex items-start gap-1.5 rounded-lg bg-amber-50/70 px-3 py-1.5 text-xs text-amber-900 ring-1 ring-amber-200/60">
             <Cross />
             <span>
               <span className="font-semibold">PASS — </span>
@@ -143,15 +149,18 @@ export default function OpportunityCard({
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <Panel title={scorecard.qualified ? "Top reasons" : "Top fail reasons"}>
+        <Panel
+          tone="reasons"
+          title={scorecard.qualified ? "Top reasons" : "Top fail reasons"}
+        >
           {topReasons.length > 0 ? (
-            <ul className="space-y-1.5 text-xs text-ink-300">
+            <ul className="space-y-1.5 text-xs text-ink-800">
               {topReasons.map((r, i) => (
                 <li key={i} className="flex gap-2">
                   <span
                     className={clsx(
                       "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                      scorecard.qualified ? "bg-edge-positive" : "bg-edge-negative",
+                      scorecard.qualified ? "bg-sea-500" : "bg-coral-500",
                     )}
                   />
                   <span>{r}</span>
@@ -162,26 +171,24 @@ export default function OpportunityCard({
             <div className="text-xs text-ink-500">—</div>
           )}
         </Panel>
-        <Panel title="Top risks">
+        <Panel tone="risks" title="Top risks">
           {topRisks.length > 0 ? (
-            <ul className="space-y-1.5 text-xs text-ink-300">
+            <ul className="space-y-1.5 text-xs text-ink-800">
               {topRisks.map((r, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                   <span>{r}</span>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="text-xs text-ink-500">
-              No risk gates flagged.
-            </div>
+            <div className="text-xs text-ink-500">No risk gates flagged.</div>
           )}
         </Panel>
       </div>
 
-      <p className="mt-4 border-t border-ink-800 pt-3 text-xs leading-relaxed text-ink-400">
-        <span className="font-semibold text-ink-300">Final explanation: </span>
+      <p className="mt-4 border-t border-ink-200/50 pt-3 text-xs leading-relaxed text-ink-700">
+        <span className="font-semibold text-ink-900">Final explanation: </span>
         {scorecard.finalExplanation}
       </p>
 
@@ -189,7 +196,7 @@ export default function OpportunityCard({
         <ScorecardBadges scorecard={scorecard} />
         <Link
           href={`/props/${prop.id}`}
-          className="shrink-0 text-[11px] uppercase tracking-wider text-accent transition hover:text-white"
+          className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700 transition hover:text-amber-900"
         >
           Open scorecard →
         </Link>
@@ -211,13 +218,15 @@ function Metric({
 }) {
   const valueClass =
     tone === "positive"
-      ? "text-edge-positive"
+      ? "text-sea-700"
       : tone === "negative"
-        ? "text-edge-negative"
-        : "text-white";
+        ? "text-coral-700"
+        : "text-ink-900";
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
-      <div className="text-[11px] uppercase tracking-wider text-ink-400">{label}</div>
+    <div className="rounded-xl bg-white/70 p-3 ring-1 ring-ink-200/50">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-500">
+        {label}
+      </div>
       <div className={clsx("tabular mt-1 text-base font-semibold", valueClass)}>
         {value}
       </div>
@@ -228,14 +237,32 @@ function Metric({
 
 function Panel({
   title,
+  tone,
   children,
 }: {
   title: string;
+  tone: "reasons" | "risks";
   children: React.ReactNode;
 }) {
+  const toneClass =
+    tone === "reasons"
+      ? "bg-sea-50/55 ring-sea-200/60"
+      : "bg-amber-50/70 ring-amber-200/60";
+  const labelTone =
+    tone === "reasons" ? "text-sea-800" : "text-amber-900";
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-850 p-3">
-      <div className="mb-1.5 text-[11px] uppercase tracking-wider text-ink-400">
+    <div
+      className={clsx(
+        "rounded-xl p-3 ring-1 backdrop-blur",
+        toneClass,
+      )}
+    >
+      <div
+        className={clsx(
+          "mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+          labelTone,
+        )}
+      >
         {title}
       </div>
       {children}
@@ -283,4 +310,3 @@ function Cross() {
     </svg>
   );
 }
-

@@ -8,7 +8,7 @@ export default function OpportunityList({
 }) {
   if (opportunities.length === 0) {
     return (
-      <div className="rounded-xl border border-ink-800 bg-ink-900/60 p-10 text-center text-sm text-ink-400">
+      <div className="glass rounded-2xl p-10 text-center text-sm text-ink-600">
         No props match these filters yet.
       </div>
     );

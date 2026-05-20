@@ -12,10 +12,10 @@ export default function RecommendationPill({
 }) {
   const styles =
     rec === "OVER"
-      ? "bg-gradient-to-br from-sea-500 to-sea-600 text-white shadow-[0_6px_18px_-6px_rgba(13,148,136,0.6)] ring-1 ring-sea-700/40"
+      ? "bg-gradient-to-br from-sea-500 to-sea-600 text-white shadow-[0_6px_18px_-6px_rgba(13,148,136,0.55)] ring-1 ring-sea-700/40"
       : rec === "UNDER"
-        ? "bg-gradient-to-br from-coral-500 to-coral-600 text-white shadow-[0_6px_18px_-6px_rgba(231,111,81,0.6)] ring-1 ring-coral-700/40"
-        : "bg-gradient-to-br from-gold-300 to-gold-400 text-ink-900 shadow-[0_6px_18px_-6px_rgba(217,119,6,0.55)] ring-1 ring-gold-500/40";
+        ? "bg-gradient-to-br from-sky2-500 to-sky2-700 text-white shadow-[0_6px_18px_-6px_rgba(37,99,235,0.55)] ring-1 ring-sky2-700/40"
+        : "bg-ink-100 text-ink-700 ring-1 ring-ink-300/70 shadow-sm";
   const sizeClass =
     size === "lg"
       ? "px-4 py-2 text-sm gap-2"
