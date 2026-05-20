@@ -3,6 +3,21 @@
 Strict rules for any AI assistant or contributor working in this repo.
 Read before making changes.
 
+## Two product sections — keep them separate
+
+The app ships with two independent decision tracks. They must not
+share decision logic, UI components, or recommendation paths.
+
+1. **Player Props** — the lower-variance prop scorecard. Lives at
+   `/` and `/props/[id]`. Decision authority:
+   `src/lib/model/model-scorecard.ts`. V1 markets only (see Rule 1).
+2. **Game Edge** — the experimental moneyline / spread / upset
+   model. Lives at `/game-edge` and `/game-edge/[id]`. Decision
+   authority: `src/lib/model/game-edge-model.ts`.
+
+Cross-contamination is the kind of bug that's expensive to undo.
+Do not mix the two.
+
 ## Hard rules
 
 1. **No touchdown props in V1.** Anytime scorer, first TD scorer, pass
@@ -23,12 +38,12 @@ Read before making changes.
    opt-in via an explicit flag or env var
    (e.g. `ALLOW_REAL_ODDS_API_CALLS=true`). Do not flip the default.
 
-4. **Preserve the scorecard-based decision engine.** The UI and any
-   "is this prop a play?" logic must route through
-   `src/lib/model/model-scorecard.ts` via
+4. **Preserve the scorecard-based decision engine for player props.**
+   The player prop UI and any "is this prop a play?" logic must
+   route through `src/lib/model/model-scorecard.ts` via
    `src/lib/model/prop-opportunity.ts`. Do not introduce a second
-   decision path in the pages. Do not bypass the scorecard to render
-   a recommendation.
+   decision path in the player prop pages. Do not bypass the
+   scorecard to render a recommendation.
 
 5. **Keep V1 focused on the 7 lower-variance markets.** No expanding
    the `PropType` enum, no adding new markets to mock data, no
@@ -44,6 +59,17 @@ Read before making changes.
    any external service. The dashboard runs off mock data; the
    synthetic test runs pure CPU. Don't add deploy-only dependencies
    to the algorithm modules.
+
+8. **Game Edge is separate from player props.** The Game Edge model
+   lives at `/game-edge`, uses its own types
+   (`src/lib/model/game-edge-types.ts`), its own decision logic
+   (`src/lib/model/game-edge-model.ts`), and its own display
+   helpers (`src/lib/model/game-edge-scorecard.ts`). It must not
+   feed into player prop recommendations and player prop logic must
+   not flow into it. The Game Edge upset score is **descriptive
+   only** — a high upset score does not force a bet. Moneyline and
+   spread are evaluated independently inside the Game Edge model:
+   one can be a play while the other is a pass.
 
 ## Soft conventions
 
@@ -61,6 +87,12 @@ Read before making changes.
   All four must pass. The synthetic runner must report **N/N** (every
   scenario passing). New scenarios may be appended; the count today
   is 22.
+
+  When working on the Game Edge model, also run:
+  ```
+  npx tsx scripts/test-game-edge-model.ts
+  ```
+  It must report 12 / 12 scenarios passing.
 
 ## When in doubt
 
