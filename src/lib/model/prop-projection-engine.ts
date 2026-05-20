@@ -173,12 +173,21 @@ export function projectPassingCompletions(
   ctx: ProjectionContext,
 ): RawProjection {
   const reasons: string[] = [];
-  const attRaw = projectPassingAttempts(ctx);
-  const completionRate = DEFAULT_COMPLETION_RATE;
-  const mean = attRaw.mean * completionRate;
-  reasons.push(
-    `Attempts × ${(completionRate * 100).toFixed(0)}% completion rate = ${mean.toFixed(1)}`,
-  );
+  let mean: number;
+  // Composite formula only when we have team-level inputs. Otherwise
+  // playerRecentMean is already the completions count — don't multiply.
+  if (ctx.projectedTeamPlays != null && ctx.projectedPassRate != null) {
+    const attempts = ctx.projectedTeamPlays * ctx.projectedPassRate;
+    mean = attempts * DEFAULT_COMPLETION_RATE;
+    reasons.push(
+      `Attempts ${attempts.toFixed(0)} × ${(DEFAULT_COMPLETION_RATE * 100).toFixed(0)}% completion rate = ${mean.toFixed(1)}`,
+    );
+  } else {
+    mean = ctx.playerRecentMean;
+    reasons.push(
+      `Recent-mean fallback: ${mean.toFixed(1)} completions`,
+    );
+  }
   return {
     mean,
     stddevBase: baseSigma(ctx, mean),
@@ -191,12 +200,18 @@ export function projectPassingCompletions(
 
 export function projectPassingYards(ctx: ProjectionContext): RawProjection {
   const reasons: string[] = [];
-  const compRaw = projectPassingCompletions(ctx);
-  const ypc = DEFAULT_YARDS_PER_COMPLETION;
-  const mean = compRaw.mean * ypc;
-  reasons.push(
-    `Completions × ${ypc.toFixed(1)} yards/completion = ${mean.toFixed(1)}`,
-  );
+  let mean: number;
+  if (ctx.projectedTeamPlays != null && ctx.projectedPassRate != null) {
+    const completions =
+      ctx.projectedTeamPlays * ctx.projectedPassRate * DEFAULT_COMPLETION_RATE;
+    mean = completions * DEFAULT_YARDS_PER_COMPLETION;
+    reasons.push(
+      `Completions ${completions.toFixed(0)} × ${DEFAULT_YARDS_PER_COMPLETION.toFixed(1)} yards/completion = ${mean.toFixed(1)}`,
+    );
+  } else {
+    mean = ctx.playerRecentMean;
+    reasons.push(`Recent-mean fallback: ${mean.toFixed(1)} passing yards`);
+  }
   return {
     mean,
     stddevBase: baseSigma(ctx, mean),
@@ -238,12 +253,22 @@ export function projectReceptions(ctx: ProjectionContext): RawProjection {
 
 export function projectReceivingYards(ctx: ProjectionContext): RawProjection {
   const reasons: string[] = [];
-  const recRaw = projectReceptions(ctx);
-  const ypr = DEFAULT_YARDS_PER_RECEPTION;
-  const mean = recRaw.mean * ypr;
-  reasons.push(
-    `Receptions × ${ypr.toFixed(1)} yards/reception = ${mean.toFixed(1)}`,
-  );
+  let mean: number;
+  if (
+    ctx.playerTargetShare != null &&
+    ctx.projectedTeamPlays != null &&
+    ctx.projectedPassRate != null
+  ) {
+    const teamPassAtt = ctx.projectedTeamPlays * ctx.projectedPassRate;
+    const receptions = teamPassAtt * ctx.playerTargetShare * DEFAULT_CATCH_RATE;
+    mean = receptions * DEFAULT_YARDS_PER_RECEPTION;
+    reasons.push(
+      `Receptions ${receptions.toFixed(1)} × ${DEFAULT_YARDS_PER_RECEPTION.toFixed(1)} yards/reception = ${mean.toFixed(1)}`,
+    );
+  } else {
+    mean = ctx.playerRecentMean;
+    reasons.push(`Recent-mean fallback: ${mean.toFixed(1)} receiving yards`);
+  }
   return {
     mean,
     stddevBase: baseSigma(ctx, mean),
@@ -286,12 +311,23 @@ export function projectRushingAttempts(ctx: ProjectionContext): RawProjection {
 
 export function projectRushingYards(ctx: ProjectionContext): RawProjection {
   const reasons: string[] = [];
-  const attRaw = projectRushingAttempts(ctx);
-  const ypc = DEFAULT_YARDS_PER_CARRY;
-  const mean = attRaw.mean * ypc;
-  reasons.push(
-    `Carries × ${ypc.toFixed(1)} yards/carry = ${mean.toFixed(1)}`,
-  );
+  let mean: number;
+  if (
+    ctx.playerCarryShare != null &&
+    ctx.projectedTeamPlays != null &&
+    ctx.projectedPassRate != null
+  ) {
+    const teamRushAtt =
+      ctx.projectedTeamPlays * (1 - ctx.projectedPassRate);
+    const carries = teamRushAtt * ctx.playerCarryShare;
+    mean = carries * DEFAULT_YARDS_PER_CARRY;
+    reasons.push(
+      `Carries ${carries.toFixed(1)} × ${DEFAULT_YARDS_PER_CARRY.toFixed(1)} yards/carry = ${mean.toFixed(1)}`,
+    );
+  } else {
+    mean = ctx.playerRecentMean;
+    reasons.push(`Recent-mean fallback: ${mean.toFixed(1)} rushing yards`);
+  }
   return {
     mean,
     stddevBase: baseSigma(ctx, mean),
@@ -346,6 +382,13 @@ export function applyPropSpecificAdjustments(
       mean *= 1.05;
       reasons.push("Team dog (spread ≥ +5) → trailing-pass volume +5%");
       positive++;
+    }
+    if ((isPassing || isReceiving) && ctx.spread <= -7) {
+      // Symmetric to the rushing-dog penalty below: a heavy favorite
+      // tends to run more in the second half, capping passing volume.
+      mean *= 0.95;
+      risks.push("Heavy favorite (spread ≤ -7) → passing volume modest drag");
+      negative++;
     }
     if (isRushing && ctx.spread <= -5) {
       mean *= 1.05;
