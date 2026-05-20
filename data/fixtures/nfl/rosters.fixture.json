@@ -1,0 +1,52 @@
+[
+  {
+    "playerId": "00-0033873",
+    "playerName": "Patrick Mahomes",
+    "position": "QB",
+    "team": "KC",
+    "season": 2025,
+    "jerseyNumber": 15,
+    "status": "ACT",
+    "depthChartRank": 1
+  },
+  {
+    "playerId": "00-0034796",
+    "playerName": "Josh Allen",
+    "position": "QB",
+    "team": "BUF",
+    "season": 2025,
+    "jerseyNumber": 17,
+    "status": "ACT",
+    "depthChartRank": 1
+  },
+  {
+    "playerId": "00-0038552",
+    "playerName": "James Cook",
+    "position": "RB",
+    "team": "BUF",
+    "season": 2025,
+    "jerseyNumber": 4,
+    "status": "ACT",
+    "depthChartRank": 1
+  },
+  {
+    "playerId": "00-0033906",
+    "playerName": "Travis Kelce",
+    "position": "TE",
+    "team": "KC",
+    "season": 2025,
+    "jerseyNumber": 87,
+    "status": "ACT",
+    "depthChartRank": 1
+  },
+  {
+    "playerId": "00-0035640",
+    "playerName": "Stefon Diggs",
+    "position": "WR",
+    "team": "BUF",
+    "season": 2025,
+    "jerseyNumber": 14,
+    "status": "ACT",
+    "depthChartRank": 1
+  }
+]

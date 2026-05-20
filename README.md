@@ -198,6 +198,127 @@ row to `ApiUsageLog` (Postgres, when `DATABASE_URL` is set) and the
 per-run JSONL audit log at `data/raw/api-usage/<runId>.jsonl`. See the
 two sections below for the staging plan and the cost-protection rules.
 
+## NFL Historical Data via nflverse
+
+The 2025 backtest pulls football stats from
+[nflverse-data](https://github.com/nflverse/nflverse-data) — the
+free CSV / Parquet releases backing nflfastR / nflreadr. **No API
+key required.** No paid endpoint is touched. The ingestion never
+admits touchdown columns: they are dropped at parse time.
+
+### What gets ingested
+
+For each season we pull:
+
+- **schedules** — game IDs, kickoff times, home / away, roof,
+  surface, stadium, closing spread + total when published.
+- **player weekly stats** (QB / RB / WR / TE only) — attempts,
+  completions, passing yards, sacks, rushing attempts / yards,
+  targets, receptions, receiving yards, receiving air yards,
+  snap / target / air-yards / carry shares, RACR, WOPR. Touchdown
+  columns dropped.
+- **team weekly stats** — total plays, pass / rush attempts,
+  pass / rush rate, seconds per play, points for / against.
+- **rosters** — player ID ↔ name / team / position / depth-chart
+  rank.
+- **snap counts** (optional) — offense snap totals + share.
+- **play-by-play summary** (optional) — passing / rushing EPA,
+  pressure rate, success rate. Scaffolded for later.
+
+The normalized shape is documented in
+`src/lib/ingestion/nflverse-types.ts`.
+
+### Where files live
+
+```
+data/raw/nfl/{season}/
+    schedules.csv
+    player_stats.csv
+    team_stats.csv        (optional)
+    rosters.csv
+    snap_counts.csv       (optional)
+
+data/processed/nfl/
+    games.csv
+    player_week_stats.csv
+    team_week_stats.csv
+    rosters.csv
+    snap_counts.csv       (when present)
+    player_ids.csv
+
+data/fixtures/nfl/
+    games.fixture.json
+    player-week-stats.fixture.json
+    team-week-stats.fixture.json
+    rosters.fixture.json
+```
+
+The fixture set ships with the repo so the test runner +
+backtest scaffolding work on a fresh clone with no downloads.
+
+### How to run ingestion
+
+```
+# Default — read raw CSVs from data/raw/nfl, print the plan
+npx tsx scripts/ingest-nfl-history.ts --season 2025
+
+# Local mode, actually write processed files
+npx tsx scripts/ingest-nfl-history.ts --season 2025 \
+    --source local --no-dry-run
+
+# Multi-season range
+npx tsx scripts/ingest-nfl-history.ts \
+    --start-season 2022 --end-season 2025 --source local
+
+# nflverse network mode — opt-in, dry-run prints URLs only.
+# Writing requires ALLOW_NFLVERSE_NETWORK_FETCH=true.
+npx tsx scripts/ingest-nfl-history.ts --season 2025 \
+    --source nflverse --dry-run
+```
+
+The same dry-run-default discipline that protects the paid Odds
+API client also gates network fetches here, even though nflverse
+is free. CI behaves predictably.
+
+### No-future-data leakage
+
+The loader exports a strict-before predicate used by every
+feature builder:
+
+```typescript
+isStrictlyBefore({ rowSeason, rowWeek, currentSeason, currentWeek })
+// true when rowSeason < currentSeason
+//        OR (rowSeason === currentSeason AND rowWeek < currentWeek)
+```
+
+Backtesting Week 8 of 2025 means features can read **2022–2024
+in full** plus **2025 Weeks 1–7**. Week 8 stats themselves are
+the outcome being graded — they never feed the pregame
+projection. The convenience helpers
+`getPlayerHistoryBeforeWeek`, `getTeamHistoryBeforeWeek`, and
+`getGameBySeasonWeekTeam` (in
+`src/lib/ingestion/nflverse-loader.ts`) enforce this filter
+automatically.
+
+### How this feeds the 2025 backtest
+
+The existing fixture backtest runner (`runBacktest` /
+`scripts/run-backtest-2025.ts`) continues to consume the
+fixture leg + market data it ships with. The nflverse loader is
+additive — once `data/processed/nfl/` is populated, the feature
+builder can switch its leg-history source from the
+fixture-format player-week data to the nflverse CSVs without
+changing model logic. Player Prop, Game Edge, and Parlay
+recommendations are unaffected by this change.
+
+### What still needs paid data
+
+The Odds API integration (player-prop closing lines, alt lines,
+SGP pricing) remains gated behind
+`ALLOW_REAL_ODDS_API_CALLS=true` and is unchanged. nflverse
+covers the **player + team stat** side only. No automated
+betting was added.
+
 ## Historical Odds Ingestion Staging Plan
 
 Pull 2025 historical prop lines from The Odds API in graduated scopes —
