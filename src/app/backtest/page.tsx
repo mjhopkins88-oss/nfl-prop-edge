@@ -44,6 +44,31 @@ export default function BacktestPage() {
         </p>
       </section>
 
+      {!fixture && (
+        <section className="rounded-2xl bg-amber-50/70 p-4 ring-1 ring-amber-200/60 backdrop-blur">
+          <div className="flex items-start gap-3">
+            <AlertTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <div className="text-sm font-medium text-amber-900">
+                Live fixture backtest not yet generated.
+              </div>
+              <div className="mt-0.5 text-xs text-amber-800">
+                Run{" "}
+                <code className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px]">
+                  npx tsx scripts/run-backtest-2025.ts --fixtures
+                </code>{" "}
+                to populate{" "}
+                <code className="font-mono text-[11px]">
+                  data/backtests/2025/backtest-summary.fixture.json
+                </code>
+                . The static performance summary below stays available
+                regardless.
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       {fixture && (
         <section className="glass-strong rounded-3xl p-6 sm:p-8">
           <div className="flex flex-wrap items-baseline justify-between gap-3">

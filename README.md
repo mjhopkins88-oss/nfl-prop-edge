@@ -651,55 +651,56 @@ Operational guidance:
 
 ## Deploying to Railway
 
-Railway provisions Postgres and runs the Next.js app side-by-side. The flow is:
+The V1 site renders entirely from mock data + bundled fixtures, so it
+deploys to Railway **without a database**. Postgres is only needed
+once you start running the ingestion scripts or the DB-backed backtest
+runner.
 
 ### 1. Create the project
 
 1. Push this repo to GitHub.
 2. In Railway, **New Project → Deploy from GitHub repo** and pick this repo.
-3. Railway detects Next.js via the Nixpacks builder. `railway.json` in the root
-   already pins the build and start commands.
+3. Railway detects Next.js via the Nixpacks builder. `railway.json` pins
+   the build and start commands:
+   - **Build:** `npm install && npm run build`
+   - **Start:** `npm run start`
 
-### 2. Add a Postgres plugin
+   `npm run build` runs `prisma generate && next build` — the Prisma
+   client generates from `schema.prisma` without needing a live DB
+   connection.
 
-1. In the same Railway project: **+ New → Database → PostgreSQL**.
-2. Railway will inject a `DATABASE_URL` env var into the service. If it doesn't
-   wire it up automatically, copy the URL from the Postgres plugin's
-   **Connect** tab and add `DATABASE_URL` to the web service's variables.
+### 2. (Optional) Attach Postgres later
 
-### 3. Confirm the build + start commands
+Only do this if you intend to run the DB-backed paths (seed, migrate,
+backtest persistence, ingestion ApiUsageLog rows). The web app does
+NOT need it.
 
-`railway.json` declares them, but for reference the service should run:
+1. **+ New → Database → PostgreSQL**.
+2. Railway injects `DATABASE_URL` into the service.
+3. Run migrations manually the first time:
+   ```bash
+   # locally, against the Railway connection string
+   npx prisma migrate dev --name init
+   git add prisma/migrations && git commit -m "init prisma migrations"
+   git push
+   # then on Railway (one-shot job or shell-in)
+   npx prisma migrate deploy
+   npm run db:seed
+   ```
 
-- **Build:** `npm install && npm run build`
-- **Start:** `npx prisma migrate deploy && npm run start`
+We deliberately do NOT run `prisma migrate deploy` inside the start
+command — that would make every container restart depend on a healthy
+DB connection, which is fragile and unnecessary for V1.
 
-`prisma migrate deploy` runs every deploy so any committed migrations apply
-automatically. If you only used `prisma db push` locally, generate a baseline
-migration before the first Railway deploy:
+### 3. Open the deployed app
 
-```bash
-npx prisma migrate dev --name init
-git add prisma/migrations && git commit -m "init prisma migrations"
-```
-
-### 4. (Optional) Seed mock data on Railway
-
-After the first deploy, run the seed once from your local machine using the
-Railway connection string:
-
-```bash
-DATABASE_URL="<railway postgres url>" npm run db:seed
-```
-
-Or shell into the Railway service and run `npm run db:seed` there.
-
-### 5. Open the deployed app
-
-Railway will assign a public URL — share it from the service's **Settings →
-Domains** panel. The dashboard at `/` should render immediately because V1
-reads mock data; Postgres becomes meaningful once you start writing real
-projection/odds data into `PropMarket`.
+Railway will assign a public URL — share it from the service's
+**Settings → Domains** panel. The dashboard at `/` should render
+immediately because V1 reads mock data. The `/backtest` page renders
+the static performance summary plus a small "fixture not generated"
+hint card; commit a run of `npx tsx scripts/run-backtest-2025.ts
+--fixtures` (or wire it into a release step) to populate the live
+fixture summary section.
 
 ## What's next (post-V1)
 
