@@ -787,6 +787,88 @@ into the same `PlayerProxyInput` / `OffenseProxyInput` /
 premium sources. The validation framework wouldn't change — only
 the inputs would.
 
+## Market-Anchored Probability Layer
+
+Discipline against overconfidence. The framework treats no-vig
+market probability as the **baseline** and adds capped football-
+context adjustments around it. The output is a "confidence-adjusted
+edge" — the disciplined version of the raw model-vs-market
+difference.
+
+### Why anchor on the market?
+
+The market has already aggregated sharp opinion, real bankrolls, and
+public liquidity. Walking too far from it without strong, agreeing
+signals is a classic overconfidence trap. The framework codifies
+that discipline in three layers:
+
+1. **Cap by data quality**: if `dataQualityScore < 0.55`, the
+   maximum football-side adjustment is **2 percentage points**.
+2. **Cap by composite risk**: if `riskScore < 0.55`, the maximum
+   adjustment is **3 percentage points**.
+3. **Cap by signal agreement + prop type**:
+   - Volume props default cap: **8pp**
+   - Yardage props default cap: **5pp** (tighter — yardage already
+     carries higher base variance)
+   - Multiple agreeing independent signals + high confidence
+     unlocks up to **10pp** (yardage) or **12pp** (volume)
+
+The lowest applicable cap always wins.
+
+### Confidence-adjusted edge
+
+```
+rawEdge = (finalModelProbability − marketProbability) × 100
+confidenceAdjustedEdge = rawEdge × confidence-multiplier × risk-multiplier
+```
+
+Where:
+
+- `confidence-multiplier = clamp(confidence / 0.7, 0.4, 1.0)`
+- `risk-multiplier = clamp(riskScore / 0.7, 0.5, 1.0)`
+
+Result: a 5pp raw edge with high confidence and low risk stays ≈ 5pp.
+The same 5pp edge with mediocre confidence and elevated risk shrinks
+to ≈ 2–3pp. **The disciplined number is what downstream consumers
+should read.**
+
+### Disagreement classification
+
+| Class | Trigger |
+|---|---|
+| `MARKET_ALIGNED` | `|capped adjustment| < 1pp` |
+| `SMALL_EDGE` | `1pp ≤ |capped| < 4pp` |
+| `HEALTHY_DISAGREEMENT` | `|capped| ≥ 4pp` AND `confidence ≥ 0.55` |
+| `DANGEROUS_DISAGREEMENT` | `|capped| ≥ 4pp` AND `confidence < 0.55` |
+| `LIKELY_OVERCONFIDENT` | `|raw adjustment| > 12pp` (pre-cap signal blew past the threshold — even with capping, the underlying mismatch surfaces a warning) |
+
+The `LIKELY_OVERCONFIDENT` class is the key safeguard: the framework
+ALWAYS caps the final number, but it also surfaces the warning so
+operators can investigate whether the football signals are real or
+whether the model is hallucinating an edge that the market didn't
+miss.
+
+### Integration
+
+`src/lib/model/market-anchored-probability.ts` is standalone today.
+The existing scorecard's recommendation math is **unchanged**. As a
+safe touchpoint, `ScorecardInput` accepts an optional
+`marketAnchoredProbability` passthrough field that
+`buildPropDecisionScorecard()` copies into its output for downstream
+display — no decision math reads it.
+
+Future integration would feed the disciplined `confidenceAdjustedEdgePp`
+into the scorecard's edge-threshold comparison instead of the raw
+edge. That decision is deferred until backtesting confirms the cap
+levels are well-calibrated.
+
+### Backtesting determines the cap levels
+
+Like the proxy validation layer, the cap settings here are
+hypotheses. Backtesting will eventually tell us whether 2/3/5/8/10/12pp
+caps are too tight, too loose, or about right. The intent is to
+arrive at cap levels through evidence, not vibes.
+
 ## V1 Qualification Logic
 
 The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a
