@@ -122,6 +122,22 @@ export function parlayTypeLabel(type: ParlayType): string {
       return "Weather UNDER stack";
     case "PRESSURE_QUICK_GAME_STACK":
       return "Pressure / quick-game stack";
+    case "QB_COMPLETIONS_RB_RECEPTIONS":
+      return "Completions / RB receptions stack";
+    case "QB_ATTEMPTS_SHORT_AREA_RECEPTIONS":
+      return "Attempts / short-area receptions stack";
+    case "QB_UNDER_RB_OVER_GAME_SCRIPT":
+      return "Clock-control game-script stack";
+    case "TE_FUNNEL_STACK":
+      return "TE-funnel stack";
+    case "PRESSURE_CHECKDOWN_STACK":
+      return "Pressure / checkdown stack";
+    case "NON_CORRELATED_EV_PAIR":
+      return "Non-correlated EV pair (different games)";
+    case "ALT_LINE_CANDIDATE":
+      return "Alt-line candidate (research only)";
+    case "ANTI_PUBLIC_FADE_STACK":
+      return "Anti-public fade stack (research only)";
     case "CUSTOM":
       return "Custom";
   }

@@ -13,9 +13,23 @@ import {
   recommendationTone,
   summarizeParlays,
 } from "@/lib/model/parlay-scorecard";
+import {
+  buildParlayRiskProfileBundle,
+} from "@/lib/model/parlay-risk-profile";
+import { optimizeParlayPortfolio } from "@/lib/model/parlay-selection-optimizer";
+import {
+  classifyPayoutHitRateFit,
+  calculateProjectedROI,
+  simulateParlayCandidateBatch,
+} from "@/lib/model/parlay-target-math";
+import {
+  getParlayTypeStrengthBand,
+  scoreParlayTypeStrength,
+} from "@/lib/model/parlay-type-strength";
 import type {
   ParlayCandidate,
   ParlayRecommendation,
+  ParlayRiskProfile,
 } from "@/lib/model/parlay-types";
 
 type Tab =
@@ -112,10 +126,17 @@ export default async function ParlaysPage({
     "low-risk": parlays.filter((p) => p.riskScore >= 0.7).length,
   };
 
+  const portfolio = optimizeParlayPortfolio(parlays);
+  const batch = simulateParlayCandidateBatch({ candidates: portfolio.selected });
+
   return (
     <div className="space-y-8">
       <Hero summary={summary} />
       <TargetMathPanel summary={summary} />
+      <StrategyHealthPanel
+        portfolio={portfolio}
+        batch={batch}
+      />
       <TabBar active={tab} counts={counts} />
       <section className="space-y-4">
         {filtered.length === 0 && (
@@ -320,6 +341,17 @@ function ParlayCard({
 }) {
   const rec: ParlayRecommendation = parlay.recommendation;
   const tone = recommendationTone(rec);
+  const riskBundle = buildParlayRiskProfileBundle(parlay);
+  const strengthBand = getParlayTypeStrengthBand(parlay.parlayType);
+  const strengthScore = scoreParlayTypeStrength(parlay.parlayType);
+  const payoutFit = classifyPayoutHitRateFit({
+    payoutMultiplier: parlay.payoutMultiplier,
+    projectedHitRate: parlay.projectedHitRate,
+  });
+  const projectedROI = calculateProjectedROI({
+    projectedHitRate: parlay.projectedHitRate,
+    payoutMultiplier: parlay.payoutMultiplier,
+  });
   return (
     <Link
       href={`/parlays/${parlay.id}`}
@@ -354,6 +386,12 @@ function ParlayCard({
             Corr {parlay.correlationType.toLowerCase()}{" "}
             ({parlay.correlationScore.toFixed(2)})
           </span>
+          <span
+            className={`rounded-full px-3 py-1 text-[11px] font-medium ring-1 ${riskProfileClasses(riskBundle.profile)}`}
+            title="Risk profile (variance + fragility + correlation)"
+          >
+            {riskBundle.profile.replace(/_/g, " ").toLowerCase()}
+          </span>
         </div>
       </div>
 
@@ -380,6 +418,33 @@ function ParlayCard({
         />
       </div>
 
+      <div className="mt-3 grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-4">
+        <MicroMetric
+          label="Projected ROI"
+          value={formatEv(projectedROI)}
+          tone={projectedROI > 0 ? "play" : "warn"}
+        />
+        <MicroMetric
+          label="Payout fit"
+          value={payoutFit.replace(/_/g, " ").toLowerCase()}
+          tone={
+            payoutFit === "WELL_PAID" || payoutFit === "ADEQUATE"
+              ? "play"
+              : payoutFit === "OVERPAID_TRAP" || payoutFit === "UNDERPAID"
+                ? "warn"
+                : undefined
+          }
+        />
+        <MicroMetric
+          label="Variance · fragility"
+          value={`${riskBundle.varianceScore.toFixed(2)} · ${riskBundle.fragilityScore.toFixed(2)}`}
+        />
+        <MicroMetric
+          label="Type strength"
+          value={`${strengthBand.toLowerCase()} (${strengthScore.toFixed(2)})`}
+        />
+      </div>
+
       {parlay.reasons.length > 0 && (
         <div className="mt-4 text-xs text-ink-700">
           · {parlay.reasons[0]}
@@ -395,6 +460,18 @@ function ParlayCard({
           ✖ {parlay.disqualifiers[0]}
         </div>
       )}
+      {riskBundle.whyCouldFail.length > 0 && (
+        <div className="mt-3 rounded-lg bg-amber-50/70 p-2 text-[11px] text-amber-900 ring-1 ring-amber-200/60">
+          <span className="font-semibold uppercase tracking-[0.1em]">
+            Why this could fail
+          </span>
+          <ul className="mt-1 space-y-0.5">
+            {riskBundle.whyCouldFail.slice(0, 2).map((w) => (
+              <li key={w}>· {w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {scenarioNote && (
         <div className="mt-3 text-[11px] uppercase tracking-[0.12em] text-ink-400">
           {scenarioNote}
@@ -404,6 +481,128 @@ function ParlayCard({
         tone: {tone} · payout {formatDecimalOdds(parlay.payoutMultiplier)}
       </div>
     </Link>
+  );
+}
+
+function MicroMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "play" | "warn";
+}) {
+  const text =
+    tone === "play"
+      ? "text-sea-800"
+      : tone === "warn"
+        ? "text-coral-700"
+        : "text-ink-900";
+  return (
+    <div className="rounded-lg bg-white/55 p-2 ring-1 ring-white/40">
+      <div className="text-[9px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {label}
+      </div>
+      <div className={`mt-0.5 text-xs font-semibold ${text}`}>{value}</div>
+    </div>
+  );
+}
+
+function riskProfileClasses(profile: ParlayRiskProfile): string {
+  switch (profile) {
+    case "LOW_VARIANCE_CORRELATED":
+      return "bg-sea-50 text-sea-800 ring-sea-300/60";
+    case "MEDIUM_VARIANCE_CORRELATED":
+      return "bg-amber-50 text-amber-900 ring-amber-300/60";
+    case "HIGH_VARIANCE_YARDAGE":
+      return "bg-amber-50 text-amber-900 ring-amber-300/60";
+    case "HIGH_PAYOUT_LONGSHOT":
+      return "bg-rose-50 text-coral-700 ring-coral-300/60";
+    case "UNKNOWN_CORRELATION":
+      return "bg-cream-200 text-ink-700 ring-ink-300/60";
+    case "OVERSTACKED":
+      return "bg-rose-50 text-coral-700 ring-coral-300/60";
+    case "FRAGILE_LINES":
+      return "bg-rose-50 text-coral-700 ring-coral-300/60";
+  }
+}
+
+function StrategyHealthPanel({
+  portfolio,
+  batch,
+}: {
+  portfolio: ReturnType<typeof optimizeParlayPortfolio>;
+  batch: ReturnType<typeof simulateParlayCandidateBatch>;
+}) {
+  const summary = portfolio.summary;
+  return (
+    <section className="glass rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-sea-700">
+        Parlay strategy health (portfolio view)
+      </div>
+      <p className="mt-1 max-w-2xl text-xs text-ink-600">
+        Same-game / same-QB / same-correlation-story exposure caps
+        applied across qualified candidates. Top {summary.selectedCount}{" "}
+        survive, {summary.filteredCount} filtered.
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Math
+          label="Selected"
+          value={`${summary.selectedCount}`}
+          sub={`${summary.filteredCount} filtered out`}
+        />
+        <Math
+          label="Avg payout"
+          value={`${summary.averagePayoutMultiplier.toFixed(2)}x`}
+          sub={`Avg conf-adj EV ${(summary.averageConfidenceAdjustedEV * 100).toFixed(1)}%`}
+        />
+        <Math
+          label="Avg projected hit"
+          value={`${(summary.averageProjectedHitRate * 100).toFixed(1)}%`}
+          sub={`Required ${(summary.averageRequiredHitRate * 100).toFixed(1)}%`}
+        />
+        <Math
+          label="100-parlay batch"
+          value={`${(batch.expectedROI * 100).toFixed(1)}% ROI`}
+          sub={`${batch.expectedHits.toFixed(1)} hits · break-even ${(batch.breakEvenHitRate * 100).toFixed(1)}%`}
+        />
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Strongest parlay type
+          </div>
+          <div className="mt-1 text-sm font-semibold text-ink-900">
+            {summary.strongestParlayType
+              ? parlayTypeLabel(summary.strongestParlayType)
+              : "—"}
+          </div>
+          <div className="text-[11px] text-ink-600">
+            Weakest:{" "}
+            {summary.weakestParlayType
+              ? parlayTypeLabel(summary.weakestParlayType)
+              : "—"}
+          </div>
+        </div>
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            High-risk parlays filtered out
+          </div>
+          <div className="mt-1 text-sm font-semibold text-ink-900">
+            {summary.highRiskFilteredOut}
+          </div>
+          {summary.mostCommonPassReason && (
+            <div className="text-[11px] text-ink-600">
+              Most common pass reason:{" "}
+              <span className="text-ink-800">
+                {summary.mostCommonPassReason}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
