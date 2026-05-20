@@ -33,12 +33,24 @@ const OUTPUT_DIR = path.join(
   "2025",
 );
 
+type Phase = "pregame" | "simulation" | "all";
+
 interface CliArgs {
   algorithmMode: "V1_SCORECARD" | "V2_PIPELINE" | "COMPARE_V1_V2";
+  phase: Phase;
+  season: number;
+  week: number;
+  fixtures: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { algorithmMode: "V1_SCORECARD" };
+  const args: CliArgs = {
+    algorithmMode: "V1_SCORECARD",
+    phase: "all",
+    season: 2025,
+    week: 1,
+    fixtures: true,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -53,14 +65,45 @@ function parseArgs(argv: string[]): CliArgs {
           v === "v2" ? "V2_PIPELINE" : v === "compare" ? "COMPARE_V1_V2" : "V1_SCORECARD";
         break;
       }
+      case "--phase": {
+        const v = next().toLowerCase();
+        if (v !== "pregame" && v !== "simulation" && v !== "all") {
+          throw new Error(
+            `--phase must be pregame | simulation | all (got ${v})`,
+          );
+        }
+        args.phase = v as Phase;
+        break;
+      }
+      case "--season":
+        args.season = Number(next());
+        break;
+      case "--week":
+        args.week = Number(next());
+        break;
+      case "--fixtures":
+        args.fixtures = true;
+        break;
       case "--help":
       case "-h":
-        console.log("Usage: npx tsx scripts/run-week-1-starter-test.ts [--algorithm-mode v1|v2|compare]");
+        console.log(
+          "Usage: npx tsx scripts/run-week-1-starter-test.ts [--algorithm-mode v1|v2|compare]\n" +
+            "                                                  [--phase pregame|simulation|all]\n" +
+            "                                                  [--season 2025] [--week 1] [--fixtures]",
+        );
         process.exit(0);
         break;
       default:
         throw new Error(`Unknown argument: ${a}`);
     }
+  }
+  if (!args.fixtures) {
+    throw new Error("Only --fixtures mode is supported right now.");
+  }
+  if (args.season !== 2025 || args.week !== 1) {
+    throw new Error(
+      `This script is locked to season=2025 week=1 (got ${args.season}/${args.week}).`,
+    );
   }
   return args;
 }
@@ -126,13 +169,21 @@ function main(): number {
   const pregame = buildWeekPregameSnapshot({
     season: 2025,
     week: 1,
-    algorithmMode: args.algorithmMode === "COMPARE_V1_V2" ? "V1_SCORECARD" : args.algorithmMode,
+    algorithmMode:
+      args.algorithmMode === "COMPARE_V1_V2"
+        ? "V1_SCORECARD"
+        : args.algorithmMode,
     fixtureRoot: WEEK_1_FIXTURE_ROOT,
   });
-  writeJson(
-    path.join(OUTPUT_DIR, "week-1-pregame.fixture.json"),
-    pregame,
-  );
+  writeJson(path.join(OUTPUT_DIR, "week-1-pregame.fixture.json"), pregame);
+
+  if (args.phase === "pregame") {
+    // eslint-disable-next-line no-console
+    console.log(
+      `pregame phase: ${pregame.candidates.length} candidates written to data/backtests/2025/week-1-pregame.fixture.json`,
+    );
+    return 0;
+  }
 
   const simulation = runWeekSimulation({
     season: 2025,

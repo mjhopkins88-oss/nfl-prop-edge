@@ -28,6 +28,24 @@ Working rules during this phase:
 - The backtest runner uses stored / fixture data only — never
   calls a paid API directly.
 
+### Display routing — Week 1 vs. demo
+
+The Header chip and the active surfaces drive off a single
+`src/lib/app-context.ts` module:
+
+- `getDefaultAppContext()` → `Week 1 · 2025` /
+  `WEEK_1_STARTER_TEST`. Used by the Header.
+- `getDemoAppContext()` → `Demo · Week 11 · 2025` / `DEMO`. Used
+  by the homepage hero only — the Week-11 mock dataset stays
+  reachable as a clearly-labeled demo.
+- `getWeek1StarterTestContext()` → `Week 1 Starter Test · 2025`.
+  Used by the Monitor's "Active test" chip.
+
+The Header includes a primary CTA labeled "Week 1 Test" that
+links to `/backtest/week-1`. The homepage carries a banner
+linking to the same place. See `WEEK_DISPLAY_AUDIT.md` for the
+full audit of what changed.
+
 ## 1. Current product shape
 
 The app ships with **three independent decision tracks**. They

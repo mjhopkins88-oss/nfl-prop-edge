@@ -4,6 +4,33 @@ A player prop opportunity platform for the NFL. V1 ships with mock data, a clean
 sports-analytics dashboard, and a per-prop detail page so you can validate the
 UX and modeling story before wiring in real odds and projection feeds.
 
+## Where to look first
+
+The current focus is the **2025 Week 1 historical starter test**.
+Three things you can click immediately:
+
+- `/backtest/week-1` — the Week 1 starter test page (pregame
+  snapshot, graded results, V1 vs V2 deltas, parlay + Game
+  Edge previews).
+- `/monitor` — the Model Monitor — aggregated health,
+  week-by-week table, prop-type / edge / confidence
+  breakdowns, V1 vs V2 panel, proxy health, Game Edge + Parlay
+  coverage. Shows the active test as
+  `Active test · Week 1 Starter Test · 2025`.
+- `/` — the **legacy demo** dashboard. Renders the Week 11
+  mock slate from `src/lib/mock-data.ts`. Labeled clearly as
+  "Demo data — Week 11 mock slate" with a banner + CTA that
+  links to `/backtest/week-1`. Kept around because the
+  scorecard UI is easier to evaluate against a slate of
+  hand-tuned mocks; not a representation of the live model.
+
+Header navigation, in order: Player Props (demo), Game Edge,
+Parlay Builder, Backtest, **Week 1 Test** (primary CTA),
+Monitor. The deployed Header chip reads **Week 1 · 2025** —
+sourced from `src/lib/app-context.ts`. If you ever see
+`Week 11 · 2025` in the chip, the deploy is stale; force a
+redeploy per `RAILWAY_DEPLOYMENT.md`.
+
 ## What's in V1
 
 - **Lower-variance markets only.** V1 supports passing attempts, passing
