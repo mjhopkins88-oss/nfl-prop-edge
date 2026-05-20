@@ -69,6 +69,18 @@ export interface PropMarket {
   edge: number;
   confidence: number;
   recommendation: Recommendation;
+  /** Full per-group feature view (populated by feature-scoring). */
+  featureSet: import("./model/feature-framework").PropFeatureSet;
+  /** 0..100 — how much real signal fed the feature scorers. */
+  dataQualityScore: number;
+  /** 0..100 — aggregated risk; higher = walk away faster. */
+  riskScore: number;
+  /** Top reasons surfaced to the UI (feature + matchup driven). */
+  reasons: string[];
+  /** Top risks surfaced to the UI (feature + matchup driven). */
+  risks: string[];
+  /** Empty if `recommendation` is OVER or UNDER; populated when PASS. */
+  passReasons: string[];
 }
 
 export interface LineQuote {
@@ -85,8 +97,6 @@ export interface PropDetail extends PropMarket {
   game: Game;
   recentLogs: GameLog[];
   altLines: LineQuote[];
-  reasons: string[];
-  risks: string[];
   whatWouldChangeRec: string[];
   expectedValue: number;
 }
@@ -117,6 +127,15 @@ export interface BacktestEdgeBucketSlice {
   roiPct: number;
 }
 
+/** Generic per-feature-bucket slice shared by role/script/weather/etc. */
+export interface BacktestFeatureBucketSlice {
+  bucket: string; // e.g. "High (70+)", "Medium (40-70)", "Low (<40)"
+  plays: number;
+  hitRate: number;
+  roiUnits: number;
+  roiPct: number;
+}
+
 export interface BacktestSummary {
   windowLabel: string;
   totalPlays: number;
@@ -129,6 +148,11 @@ export interface BacktestSummary {
   byMarket: BacktestMarketSlice[];
   byConfidence: BacktestConfidenceSlice[];
   byEdgeBucket: BacktestEdgeBucketSlice[];
+  byRoleStability: BacktestFeatureBucketSlice[];
+  byGameScript: BacktestFeatureBucketSlice[];
+  byWeatherRisk: BacktestFeatureBucketSlice[];
+  byInjuryUncertainty: BacktestFeatureBucketSlice[];
+  byDataQuality: BacktestFeatureBucketSlice[];
   bestMarket: BacktestMarketSlice;
   worstMarket: BacktestMarketSlice;
 }

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import clsx from "clsx";
 import type { PropOpportunity } from "@/lib/data/types";
 import {
   PROP_TYPE_LABEL,
@@ -7,7 +8,12 @@ import {
   formatLine,
   formatProjection,
 } from "@/lib/prop-utils";
-import { getPropDetail } from "@/lib/data/props";
+import {
+  BADGE_LABEL,
+  badgeTone,
+  deriveBadges,
+} from "@/lib/model/feature-scoring";
+import type { FeatureBadge } from "@/lib/model/feature-framework";
 import TeamBadge from "./TeamBadge";
 import EdgeBadge from "./EdgeBadge";
 import RecommendationPill from "./RecommendationPill";
@@ -15,27 +21,25 @@ import ConfidenceMeter from "./ConfidenceMeter";
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  ChartBarIcon,
   ChevronRightIcon,
   ClockIcon,
+  InfoIcon,
   ScalesIcon,
   SparkleIcon,
   TargetIcon,
 } from "./icons";
 
 export default function PropCard({ opp }: { opp: PropOpportunity }) {
-  // Reasons + risks live on the detail view-model. PropCard reads the
-  // detail from the same data-layer function the detail page uses,
-  // keeping the source of truth single.
-  const detail = getPropDetail(opp.id);
-  const reasons = (detail?.reasons ?? []).slice(0, 2);
-  const risks = (detail?.risks ?? []).slice(0, 1);
+  const reasons = opp.reasons.slice(0, 2);
+  const risks = opp.risks.slice(0, 2);
+  const badges = deriveBadges(opp.featureSet, opp.recommendation);
 
   const odds = opp.recommendation === "UNDER" ? opp.underOdds : opp.overOdds;
   const unit = PROP_TYPE_UNIT[opp.propType];
   const projDelta = opp.projection - opp.line;
   const modelPct = opp.modelHitRateOver * 100;
   const bookPct = opp.bookImpliedOver * 100;
-  const evPct = detail ? detail.expectedValue * 100 : 0;
   const kickoff = new Date(opp.game.kickoff).toLocaleString("en-US", {
     weekday: "short",
     hour: "numeric",
@@ -47,7 +51,6 @@ export default function PropCard({ opp }: { opp: PropOpportunity }) {
       href={`/props/${opp.id}`}
       className="group glass relative block overflow-hidden rounded-3xl p-5 transition hover:shadow-glass-lg"
     >
-      {/* glow accent in corner */}
       <div className="pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full bg-gradient-to-br from-amber-200/50 via-coral-200/30 to-transparent blur-2xl" />
 
       {/* header */}
@@ -100,7 +103,7 @@ export default function PropCard({ opp }: { opp: PropOpportunity }) {
           icon={<SparkleIcon className="h-3 w-3" />}
           label="Edge"
           value={`${opp.edge >= 0 ? "+" : ""}${(opp.edge * 100).toFixed(1)}%`}
-          sub={`EV ${evPct >= 0 ? "+" : ""}${evPct.toFixed(1)}%`}
+          sub={`${Math.round(opp.confidence * 100)}% conf`}
           valueTone={opp.edge >= 0 ? "positive" : "negative"}
         />
         <Metric
@@ -115,13 +118,46 @@ export default function PropCard({ opp }: { opp: PropOpportunity }) {
         />
       </div>
 
+      {/* data quality + risk strip */}
+      <div className="relative mt-3 flex items-center gap-2">
+        <QualityChip
+          icon={<ChartBarIcon className="h-3 w-3" />}
+          label="Data quality"
+          value={opp.dataQualityScore}
+          tone={
+            opp.dataQualityScore >= 60
+              ? "positive"
+              : opp.dataQualityScore >= 30
+                ? "neutral"
+                : "negative"
+          }
+        />
+        <QualityChip
+          icon={<AlertTriangleIcon className="h-3 w-3" />}
+          label="Risk"
+          value={opp.riskScore}
+          tone={
+            opp.riskScore <= 25
+              ? "positive"
+              : opp.riskScore <= 50
+                ? "neutral"
+                : "negative"
+          }
+        />
+      </div>
+
+      {/* badges */}
+      {badges.length > 0 && (
+        <div className="relative mt-3 flex flex-wrap gap-1.5">
+          {badges.map((b) => (
+            <BadgePill key={b} badge={b} />
+          ))}
+        </div>
+      )}
+
       {/* probability comparison */}
       <div className="relative mt-4 space-y-2">
-        <ProbBar
-          label="Model probability"
-          pct={modelPct}
-          tone="positive"
-        />
+        <ProbBar label="Model probability" pct={modelPct} tone="positive" />
         <ProbBar label="Market implied" pct={bookPct} tone="neutral" />
       </div>
 
@@ -156,6 +192,21 @@ export default function PropCard({ opp }: { opp: PropOpportunity }) {
                 <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-coral-500" />
                 <span className="leading-snug">{r}</span>
               </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* pass reasons (only shown if PASS) */}
+      {opp.recommendation === "PASS" && opp.passReasons.length > 0 && (
+        <div className="relative mt-3 rounded-xl bg-amber-50/70 px-3 py-2 ring-1 ring-amber-200/60">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700">
+            <InfoIcon className="h-3 w-3" />
+            Why passed
+          </div>
+          <ul className="space-y-0.5 text-xs text-amber-900">
+            {opp.passReasons.slice(0, 2).map((r, i) => (
+              <li key={i}>· {r}</li>
             ))}
           </ul>
         </div>
@@ -219,6 +270,55 @@ function Metric({
       {sub && <div className={`tabular text-[10px] ${subClass}`}>{sub}</div>}
       {render}
     </div>
+  );
+}
+
+function QualityChip({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: "positive" | "neutral" | "negative";
+}) {
+  const toneClass =
+    tone === "positive"
+      ? "bg-sea-50/80 text-sea-700 ring-sea-200/70"
+      : tone === "negative"
+        ? "bg-rose-50/80 text-coral-700 ring-coral-200/70"
+        : "bg-cream-100/80 text-ink-700 ring-ink-200/70";
+  return (
+    <span
+      className={clsx(
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
+        toneClass,
+      )}
+    >
+      <span className="opacity-70">{icon}</span>
+      {label}
+      <span className="tabular font-semibold">{value}</span>
+    </span>
+  );
+}
+
+function BadgePill({ badge }: { badge: FeatureBadge }) {
+  const tone = badgeTone(badge);
+  const toneClass =
+    tone === "positive"
+      ? "bg-gradient-to-br from-sea-100 to-emerald-100 text-sea-700 ring-sea-300/60"
+      : "bg-gradient-to-br from-rose-100 to-orange-100 text-coral-700 ring-coral-300/60";
+  return (
+    <span
+      className={clsx(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ring-1",
+        toneClass,
+      )}
+    >
+      {BADGE_LABEL[badge]}
+    </span>
   );
 }
 

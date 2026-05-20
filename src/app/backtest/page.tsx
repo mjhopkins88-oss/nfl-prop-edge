@@ -1,6 +1,7 @@
 import StatCard from "@/components/StatCard";
 import {
   ActivityIcon,
+  AlertTriangleIcon,
   ChartBarIcon,
   ClockIcon,
   SparkleIcon,
@@ -159,6 +160,88 @@ export default function BacktestPage() {
           }))}
           maxAbs={maxEdgeRoi}
         />
+      </section>
+
+      {/* FEATURE-DRIVEN BUCKETS */}
+      <section>
+        <div className="mb-3 flex items-baseline justify-between">
+          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700">
+            <ChartBarIcon className="h-3.5 w-3.5" />
+            Performance by feature
+          </div>
+          <span className="text-xs text-ink-500">
+            From the V1 feature framework — calibration over real data lands once
+            the loader is wired in.
+          </span>
+        </div>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <BucketCard
+            title="By role stability"
+            icon={<ActivityIcon className="h-3.5 w-3.5" />}
+            rows={s.byRoleStability.map((b) => ({
+              label: b.bucket,
+              plays: b.plays,
+              hitRate: b.hitRate,
+              roiPct: b.roiPct,
+              roiUnits: b.roiUnits,
+              badgeTone:
+                b.bucket.startsWith("High") ? "positive" : b.bucket.startsWith("Low") ? "neutral" : "amber",
+            }))}
+            maxAbs={Math.max(...s.byRoleStability.map((b) => Math.abs(b.roiPct)), 1)}
+          />
+          <BucketCard
+            title="By game script"
+            icon={<SparkleIcon className="h-3.5 w-3.5" />}
+            rows={s.byGameScript.map((b) => ({
+              label: b.bucket,
+              plays: b.plays,
+              hitRate: b.hitRate,
+              roiPct: b.roiPct,
+              roiUnits: b.roiUnits,
+              badgeTone: b.bucket.startsWith("Positive") ? "positive" : b.bucket.startsWith("Negative") ? "neutral" : "amber",
+            }))}
+            maxAbs={Math.max(...s.byGameScript.map((b) => Math.abs(b.roiPct)), 1)}
+          />
+          <BucketCard
+            title="By weather risk"
+            icon={<AlertTriangleIcon className="h-3.5 w-3.5" />}
+            rows={s.byWeatherRisk.map((b) => ({
+              label: b.bucket,
+              plays: b.plays,
+              hitRate: b.hitRate,
+              roiPct: b.roiPct,
+              roiUnits: b.roiUnits,
+              badgeTone: b.bucket.startsWith("Indoor") ? "positive" : b.bucket.startsWith("Severe") ? "neutral" : "amber",
+            }))}
+            maxAbs={Math.max(...s.byWeatherRisk.map((b) => Math.abs(b.roiPct)), 1)}
+          />
+          <BucketCard
+            title="By injury uncertainty"
+            icon={<AlertTriangleIcon className="h-3.5 w-3.5" />}
+            rows={s.byInjuryUncertainty.map((b) => ({
+              label: b.bucket,
+              plays: b.plays,
+              hitRate: b.hitRate,
+              roiPct: b.roiPct,
+              roiUnits: b.roiUnits,
+              badgeTone: b.bucket.startsWith("Low") ? "positive" : b.bucket.startsWith("High") ? "neutral" : "amber",
+            }))}
+            maxAbs={Math.max(...s.byInjuryUncertainty.map((b) => Math.abs(b.roiPct)), 1)}
+          />
+          <BucketCard
+            title="By data quality"
+            icon={<ChartBarIcon className="h-3.5 w-3.5" />}
+            rows={s.byDataQuality.map((b) => ({
+              label: b.bucket,
+              plays: b.plays,
+              hitRate: b.hitRate,
+              roiPct: b.roiPct,
+              roiUnits: b.roiUnits,
+              badgeTone: b.bucket.startsWith("High") ? "positive" : b.bucket.startsWith("Low") ? "neutral" : "amber",
+            }))}
+            maxAbs={Math.max(...s.byDataQuality.map((b) => Math.abs(b.roiPct)), 1)}
+          />
+        </div>
       </section>
 
       {/* WORST MARKET — explicit callout */}

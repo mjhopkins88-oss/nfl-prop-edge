@@ -298,6 +298,93 @@ Outputs always go to `data/backtests/<season>/`:
 per-qualified `BetCandidate`, and per-`(propType, week)` `BacktestResult`
 rows to Postgres.
 
+## V1 Qualification Logic
+
+The dashboard's `OVER` / `UNDER` / `PASS` recommendation is **not** a
+simple edge threshold check. The feature framework
+(`src/lib/model/feature-framework.ts` +
+`src/lib/model/feature-scoring.ts`) feeds a multi-gate qualification
+function that can refuse a positive-edge prop when the underlying
+context is too risky.
+
+### Edge thresholds by prop type
+
+| Market | Threshold |
+| --- | --- |
+| `PASSING_ATTEMPTS` | 4% |
+| `PASSING_COMPLETIONS` | 4% |
+| `RECEPTIONS` | 5% |
+| `RUSHING_ATTEMPTS` | 5% |
+| `PASSING_YARDS` | 6% |
+| `RUSHING_YARDS` | 6% |
+| `RECEIVING_YARDS` | 7% |
+
+`|edge|` must clear the prop type's threshold before a prop can become a
+qualified bet. Below threshold ⇒ `PASS` with reason `"Edge X% is below
+Y% threshold"`. (The same `EDGE_THRESHOLDS` constant lives in both
+`probability-engine.ts` for the backtest and `feature-scoring.ts` for
+the live dashboard — keep them aligned.)
+
+### Why a prop can be `PASS` even with positive edge
+
+`qualifyWithFeatures(...)` enforces five additional gates on top of the
+edge check. Any one of them failing forces `PASS`:
+
+| Gate | Floor | What it catches |
+| --- | --- | --- |
+| **Role stability score** | ≥ 40 | Player's snap / route / target / carry share is collapsing or volatile, so recent-mean projections are misleading. |
+| **Injury context score** | ≥ 30 | Player listed Q/D/Out, or game-level uncertainty flag is set. |
+| **Weather risk score** | ≥ 30 | Outdoor stadium with high wind, heavy precip, or a high-uncertainty forecast (only blocks for passing / receiving markets). |
+| **Correlation exposure score** | ≥ 30 | Same-game exposure cap reached, or correlated same-team pass-volume bets already pending. |
+| **Data quality score** | ≥ 20 | Too few feature inputs populated for any score to be trustworthy. (V1 floor is intentionally low — sparse signals are the norm today; target lifts as ingestion comes online.) |
+
+The `PropCard` on the dashboard and the **"Why this did or did not
+qualify"** section on the prop detail page render the checklist
+directly from these gates, so you can see exactly which check failed
+for any `PASS`.
+
+### How each risk feature affects the gate
+
+| Risk | Where you see it |
+| --- | --- |
+| **Role instability** | `Role Stable` badge missing on the card; **Role Stability** card on detail page in the "negative" tone; in the PASS reasons. |
+| **Injury uncertainty** | `Injury Risk` badge on the card; **Injury Context** card on detail page. |
+| **Weather risk** | `Weather Risk` badge; **Weather / Environment** card; only fires for outdoor stadiums where the prop type is sensitive. |
+| **Correlation risk** | `Correlation Risk` badge; **Correlation Exposure** card. |
+| **Line movement** | `Line Moved` badge (V1 placeholder — single-snapshot ingestion today, so `lineMovement` is usually 0). |
+| **Game script tailwinds** | `Script Boost` badge — positive signal, not a risk. |
+
+Example: a `RECEPTIONS` prop with `+8%` edge (well over the 5%
+threshold) will still `PASS` if the player's target share has dropped
+3 weeks running, or if they're tagged questionable in
+`data/manual/injury_flags.csv`. The bet is only as good as the role
+behind it.
+
+### Why lower-variance props first
+
+V1 trades only the seven listed markets — all volume / yardage stats
+driven primarily by usage and game script. We deliberately exclude
+touchdown markets (and the longshot moneyline modeling that comes
+with them) because:
+
+- **Distributional shape.** Volume markets are well-approximated by
+  the normal CDF over a player's recent + season blend. TD scoring is
+  Poisson-shaped with a fat tail — the same projection engine would
+  systematically under-price the over.
+- **Sample efficiency.** A WR's receptions are a usage signal we can
+  estimate from snap and route data every week. TD output is a noisy
+  proxy for red-zone usage *and* opponent script *and* QB choice —
+  triple the variance for the same data.
+- **Calibration first, expand second.** Lower-variance markets give
+  the backtest the tightest feedback loop. We want Brier scores +
+  bucketed ROI to converge here before we expose harder markets.
+
+The Prisma enum, the Odds API client's `SUPPORTED_MARKETS`, the
+ingestion CSVs, the projection engine, and the qualification gate are
+all hard-coded to the same seven keys. Adding a new market is a
+single coordinated change touching each of those layers — easy to do
+once, easy to audit later.
+
 ## Algorithm Holes and Future Feature Improvements
 
 V1's projection engine works — it blends recent vs season means, applies

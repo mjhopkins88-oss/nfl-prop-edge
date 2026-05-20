@@ -16,6 +16,7 @@ export type {
   PropDetail,
   BacktestSummary,
   BacktestMarketSlice,
+  BacktestFeatureBucketSlice,
 } from "../types";
 
 import type {
@@ -26,6 +27,7 @@ import type {
   Recommendation,
   Team,
 } from "../types";
+import type { PropFeatureSet } from "../model/feature-framework";
 
 /**
  * A prop market joined with its player, team, opponent, and game.
@@ -46,6 +48,12 @@ export interface PropOpportunity {
   edge: number;
   confidence: number;
   recommendation: Recommendation;
+  featureSet: PropFeatureSet;
+  dataQualityScore: number;
+  riskScore: number;
+  reasons: string[];
+  risks: string[];
+  passReasons: string[];
   player: Player;
   team: Team;
   opponent: Team;

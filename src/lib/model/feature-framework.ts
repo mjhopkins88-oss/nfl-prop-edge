@@ -32,9 +32,58 @@
 
 import type { PropType } from "../types";
 
-// --- common output shape ---------------------------------------------
+// =====================================================================
+// UI-facing per-group result + badge shapes
+// =====================================================================
+
+/** Polarity of a feature group's signal for this specific prop. */
+export type FeatureImpact = "positive" | "neutral" | "negative";
 
 /**
+ * UI-facing per-group result. The score is on a 0..100 scale where
+ * 50 is "neutral", >50 leans favorable, <50 leans unfavorable.
+ * `inputs` is the raw input bag so the UI / explainer can drill in.
+ */
+export interface FeatureGroupResult<Inputs = unknown> {
+  inputs: Inputs;
+  score: number;
+  impact: FeatureImpact;
+  explanation: string;
+}
+
+/**
+ * A prop's full feature view — what the dashboard cards, the prop
+ * detail page, and the qualification gate consume. Populated by
+ * `feature-scoring.ts`.
+ */
+export interface PropFeatureSet {
+  roleStability: FeatureGroupResult<RoleStabilityInputs>;
+  gameScript: FeatureGroupResult<GameScriptInputs>;
+  pace: FeatureGroupResult<PaceInputs>;
+  marketContext: FeatureGroupResult<MarketContextInputs>;
+  weatherEnvironment: FeatureGroupResult<WeatherInputs>;
+  injuryContext: FeatureGroupResult<InjuryContextInputs>;
+  correlationExposure: FeatureGroupResult<CorrelationExposureInputs>;
+}
+
+/** Badge identifiers the dashboard cards render. */
+export type FeatureBadge =
+  | "ROLE_STABLE"
+  | "SCRIPT_BOOST"
+  | "WEATHER_RISK"
+  | "INJURY_RISK"
+  | "LINE_MOVED"
+  | "CORRELATION_RISK";
+
+// =====================================================================
+// Common engine-facing output shape (existing)
+// =====================================================================
+
+/**
+ * Engine-facing per-group contribution (kept alongside the UI-facing
+ * `FeatureGroupResult`; the projection engine will consume FeatureScore
+ * once each group is wired in — see "Adopting the framework" in README).
+ *
  * One feature group's contribution to a projection / bet decision.
  *
  *   meanMultiplier      — multiply the projection mean (1.0 = neutral)
@@ -522,7 +571,7 @@ export interface FullFeatureInputs {
   gameScript: GameScriptInputs;
   pace: PaceInputs;
   marketContext: MarketContextInputs;
-  weather: WeatherInputs;
+  weatherEnvironment: WeatherInputs;
   injuryContext: InjuryContextInputs;
   correlationExposure: CorrelationExposureInputs;
 }
@@ -532,7 +581,7 @@ export const NEUTRAL_FULL_INPUTS: FullFeatureInputs = {
   gameScript: NEUTRAL_GAMESCRIPT_INPUTS,
   pace: NEUTRAL_PACE_INPUTS,
   marketContext: NEUTRAL_MARKET_INPUTS,
-  weather: NEUTRAL_WEATHER_INPUTS,
+  weatherEnvironment: NEUTRAL_WEATHER_INPUTS,
   injuryContext: NEUTRAL_INJURY_INPUTS,
   correlationExposure: NEUTRAL_CORRELATION_INPUTS,
 };
@@ -543,7 +592,7 @@ export interface FullFeatureScores {
     gameScript: FeatureScore;
     pace: FeatureScore;
     marketContext: FeatureScore;
-    weather: FeatureScore;
+    weatherEnvironment: FeatureScore;
     injuryContext: FeatureScore;
     correlationExposure: FeatureScore;
   };
@@ -569,7 +618,7 @@ export function scoreAll(
     gameScript: scoreGameScript(inputs.gameScript, propType),
     pace: scorePace(inputs.pace, propType),
     marketContext: scoreMarketContext(inputs.marketContext, propType),
-    weather: scoreWeather(inputs.weather, propType),
+    weatherEnvironment: scoreWeather(inputs.weatherEnvironment, propType),
     injuryContext: scoreInjuryContext(inputs.injuryContext, propType),
     correlationExposure: scoreCorrelationExposure(
       inputs.correlationExposure,

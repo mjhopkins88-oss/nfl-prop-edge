@@ -10,6 +10,14 @@ import {
   formatProjection,
 } from "@/lib/prop-utils";
 import type { GameLog, PropType } from "@/lib/data/types";
+import type {
+  FeatureGroupResult,
+  FeatureImpact,
+} from "@/lib/model/feature-framework";
+import {
+  EDGE_THRESHOLDS,
+  QUALIFICATION_FLOORS,
+} from "@/lib/model/feature-scoring";
 import TeamBadge from "@/components/TeamBadge";
 import EdgeBadge from "@/components/EdgeBadge";
 import RecommendationPill from "@/components/RecommendationPill";
@@ -259,6 +267,81 @@ export default async function PropDetailPage({
               </li>
             ))}
           </ul>
+        </div>
+      </section>
+
+      {/* WHY THIS DID OR DID NOT QUALIFY */}
+      <section className="glass rounded-2xl p-5">
+        <SectionHeader
+          icon={<InfoIcon className="h-3.5 w-3.5" />}
+          label="Why this did or did not qualify"
+          accent="amber"
+        />
+        <QualificationChecklist detail={detail} />
+      </section>
+
+      {/* FEATURE BREAKDOWN */}
+      <section>
+        <div className="mb-3 flex items-baseline justify-between">
+          <SectionHeader
+            icon={<ChartBarIcon className="h-3.5 w-3.5" />}
+            label="Feature breakdown"
+            inline
+          />
+          <div className="text-xs text-ink-500">
+            Data quality{" "}
+            <span className="tabular font-medium text-ink-800">
+              {detail.dataQualityScore}
+            </span>{" "}
+            · Risk{" "}
+            <span className="tabular font-medium text-ink-800">
+              {detail.riskScore}
+            </span>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <FeatureCard
+            title="Role Stability"
+            group={detail.featureSet.roleStability}
+            propType={detail.propType}
+            kind="role"
+          />
+          <FeatureCard
+            title="Game Script"
+            group={detail.featureSet.gameScript}
+            propType={detail.propType}
+            kind="script"
+          />
+          <FeatureCard
+            title="Pace"
+            group={detail.featureSet.pace}
+            propType={detail.propType}
+            kind="pace"
+          />
+          <FeatureCard
+            title="Market Context"
+            group={detail.featureSet.marketContext}
+            propType={detail.propType}
+            kind="market"
+          />
+          <FeatureCard
+            title="Weather / Environment"
+            group={detail.featureSet.weatherEnvironment}
+            propType={detail.propType}
+            kind="weather"
+          />
+          <FeatureCard
+            title="Injury Context"
+            group={detail.featureSet.injuryContext}
+            propType={detail.propType}
+            kind="injury"
+          />
+          <FeatureCard
+            title="Correlation Exposure"
+            group={detail.featureSet.correlationExposure}
+            propType={detail.propType}
+            kind="correlation"
+          />
         </div>
       </section>
 
@@ -552,6 +635,224 @@ function DistributionBar({
         style={{ left: `${linePct}%` }}
         title={`Line: ${line}`}
       />
+    </div>
+  );
+}
+
+// =====================================================================
+// Feature-framework helpers
+// =====================================================================
+
+type FeatureKind =
+  | "role"
+  | "script"
+  | "pace"
+  | "market"
+  | "weather"
+  | "injury"
+  | "correlation";
+
+const KIND_EFFECT_TEXT: Record<FeatureKind, Record<FeatureImpact, string>> = {
+  role: {
+    positive: "Higher confidence that recent usage repeats this week.",
+    neutral: "Role looks stable — no role-driven adjustment.",
+    negative: "Usage trend or teammate context erodes confidence in recent role.",
+  },
+  script: {
+    positive: "Projected game flow leans toward this market's volume.",
+    neutral: "Game flow has no clear positive or negative pull.",
+    negative: "Likely game flow compresses this market's volume.",
+  },
+  pace: {
+    positive: "Faster matchup → more plays → more opportunities.",
+    neutral: "League-average pace assumed.",
+    negative: "Slower matchup compresses opportunity count.",
+  },
+  market: {
+    positive: "Market signals (line move / outlier book) lean with the model.",
+    neutral: "No market-context signal yet (single snapshot).",
+    negative: "Adverse line movement or thin liquidity weighs on the play.",
+  },
+  weather: {
+    positive: "Indoor / clean conditions — passing markets unaffected.",
+    neutral: "Outdoor but conditions are mild.",
+    negative: "Wind / precipitation creates real volatility for this market.",
+  },
+  injury: {
+    positive: "Teammate absences or matchup boost role.",
+    neutral: "No injury flags impact this projection.",
+    negative: "Player or game injury context too uncertain — model widens σ.",
+  },
+  correlation: {
+    positive: "No concentration risk on this game yet.",
+    neutral: "Some same-game exposure — within cap.",
+    negative: "Concentration / correlation cap reached — block to limit drawdown.",
+  },
+};
+
+function FeatureCard({
+  title,
+  group,
+  propType,
+  kind,
+}: {
+  title: string;
+  group: FeatureGroupResult;
+  propType: PropType;
+  kind: FeatureKind;
+}) {
+  void propType; // currently unused; reserved for per-prop-type narrative
+  const tone =
+    group.impact === "positive"
+      ? "from-sea-200/70 via-emerald-50 ring-sea-300/60 text-sea-700"
+      : group.impact === "negative"
+        ? "from-coral-200/70 via-rose-50 ring-coral-300/60 text-coral-700"
+        : "from-cream-200/80 via-cream-100 ring-ink-200/60 text-ink-700";
+  const scoreColor =
+    group.impact === "positive"
+      ? "text-sea-700"
+      : group.impact === "negative"
+        ? "text-coral-700"
+        : "text-ink-900";
+  const effect = KIND_EFFECT_TEXT[kind][group.impact];
+
+  return (
+    <div
+      className={`glass relative overflow-hidden rounded-2xl p-4 ring-1 ${tone.split(" ").slice(-2).join(" ")}`}
+    >
+      <div
+        className={`pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br ${tone.split(" ").slice(0, 2).join(" ")} to-transparent blur-2xl`}
+      />
+      <div className="relative flex items-start justify-between">
+        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-600">
+          {title}
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ring-1 ${
+            group.impact === "positive"
+              ? "bg-sea-50 text-sea-700 ring-sea-200"
+              : group.impact === "negative"
+                ? "bg-rose-50 text-coral-700 ring-coral-200"
+                : "bg-cream-100 text-ink-700 ring-ink-200"
+          }`}
+        >
+          {group.impact}
+        </span>
+      </div>
+      <div className={`tabular relative mt-2 text-3xl font-semibold ${scoreColor}`}>
+        {group.score}
+        <span className="ml-1 text-sm font-normal text-ink-500">/100</span>
+      </div>
+      <div className="relative mt-2 text-xs leading-snug text-ink-700">
+        {group.explanation}
+      </div>
+      <div className="relative mt-3 border-t border-ink-200/50 pt-2 text-[11px] leading-snug text-ink-500">
+        <span className="font-medium text-ink-700">Impact on this prop:</span>{" "}
+        {effect}
+      </div>
+    </div>
+  );
+}
+
+type QualLine = { label: string; passed: boolean; detail: string };
+
+function QualificationChecklist({
+  detail,
+}: {
+  detail: {
+    propType: PropType;
+    edge: number;
+    recommendation: string;
+    passReasons: string[];
+    dataQualityScore: number;
+    riskScore: number;
+    featureSet: {
+      roleStability: { score: number };
+      injuryContext: { score: number };
+      weatherEnvironment: { score: number };
+      correlationExposure: { score: number };
+    };
+  };
+}) {
+  const threshold = EDGE_THRESHOLDS[detail.propType];
+  const lines: QualLine[] = [
+    {
+      label: "Edge clears prop-type threshold",
+      passed: Math.abs(detail.edge) >= threshold,
+      detail: `|edge| ${(Math.abs(detail.edge) * 100).toFixed(1)}% vs ${(threshold * 100).toFixed(1)}% threshold`,
+    },
+    {
+      label: "Role stability acceptable",
+      passed:
+        detail.featureSet.roleStability.score >= QUALIFICATION_FLOORS.roleStability,
+      detail: `score ${detail.featureSet.roleStability.score} vs floor ${QUALIFICATION_FLOORS.roleStability}`,
+    },
+    {
+      label: "Injury uncertainty acceptable",
+      passed:
+        detail.featureSet.injuryContext.score >= QUALIFICATION_FLOORS.injuryContext,
+      detail: `score ${detail.featureSet.injuryContext.score} vs floor ${QUALIFICATION_FLOORS.injuryContext}`,
+    },
+    {
+      label: "Weather risk acceptable",
+      passed:
+        detail.featureSet.weatherEnvironment.score >=
+        QUALIFICATION_FLOORS.weatherEnvironment,
+      detail: `score ${detail.featureSet.weatherEnvironment.score} vs floor ${QUALIFICATION_FLOORS.weatherEnvironment}`,
+    },
+    {
+      label: "Correlation exposure acceptable",
+      passed:
+        detail.featureSet.correlationExposure.score >=
+        QUALIFICATION_FLOORS.correlationExposure,
+      detail: `score ${detail.featureSet.correlationExposure.score} vs floor ${QUALIFICATION_FLOORS.correlationExposure}`,
+    },
+    {
+      label: "Data quality acceptable",
+      passed: detail.dataQualityScore >= QUALIFICATION_FLOORS.dataQuality,
+      detail: `score ${detail.dataQualityScore} vs floor ${QUALIFICATION_FLOORS.dataQuality}`,
+    },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <div className="mb-3 text-sm text-ink-700">
+        {detail.recommendation === "PASS" ? (
+          <>
+            <span className="font-semibold text-coral-700">PASS.</span>{" "}
+            One or more gates below failed.
+          </>
+        ) : (
+          <>
+            <span className="font-semibold text-sea-700">QUALIFIED.</span>{" "}
+            All gates below cleared.
+          </>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        {lines.map((l, i) => (
+          <div
+            key={i}
+            className={`flex items-start gap-2.5 rounded-lg px-3 py-1.5 ring-1 ${
+              l.passed
+                ? "bg-sea-50/60 text-sea-800 ring-sea-200/60"
+                : "bg-rose-50/60 text-coral-800 ring-coral-200/60"
+            }`}
+          >
+            <span
+              className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px] font-bold ${
+                l.passed ? "bg-sea-500 text-white" : "bg-coral-500 text-white"
+              }`}
+            >
+              {l.passed ? "✓" : "✕"}
+            </span>
+            <div className="flex-1 text-sm">
+              <span className="font-medium">{l.label}</span>{" "}
+              <span className="tabular text-xs text-ink-500">— {l.detail}</span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
