@@ -308,3 +308,25 @@ model GameLog {
 
   @@index([playerId, season, week])
 }
+
+/// One row per external API call. Used to track real credit burn vs
+/// estimates and to detect runaway scripts before they spend through a
+/// budget. Most fields are nullable because not every source reports
+/// every value (Open-Meteo has no credit headers; Kalshi has none).
+model ApiUsageLog {
+  id                String   @id @default(cuid())
+  source            String
+  endpoint          String
+  requestUrlHash    String
+  estimatedCredits  Int?
+  actualCredits     Int?
+  creditsRemaining  Int?
+  creditsUsed       Int?
+  creditsLast       Int?
+  status            Int?
+  message           String?
+  createdAt         DateTime @default(now())
+
+  @@index([source, createdAt])
+  @@index([requestUrlHash])
+}

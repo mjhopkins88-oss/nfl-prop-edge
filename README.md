@@ -449,6 +449,99 @@ the framework is reversible and incremental:
 Each step is a self-contained commit that doesn't change behaviour for
 groups that still return neutral.
 
+## API Cost Protection Rules
+
+V1 codifies the credit-spend policy in **`src/config/api-budget.ts`** so
+nothing scattered across the ingestion scripts can quietly burn through
+a budget. Every paid-API code path imports from that file.
+
+### The constants (edit here, audit everywhere)
+
+| Constant | Default | What it does |
+| --- | --- | --- |
+| `MAX_ODDS_API_CREDITS_PER_RUN` | `200` | Hard ceiling on any single Odds-API run. Estimated cost above this aborts before any HTTP call. |
+| `MIN_ODDS_API_CREDITS_REMAINING` | `1000` | Account-credit floor. Once we observe `x-requests-remaining` from a response, a run that would drop the account below this is refused. |
+| `MAX_MARKETS_PER_REQUEST` | `7` | Cap on markets per `/events/{id}/odds` call. The URL builder also throws when exceeded. |
+| `ALLOWED_ODDS_REGIONS` | `["us"]` | Region whitelist. V1 only trades US books. The URL builder throws on anything else. |
+| `DEFAULT_HISTORICAL_SNAPSHOT_HOURS_BEFORE_KICKOFF` | `3.5` | Snapshot offset (rounded to the 5-minute grid). |
+| `ALLOW_REAL_ODDS_API_CALLS` | `false` (set via env `ALLOW_REAL_ODDS_API_CALLS=true`) | Master kill-switch. Must be `true` before any non-dry script run is allowed. |
+| `CACHE_ROOT` | `data/cache` | Where raw responses are cached. Gitignored. |
+
+### The dry-run-first policy
+
+`scripts/ingest-historical-prop-lines.ts` **defaults to dry-run**. To
+actually spend credits, both must be true:
+
+1. The script must be invoked with `--execute`.
+2. The env var `ALLOW_REAL_ODDS_API_CALLS` must be `"true"`.
+
+Missing either ⇒ clean exit with the gate that failed:
+
+```bash
+# default — prints the plan, no API calls, no key needed
+npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --weeks 1-10 --source mock
+# 2026-05-20T... INFO Dry-run complete. Estimated credits: 38 (budget 200).
+
+# --execute without the env switch
+ODDS_API_KEY=… npx tsx scripts/ingest-historical-prop-lines.ts --execute
+# ABORT: --execute was passed but ALLOW_REAL_ODDS_API_CALLS env var is not 'true'.
+
+# --execute with the switch but the estimate blows the budget
+ALLOW_REAL_ODDS_API_CALLS=true ODDS_API_KEY=… \
+  npx tsx scripts/ingest-historical-prop-lines.ts --execute --budget 5
+# ABORT: estimated 38 credits exceeds --budget 5.
+```
+
+Every live run prints, **before** the first HTTP call:
+
+- planned request count (events-list + per-event odds);
+- estimated credits with per-region / per-market breakdown;
+- the budget cap it's checked against.
+
+### Credit estimator + budget validation
+
+`src/lib/ingestion/credit-estimator.ts`:
+
+- `estimateHistoricalEventOddsCredits({ markets, regions })` — cost of
+  one `/events/{id}/odds` call.
+- `estimateSeasonBacktestCredits({ gameCount, markets, regions, uniqueSnapshots? })`
+  — cost of a full backtest run, broken into events-list and per-event
+  odds.
+- `validateCreditBudget({ markets, regions, estimatedCredits, creditsRemaining? })`
+  — refuses (with explicit reasons) if any of: markets cap exceeded,
+  region not whitelisted, estimate over `MAX_ODDS_API_CREDITS_PER_RUN`,
+  or running would drop the account below
+  `MIN_ODDS_API_CREDITS_REMAINING`.
+
+### Request caching
+
+`src/lib/ingestion/cache.ts` is a stdlib-only file cache for raw API
+responses:
+
+- `buildCacheKey({ source, endpoint, params })` — deterministic
+  `<source>/<sha256>.json` key. Never includes `apiKey`, so cache entries
+  are portable between dev / CI / users.
+- `hasCachedResponse(key)`, `getCachedResponse(key, { maxAgeMs })`,
+  `saveCachedResponse(key, response, { url })` — read / write / TTL.
+- Persisted URLs are stored with the apiKey replaced by `***MASKED***`.
+
+Cache root: `data/cache/` (gitignored).
+
+### Usage logging
+
+The Prisma schema includes an **`ApiUsageLog`** model:
+
+| Field | Purpose |
+| --- | --- |
+| `source`, `endpoint`, `requestUrlHash` | what was called |
+| `estimatedCredits`, `actualCredits` | budget reconciliation |
+| `creditsRemaining`, `creditsUsed`, `creditsLast` | mirror Odds-API response headers (`x-requests-remaining`, `-used`, `-last`) |
+| `status`, `message` | HTTP status + error / OK |
+| `createdAt` | indexed |
+
+Live wiring (one `prisma.apiUsageLog.create({...})` per successful or
+failed call) lands when the first real Odds-API run is approved.
+
 ## Staying under API credit limits
 
 | Source | Pricing | Mitigation |

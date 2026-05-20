@@ -44,6 +44,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import {
+  ALLOW_REAL_ODDS_API_CALLS,
+  ALLOWED_ODDS_REGIONS,
+  MAX_ODDS_API_CREDITS_PER_RUN,
+} from "../src/config/api-budget";
+import {
   MAX_MARKETS_PER_REQUEST,
   NFL_TEAM_NAMES_BY_ABBR,
   ODDS_API_BASE_URL,
@@ -61,6 +66,7 @@ import {
   type NormalizedPropQuote,
   type OddsApiEvent,
 } from "../src/lib/ingestion/odds-api";
+import { validateCreditBudget } from "../src/lib/ingestion/credit-estimator";
 
 // --- types ------------------------------------------------------------
 
@@ -174,13 +180,15 @@ function writeCsv(p: string, columns: string[], rows: Record<string, unknown>[])
 // --- CLI parser -------------------------------------------------------
 
 function parseArgs(argv: string[]): CliArgs {
+  // Default to dry-run. The script REQUIRES --execute (and the
+  // ALLOW_REAL_ODDS_API_CALLS env var) to spend credits.
   const args: Partial<CliArgs> & { weeksSpec?: string } = {
     source: "csv",
     input: "data/processed/games.csv",
     out: "data",
-    budget: 200,
+    budget: MAX_ODDS_API_CREDITS_PER_RUN,
     hoursBefore: 3.5,
-    dryRun: false,
+    dryRun: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -215,7 +223,10 @@ function parseArgs(argv: string[]): CliArgs {
         args.hoursBefore = Number(eatValue());
         break;
       case "--dry-run":
-        args.dryRun = true;
+        args.dryRun = true; // already the default; supported for explicitness
+        break;
+      case "--execute":
+        args.dryRun = false;
         break;
       case "--help":
       case "-h":
@@ -260,11 +271,14 @@ Options:
   --out DIR             root output dir (default: data)
   --budget N            max estimated credits before aborting (default: 200)
   --hours-before N      hours before kickoff for snapshot (default: 3.5)
-  --dry-run             plan + URLs, no API calls
+  --dry-run             plan + URLs, no API calls (this is the default)
+  --execute             actually call the API (also requires
+                        ALLOW_REAL_ODDS_API_CALLS=true in env)
 
 Env:
-  ODDS_API_KEY          required for non-dry-run modes
-  ODDS_API_BASE_URL     override the base URL (default: ${ODDS_API_BASE_URL})
+  ODDS_API_KEY                  required for --execute
+  ODDS_API_BASE_URL             override base URL (default: ${ODDS_API_BASE_URL})
+  ALLOW_REAL_ODDS_API_CALLS     master kill-switch; must be "true" to --execute
 `);
 }
 
@@ -420,7 +434,16 @@ async function main(argv: string[]): Promise<number> {
   if (!args.dryRun && !apiKey) {
     log(
       "error",
-      "ODDS_API_KEY env var is required for non-dry-run mode. Re-run with --dry-run to see the plan, or set the env var.",
+      "ODDS_API_KEY env var is required for --execute mode. Omit --execute to see the plan, or set the env var.",
+    );
+    return 2;
+  }
+  if (!args.dryRun && !ALLOW_REAL_ODDS_API_CALLS) {
+    log(
+      "error",
+      "ABORT: --execute was passed but ALLOW_REAL_ODDS_API_CALLS env var is not 'true'. " +
+        "This is the master kill-switch for paid Odds-API calls (see src/config/api-budget.ts). " +
+        "Re-run without --execute to dry-run, or set ALLOW_REAL_ODDS_API_CALLS=true to spend credits.",
     );
     return 2;
   }
@@ -446,15 +469,36 @@ async function main(argv: string[]): Promise<number> {
     marketsPerEvent: SUPPORTED_MARKETS.length,
   });
 
+  // Planned request count = one /events per unique snapshot + one
+  // /events/{id}/odds per game.
+  const plannedRequestCount = snapshots.length + games.length;
+
   log(
     "info",
     `Plan: ${games.length} games across ${snapshots.length} unique snapshots × ${plan.marketsPerEvent} markets (region=${SUPPORTED_REGION}).`,
   );
   log(
     "info",
+    `Planned HTTP requests: ${plannedRequestCount} (${snapshots.length} events-list + ${games.length} per-event odds).`,
+  );
+  log(
+    "info",
     `Estimated credits: ${plan.estimatedCredits} (snapshots=${plan.uniqueSnapshots}, events=${plan.totalEvents}). Budget: ${args.budget}.`,
   );
 
+  // Hard policy check from src/config/api-budget.ts.
+  const validation = validateCreditBudget({
+    markets: SUPPORTED_MARKETS.length,
+    regions: [...ALLOWED_ODDS_REGIONS],
+    estimatedCredits: plan.estimatedCredits,
+  });
+  if (!validation.ok) {
+    log(
+      "error",
+      `ABORT: budget policy violated. ${validation.reasons.join("; ")}`,
+    );
+    return 3;
+  }
   if (plan.estimatedCredits > args.budget) {
     log(
       "error",
