@@ -45,6 +45,13 @@ enum ModelRunType {
   BACKTEST
 }
 
+enum BetResult {
+  WIN
+  LOSS
+  PUSH
+  NO_BET
+}
+
 model Team {
   id           String   @id @default(cuid())
   abbreviation String   @unique
@@ -176,9 +183,88 @@ model ModelRun {
 
   projections     Projection[]
   backtestResults BacktestResult[]
+  predictions     PropPrediction[]
+  betCandidates   BetCandidate[]
 
   @@index([version])
   @@index([createdAt])
+}
+
+/// One PropPrediction = the model's full evaluation of one prop market
+/// at one moment, with grading attached once the actual stat is known.
+/// Captured for every prop the engine sees — qualified or not — so we
+/// can study calibration on the props we passed on as well.
+model PropPrediction {
+  id                    String         @id @default(cuid())
+  modelRunId            String
+  season                Int
+  week                  Int
+  gameId                String
+  team                  String
+  playerName            String
+  propType              PropType
+  line                  Float
+  bookName              String
+  overPrice             Int
+  underPrice            Int
+  projectedMean         Float
+  projectedStdDev       Float
+  modelOverProbability  Float
+  modelUnderProbability Float
+  bookOverProbability   Float
+  bookUnderProbability  Float
+  edge                  Float
+  expectedValue         Float
+  recommendation        Recommendation
+  confidence            Float
+  qualified             Boolean
+  reasons               Json
+  risks                 Json
+  passReasons           Json
+  actualValue           Float?
+  result                BetResult?
+  unitsStaked           Float?
+  unitsReturned         Float?
+  brierComponent        Float?
+  clvCents              Float?
+  createdAt             DateTime       @default(now())
+
+  modelRun              ModelRun       @relation(fields: [modelRunId], references: [id])
+  betCandidate          BetCandidate?  @relation("PredictionBetCandidate")
+
+  @@index([modelRunId, season, week])
+  @@index([propType])
+  @@index([result])
+}
+
+/// One BetCandidate = one qualified prediction we'd actually wager on.
+/// 1:0..1 from PropPrediction (only qualified predictions promote into a
+/// candidate). Kept as its own row so the bet ledger is easy to query.
+model BetCandidate {
+  id                String         @id @default(cuid())
+  predictionId      String         @unique
+  modelRunId        String
+  season            Int
+  week              Int
+  gameId            String
+  playerName        String
+  propType          PropType
+  line              Float
+  recommendedSide   Recommendation
+  recommendedOdds   Int
+  edge              Float
+  expectedValue     Float
+  confidence        Float
+  staked            Float
+  returned          Float?
+  result            BetResult?
+  createdAt         DateTime       @default(now())
+
+  prediction        PropPrediction @relation("PredictionBetCandidate", fields: [predictionId], references: [id])
+  modelRun          ModelRun       @relation(fields: [modelRunId], references: [id])
+
+  @@index([modelRunId, season, week])
+  @@index([propType])
 }
 
 /// Backtest aggregate: one row per (model run, prop type, season, week).
