@@ -16,6 +16,11 @@ UX and modeling story before wiring in real odds and projection feeds.
   projection breakdown (mean ± σ, model vs book implied probability), last 5
   game logs with line-relative distribution, line shopping across sportsbooks,
   and matchup notes.
+- **Experimental Game Edge at `/game-edge`.** A SEPARATE experimental
+  model for game-level moneyline + spread markets. Surfaces upset
+  watch / playable ML / spread value / pass labels. Does not affect
+  player prop logic. See the "Experimental Game Edge Model" section
+  below.
 - **Mock data first.** All numbers come from `src/lib/mock-data.ts` so the app
   runs without any external API or database connection. The Prisma schema and
   seed script are ready for when the live data pipeline lands.
@@ -709,6 +714,286 @@ on premium sources. The model layer wouldn't need to change.
 
 See `PROXY_FEATURE_NOTES.md` for per-proxy known failure modes,
 anchors, and calibration details.
+
+## How We Test Proxy Accuracy
+
+Logical tests prove proxies behave as expected. They don't prove the
+proxies are *useful*. That requires three levels of evaluation:
+
+### 1. Logical / unit tests
+
+`scripts/test-proxy-football-features.ts` (59 assertions) and
+`scripts/test-proxy-football-calibration.ts` (147 assertions) check
+that:
+
+- Each proxy fires on its valid-case profile and stays quiet on its
+  false-positive profile.
+- Confidence drops with thin samples / fallback data / one-sided
+  signals.
+- Anchors prevent single-signal hits from claiming "likely" labels.
+- Every output is bounded, prefixed `Proxy-based:`, and exposes no
+  forcing surface.
+
+### 2. Manual validation against football reality
+
+Spot-check proxy labels for real players the team knows: does a
+known slot WR (e.g., a Wes Welker archetype) actually get
+`SLOT_VOLUME_LIKELY`? Does a deep specialist register as
+`DEEP_THREAT_LIKELY` rather than `POSSESSION_RECEIVER_LIKELY`? Does
+a defense facing pass-heavy schedules with positive EPA allowed
+flag as a real pass funnel, while one that just leads a lot stays
+in `PASS_FUNNEL_SCRIPT_FALLBACK`? This is qualitative — easy to do,
+useful as a sanity gate before integration.
+
+### 3. Backtest accuracy validation (this section)
+
+`scripts/test-proxy-validation.ts` runs the fixture backtest, attaches
+proxy results to every evaluated prop, and asks: **for plays where
+this proxy fired with high value AND high confidence, did ROI
+actually improve vs the baseline?**
+
+Outputs land in `data/backtests/2025/`:
+
+- `proxy-performance.fixture.json` — per-proxy summary with value-
+  bucket and confidence-bucket slices.
+- `proxy-lift.fixture.json` — baseline vs high-value vs
+  high-confidence vs both-high ROI, plus a `KEEP` / `RECALIBRATE` /
+  `RETIRE` recommendation.
+- `proxy-false-positives.fixture.json` — examples where the proxy
+  fired strongly but the related bet lost.
+- `proxy-false-negatives.fixture.json` — examples where the proxy
+  was weak but the bet hit anyway.
+
+The `/backtest` page renders a *Proxy Accuracy* section above the
+existing performance cards (best lift, worst lift, false-positive
+count, false-negative count, per-proxy lift table, per-proxy
+high-confidence performance) whenever those files are present.
+
+### Lift, not vibes
+
+The framework treats each proxy as a **hypothesis**. The data either
+supports it or doesn't:
+
+- **Lift ≥ +5pp** (high-both ROI over baseline ROI) and ≥ 3 bets
+  on each side → `KEEP`.
+- **Lift in (0, +5pp)** or insufficient bet sample → `RECALIBRATE`.
+- **Lift ≤ 0** with sufficient sample → `RETIRE`.
+
+If a proxy can't earn its 5pp of lift after enough real data, it
+gets recalibrated or removed. The point is to build a **disciplined**
+library, not to add unverified knobs.
+
+### Premium data could replace proxies later
+
+Each proxy's input slice is the contract. Real route-charting,
+participation, alignment, EPA splits, and tracking data would slot
+into the same `PlayerProxyInput` / `OffenseProxyInput` /
+`DefenseProxyInput` shapes when the team is ready to spend on
+premium sources. The validation framework wouldn't change — only
+the inputs would.
+
+## Market-Anchored Probability Layer
+
+Discipline against overconfidence. The framework treats no-vig
+market probability as the **baseline** and adds capped football-
+context adjustments around it. The output is a "confidence-adjusted
+edge" — the disciplined version of the raw model-vs-market
+difference.
+
+### Why anchor on the market?
+
+The market has already aggregated sharp opinion, real bankrolls, and
+public liquidity. Walking too far from it without strong, agreeing
+signals is a classic overconfidence trap. The framework codifies
+that discipline in three layers:
+
+1. **Cap by data quality**: if `dataQualityScore < 0.55`, the
+   maximum football-side adjustment is **2 percentage points**.
+2. **Cap by composite risk**: if `riskScore < 0.55`, the maximum
+   adjustment is **3 percentage points**.
+3. **Cap by signal agreement + prop type**:
+   - Volume props default cap: **8pp**
+   - Yardage props default cap: **5pp** (tighter — yardage already
+     carries higher base variance)
+   - Multiple agreeing independent signals + high confidence
+     unlocks up to **10pp** (yardage) or **12pp** (volume)
+
+The lowest applicable cap always wins.
+
+### Confidence-adjusted edge
+
+```
+rawEdge = (finalModelProbability − marketProbability) × 100
+confidenceAdjustedEdge = rawEdge × confidence-multiplier × risk-multiplier
+```
+
+Where:
+
+- `confidence-multiplier = clamp(confidence / 0.7, 0.4, 1.0)`
+- `risk-multiplier = clamp(riskScore / 0.7, 0.5, 1.0)`
+
+Result: a 5pp raw edge with high confidence and low risk stays ≈ 5pp.
+The same 5pp edge with mediocre confidence and elevated risk shrinks
+to ≈ 2–3pp. **The disciplined number is what downstream consumers
+should read.**
+
+### Disagreement classification
+
+| Class | Trigger |
+|---|---|
+| `MARKET_ALIGNED` | `|capped adjustment| < 1pp` |
+| `SMALL_EDGE` | `1pp ≤ |capped| < 4pp` |
+| `HEALTHY_DISAGREEMENT` | `|capped| ≥ 4pp` AND `confidence ≥ 0.55` |
+| `DANGEROUS_DISAGREEMENT` | `|capped| ≥ 4pp` AND `confidence < 0.55` |
+| `LIKELY_OVERCONFIDENT` | `|raw adjustment| > 12pp` (pre-cap signal blew past the threshold — even with capping, the underlying mismatch surfaces a warning) |
+
+The `LIKELY_OVERCONFIDENT` class is the key safeguard: the framework
+ALWAYS caps the final number, but it also surfaces the warning so
+operators can investigate whether the football signals are real or
+whether the model is hallucinating an edge that the market didn't
+miss.
+
+### Integration
+
+`src/lib/model/market-anchored-probability.ts` is standalone today.
+The existing scorecard's recommendation math is **unchanged**. As a
+safe touchpoint, `ScorecardInput` accepts an optional
+`marketAnchoredProbability` passthrough field that
+`buildPropDecisionScorecard()` copies into its output for downstream
+display — no decision math reads it.
+
+Future integration would feed the disciplined `confidenceAdjustedEdgePp`
+into the scorecard's edge-threshold comparison instead of the raw
+edge. That decision is deferred until backtesting confirms the cap
+levels are well-calibrated.
+
+### Backtesting determines the cap levels
+
+Like the proxy validation layer, the cap settings here are
+hypotheses. Backtesting will eventually tell us whether 2/3/5/8/10/12pp
+caps are too tight, too loose, or about right. The intent is to
+arrive at cap levels through evidence, not vibes.
+
+## Experimental Game Edge Model
+
+The Game Edge model is a **separate experimental track** for
+game-level markets (moneyline + spread). It is not part of the
+player prop scorecard and never feeds into player prop
+recommendations. Player prop logic is unchanged.
+
+### What it evaluates
+
+For each game it produces:
+
+- per-side moneyline edge and confidence-adjusted edge
+- per-side spread cover probability and confidence-adjusted edge
+- an upset score (0–100) — descriptive, not prescriptive
+- a single recommendation across moneyline vs spread, gated on
+  confidence-adjusted edge
+
+Recommendation labels:
+
+- `Strong ML Value` (≥8pp confidence-adjusted ML edge)
+- `Playable ML Value` (clears ML threshold but below 8pp)
+- `Upset Watch` (high upset score but no price clears threshold)
+- `Spread Value` (clears spread threshold)
+- `Cover Watch` (positive spread edge below threshold)
+- `Pass / No Edge` (no path clears, no upset signal)
+- `Pass / Too Much Uncertainty` (data quality or risk too low)
+
+### Why it's separate
+
+Game-level math (full-game win probability, margin-based cover
+probability) is fundamentally different from prop-level math (per-
+prop volume / yardage projection). Mixing them in one decision path
+would obscure both. The Game Edge model:
+
+- lives under `/game-edge` in the UI, labeled "Experimental Game
+  Edge Model" and routed independently from the player prop pages
+- has its own scorecard type (`GameEdgeScorecard`) and its own
+  decision logic (`buildGameEdge` in
+  `src/lib/model/game-edge-model.ts`)
+- reuses `buildMarketAnchoredProbability` for moneyline cap
+  discipline — so it inherits the same anchor + cap behavior as the
+  prop model, just applied to full-game win probability
+
+### Market is the baseline
+
+Like the player prop model, the Game Edge model treats market
+probability as the baseline. Capped football-context components are
+applied around the no-vig market probability — not on top of an
+independent point estimate. Same discipline, applied at game level.
+
+### Upset score is descriptive
+
+The upset score (0–100) summarizes how many upset-friendly signals
+fire (dog pass-rush advantage, favorite QB instability, weather
+compression, dog run-game advantage, favorite coaching uncertainty,
+favorite injury risk, dog rest advantage, large spread) and how
+many disqualifying signals fire (dog QB instability, dog OL
+continuity, dog cannot run, favorite trench dominance, dog cannot
+pressure, high total, dog injury risk, low data quality).
+
+A high upset score is a **prompt to look closer**. It does not
+force a play. The only way the model recommends a play is if the
+confidence-adjusted edge clears its threshold. If the ML is too
+expensive (e.g., -650 with only 4pp edge), the model labels it
+`Upset Watch` (or `Pass / No Edge`) — never a forced underdog ML.
+
+### Spread and moneyline are independent
+
+Spread cover probability is computed from expected home margin
+(log-odds × ~4.5 NFL points per logit) plus an empirical sigma (10
++ adjustments for total / weather / coaching). Cover probability is
+a normal-CDF approximation. The spread path can recommend a play
+while the moneyline path does not, and vice versa — they are
+evaluated as separate candidates and the highest confidence-
+adjusted edge wins.
+
+### Recommendation thresholds (initial hypothesis)
+
+| Path                 | Confidence-adjusted edge threshold |
+|----------------------|------------------------------------|
+| ML favorite          | 3pp                                |
+| ML underdog          | 5pp                                |
+| ML longshot (<30%)   | 7pp                                |
+| Spread (either side) | 4pp (6pp when uncertainty elevated)|
+| Upset Watch          | upset score ≥ 55                   |
+
+These thresholds are hypotheses, not certainties. They will be
+tuned by backtesting before any live use.
+
+### Key-number awareness
+
+Spreads near key NFL numbers (2.5, 3, 3.5, 6.5, 7, 7.5, 9.5, 10,
+10.5, 13.5, 14, 14.5) are flagged with `keyNumberRisk = true`. A
+half-point line move at a key number changes cover probability
+materially, so any positive cover edge sitting on a key number is
+flagged in the risks list.
+
+### Hard PASS gates
+
+- Data quality below 0.45 → `Pass / Too Much Uncertainty`
+- Composite risk below 0.45 → `Pass / Too Much Uncertainty`
+
+These mirror the prop scorecard's PASS posture — when the data
+isn't good enough, the model doesn't pretend it is.
+
+### Where to find it
+
+- types: `src/lib/model/game-edge-types.ts`
+- model: `src/lib/model/game-edge-model.ts`
+- display helpers: `src/lib/model/game-edge-scorecard.ts`
+- fixture data: `src/lib/model/game-edge-data.ts`
+- test runner: `scripts/test-game-edge-model.ts`
+- UI: `/game-edge` (list) and `/game-edge/[id]` (detail)
+
+### Status
+
+Experimental. No backtest yet. Fixture-driven. **Do not use for
+real bets until the model has been validated against historical
+game data** — and even then, this remains a research project, not
+investment advice.
 
 ## V1 Qualification Logic
 

@@ -5,6 +5,7 @@ import type {
   MatchupScorecardComponent,
 } from "../model/matchup-intelligence-types";
 import type { PropDecisionScorecard } from "../model/model-scorecard";
+import type { AllFootballProxies } from "../model/proxy-football-feature-types";
 
 export type BacktestSeason = number;
 export type BacktestWeek = number;
@@ -229,6 +230,13 @@ export interface BacktestEvaluatedProp {
   closingLineValue?: number;
   postmortemTags: BacktestPostmortemTag[];
   scorecardSnapshot: PropDecisionScorecard;
+  /**
+   * Optional proxy football features attached to this evaluated prop.
+   * Not populated by the default fixture runner — the proxy validation
+   * pipeline attaches them post-hoc so the validation framework can
+   * compute per-proxy summaries and lift.
+   */
+  proxies?: AllFootballProxies;
   createdAt: string;
 }
 

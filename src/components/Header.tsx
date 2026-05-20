@@ -4,6 +4,7 @@ import { LogoMark } from "./icons";
 const NAV_ITEMS = [
   { href: "/", label: "Opportunities" },
   { href: "/backtest", label: "Backtest" },
+  { href: "/game-edge", label: "Game Edge" },
 ];
 
 export default function Header() {

@@ -6,6 +6,7 @@ import type {
   MatchupAdjustmentOutput,
   MatchupScorecardComponent,
 } from "./matchup-intelligence-types";
+import type { MarketAnchoredProbabilityOutput } from "./market-anchored-probability";
 
 export type Side = "OVER" | "UNDER";
 
@@ -74,6 +75,13 @@ export interface ScorecardInput {
    * attached without re-running the adjustment.
    */
   matchupComponent?: MatchupScorecardComponent;
+  /**
+   * Optional market-anchored probability output. Pure passthrough —
+   * the scorecard builder does NOT consume this for recommendation
+   * math (the standalone module documents the rationale). If
+   * provided, it is attached to the output for downstream display.
+   */
+  marketAnchoredProbability?: MarketAnchoredProbabilityOutput;
 }
 
 export interface PropDecisionScorecard {
@@ -117,6 +125,7 @@ export interface PropDecisionScorecard {
   finalExplanation: string;
   coachingTransition?: CoachingTransitionScorecard;
   matchupComponent?: MatchupScorecardComponent;
+  marketAnchoredProbability?: MarketAnchoredProbabilityOutput;
 }
 
 export interface ScorecardSummary {
@@ -428,6 +437,7 @@ export function buildPropDecisionScorecard(
     finalExplanation,
     coachingTransition,
     matchupComponent: input.matchupComponent,
+    marketAnchoredProbability: input.marketAnchoredProbability,
   };
 }
 
