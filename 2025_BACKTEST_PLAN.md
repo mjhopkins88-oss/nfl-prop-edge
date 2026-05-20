@@ -79,6 +79,73 @@ The backtest runner reads stored / fixture data only. It does
 not call the Odds API or any paid endpoint directly. Ingestion
 populates the data layer; the runner consumes it.
 
+## Week 1 starter-test workflow
+
+The fastest way to dry-run the whole 2025 system end-to-end. Uses
+the dedicated Week-1 fixture set under
+`data/fixtures/backtest/week-1/` so the existing fixture backtest
+is unaffected.
+
+### Step 1 — View the pregame board
+
+```bash
+npm run dev
+# then open http://localhost:3000/backtest/week-1
+```
+
+The page renders with the bundled fixtures; the runner step
+below populates the richer panels (graded results, V1 vs V2,
+parlay + game-edge previews).
+
+### Step 2 — Run the starter simulation
+
+```bash
+npx tsx scripts/run-week-1-starter-test.ts
+```
+
+Writes:
+
+- `data/backtests/2025/week-1-pregame.fixture.json`
+- `data/backtests/2025/week-1-results.fixture.json`
+- `data/backtests/2025/week-1-v1-v2-comparison.fixture.json`
+- `data/backtests/2025/week-1-parlay-preview.fixture.json`
+- `data/backtests/2025/week-1-game-edge-preview.fixture.json`
+
+### Step 3 — Review the Model Monitor
+
+```bash
+# Still on `npm run dev`
+# Open http://localhost:3000/monitor
+```
+
+The monitor reads the files above and shows overall health,
+week-by-week performance, prop-type / line / edge / confidence
+breakdowns, V1 vs V2 deltas, proxy lift, Game Edge counts, and
+parlay portfolio health.
+
+### Step 4 — Only after dry-run + smoke test
+
+Once the dry-run path and the fixture week-1 test look right,
+stage real stored Week 1 data:
+
+```bash
+# Smoke first (cheap — verify the call plan).
+npx tsx scripts/ingest-historical-prop-lines.ts \
+    --scope smoke-test --source mock --dry-run
+
+# Then opt in.
+ALLOW_REAL_ODDS_API_CALLS=true \
+    npx tsx scripts/ingest-historical-prop-lines.ts \
+    --scope week --week 1 --execute
+
+# Backtest from stored data once it lands.
+npx tsx scripts/run-week-1-starter-test.ts
+```
+
+**Do not run a full-season backtest until the smoke test and the
+one-week test are validated.** The pre-live rule still applies —
+no live 2026 use until a clean explainable edge is demonstrated.
+
 ## CLI command reference
 
 ### Dry-run before any paid call
