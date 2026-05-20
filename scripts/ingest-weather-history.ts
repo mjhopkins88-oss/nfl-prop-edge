@@ -37,9 +37,16 @@ import {
   normalizeWeatherSnapshot,
   utcDateString,
   type NormalizedWeatherSnapshot,
+  type OpenMeteoArchiveResponse,
   type RoofType,
   type Stadium,
 } from "../src/lib/ingestion/weather";
+import {
+  buildCacheKey,
+  getCachedResponse,
+  hasCachedResponse,
+  saveCachedResponse,
+} from "../src/lib/ingestion/cache";
 
 // --- types ------------------------------------------------------------
 
@@ -434,7 +441,9 @@ async function main(argv: string[]): Promise<number> {
     );
   }
 
-  // --- dry-run: print URLs and exit
+  const processedRoot = path.join(args.out, "processed");
+
+  // --- dry-run: print URLs, write a schema-only CSV, exit
   if (args.dryRun) {
     for (const { game, stadium } of eligible) {
       const date = utcDateString(game.kickoffISO);
@@ -449,6 +458,10 @@ async function main(argv: string[]): Promise<number> {
         `[dry] game=${game.gameId}  stadium=${stadium.stadiumName}  kickoff=${game.kickoffISO}  url=${url}`,
       );
     }
+    ensureDir(processedRoot);
+    const outPath = path.join(processedRoot, "weather_snapshots.csv");
+    writeCsv(outPath, SNAPSHOT_COLUMNS, []);
+    log("info", `[dry] wrote schema-only ${outPath} (${SNAPSHOT_COLUMNS.length} cols)`);
     log(
       "info",
       `Dry-run complete. ${eligible.length} would fetch, ${ineligible.length} skipped (dome/closed).`,
@@ -456,9 +469,8 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // --- live mode
+  // --- live mode (Open-Meteo is free; cache hits avoid even that)
   const rawRoot = path.join(args.out, "raw", "weather");
-  const processedRoot = path.join(args.out, "processed");
   ensureDir(rawRoot);
   ensureDir(processedRoot);
 
@@ -477,15 +489,39 @@ async function main(argv: string[]): Promise<number> {
 
   let fetchedOk = 0;
   let fetchedErr = 0;
+  let cacheHits = 0;
   for (const { game, stadium } of eligible) {
     const date = utcDateString(game.kickoffISO);
-    try {
-      const resp = await fetchArchive({
+    const cacheKey = buildCacheKey({
+      source: "open-meteo",
+      endpoint: "/archive",
+      params: {
         latitude: stadium.latitude,
         longitude: stadium.longitude,
         startDate: date,
         endDate: date,
-      });
+      },
+    });
+    try {
+      let resp: OpenMeteoArchiveResponse;
+      if (hasCachedResponse(cacheKey)) {
+        resp = getCachedResponse<OpenMeteoArchiveResponse>(cacheKey)!;
+        cacheHits++;
+      } else {
+        const url = buildArchiveUrl({
+          latitude: stadium.latitude,
+          longitude: stadium.longitude,
+          startDate: date,
+          endDate: date,
+        });
+        resp = await fetchArchive({
+          latitude: stadium.latitude,
+          longitude: stadium.longitude,
+          startDate: date,
+          endDate: date,
+        });
+        saveCachedResponse(cacheKey, resp, { url });
+      }
       writeJSON(
         path.join(rawRoot, `${stadium.team}-${date}-${safeName(game.gameId)}.json`),
         resp,
@@ -518,7 +554,7 @@ async function main(argv: string[]): Promise<number> {
   );
   log(
     "info",
-    `Wrote ${outPath} (${n} rows: ${eligible.length - fetchedErr} fetched, ${ineligible.length} dome/closed, ${fetchedErr} fetch errors)`,
+    `Wrote ${outPath} (${n} rows: ${fetchedOk} fetched (${cacheHits} cache hits), ${ineligible.length} dome/closed, ${fetchedErr} fetch errors)`,
   );
   return fetchedErr > 0 ? 4 : 0;
 }

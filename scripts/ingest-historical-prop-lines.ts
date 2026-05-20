@@ -167,6 +167,31 @@ function escapeCsv(value: unknown): string {
   return s;
 }
 
+/** Column contract for `data/processed/prop_markets.csv`. */
+const PROP_MARKETS_COLUMNS = [
+  "market_key",
+  "game_id",
+  "event_id",
+  "player_name",
+  "prop_type",
+  "line",
+  "source",
+  "snapshot_time",
+];
+
+/** Column contract for `data/processed/prop_quotes.csv`. */
+const PROP_QUOTES_COLUMNS = [
+  "market_key",
+  "book_name",
+  "over_price",
+  "under_price",
+  "over_implied_probability",
+  "under_implied_probability",
+  "no_vig_over_probability",
+  "no_vig_under_probability",
+  "quote_time",
+];
+
 function writeCsv(p: string, columns: string[], rows: Record<string, unknown>[]): number {
   ensureDir(path.dirname(p));
   const lines: string[] = [columns.join(",")];
@@ -507,7 +532,7 @@ async function main(argv: string[]): Promise<number> {
     return 3;
   }
 
-  // --- dry-run: print URLs (api key masked) and exit
+  // --- dry-run: print URLs (api key masked), write schema-only CSVs, exit
   if (args.dryRun) {
     const keyForUrl = apiKey ?? "DRY_RUN_PLACEHOLDER";
     for (const group of snapshots) {
@@ -526,6 +551,17 @@ async function main(argv: string[]): Promise<number> {
         log("info", `[dry] odds   game=${g.gameId}  url=${maskApiKey(oddsUrl)}`);
       }
     }
+
+    // Emit schema-only CSVs so the downstream loader has its contract
+    // visible even before the first paid call. Matches the nflverse
+    // stub's pattern.
+    const processedRoot = path.join(args.out, "processed");
+    const marketsPath = path.join(processedRoot, "prop_markets.csv");
+    const quotesPath = path.join(processedRoot, "prop_quotes.csv");
+    writeCsv(marketsPath, PROP_MARKETS_COLUMNS, []);
+    writeCsv(quotesPath, PROP_QUOTES_COLUMNS, []);
+    log("info", `[dry] wrote schema-only ${marketsPath} (${PROP_MARKETS_COLUMNS.length} cols)`);
+    log("info", `[dry] wrote schema-only ${quotesPath} (${PROP_QUOTES_COLUMNS.length} cols)`);
     log(
       "info",
       `Dry-run complete. Estimated credits: ${plan.estimatedCredits} (budget ${args.budget}).`,
@@ -597,31 +633,12 @@ async function main(argv: string[]): Promise<number> {
 
   const nMarkets = writeCsv(
     marketsPath,
-    [
-      "market_key",
-      "game_id",
-      "event_id",
-      "player_name",
-      "prop_type",
-      "line",
-      "source",
-      "snapshot_time",
-    ],
+    PROP_MARKETS_COLUMNS,
     allMarkets as unknown as Record<string, unknown>[],
   );
   const nQuotes = writeCsv(
     quotesPath,
-    [
-      "market_key",
-      "book_name",
-      "over_price",
-      "under_price",
-      "over_implied_probability",
-      "under_implied_probability",
-      "no_vig_over_probability",
-      "no_vig_under_probability",
-      "quote_time",
-    ],
+    PROP_QUOTES_COLUMNS,
     allQuotes as unknown as Record<string, unknown>[],
   );
 
