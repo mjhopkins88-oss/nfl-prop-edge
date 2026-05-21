@@ -169,6 +169,12 @@ export interface GradedSnapshot {
   /** Per-feature audit + sample picks. Populated when the
    *  grading payload includes `scorecardAudit`. */
   scorecardAudit?: ScorecardAuditSnapshot;
+  /** Diagnostic-only marketContext gate calibration replay.
+   *  Populated when the grading payload includes
+   *  `marketContextCalibration`. The page renders this in a
+   *  clearly labeled "DIAGNOSTIC" section that is NEVER mixed
+   *  with the live model's recommendations. */
+  marketContextCalibration?: MarketContextCalibrationSnapshot;
 }
 
 export interface ScorecardAuditFeatureRow {
@@ -291,6 +297,94 @@ export interface ScorecardAuditSnapshot {
   missingHistory?: ScorecardMissingHistoryAudit;
 }
 
+export interface MarketContextCalibrationBucket {
+  propType: string;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+export interface MarketContextCalibrationTierBucket {
+  tier: "High" | "Medium" | "Low";
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+export interface MarketContextCalibrationEdgeBucket {
+  label: string;
+  edgeLow: number;
+  edgeHigh: number;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+export interface MarketContextCalibrationCandidate {
+  candidateId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  gameId: string;
+  propType: string;
+  line: number;
+  recommendedSide: "OVER" | "UNDER";
+  modelProbability: number;
+  marketProbability: number;
+  edge: number;
+  confidence: number;
+  riskScore: number;
+  marketContextScoreClamped: number;
+  marketContextScoreRaw: number;
+  productionQualified: boolean;
+  actualValue: number | null;
+  outcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
+  profitPerUnit: number;
+  removedDisqualifiers: string[];
+}
+
+export interface MarketContextCalibrationGateSnapshot {
+  gateThreshold: number;
+  isProduction: boolean;
+  qualifiedCount: number;
+  decisiveCount: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  noResult: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+  averageEdgePct: number;
+  averageConfidence: number;
+  byPropType: MarketContextCalibrationBucket[];
+  byConfidenceTier: MarketContextCalibrationTierBucket[];
+  byEdgeBucket: MarketContextCalibrationEdgeBucket[];
+  candidates: MarketContextCalibrationCandidate[];
+}
+
+export interface MarketContextCalibrationSnapshot {
+  diagnosticOnly: true;
+  generatedAt: string;
+  productionGate: number;
+  production: MarketContextCalibrationGateSnapshot;
+  gate040: MarketContextCalibrationGateSnapshot;
+  gate035: MarketContextCalibrationGateSnapshot;
+  note: string;
+}
+
 export interface StoredWeek1MonitorSnapshot {
   /** Where the data came from. `"none"` means neither source
    *  had a stored run; the caller should fall back to fixture
@@ -382,6 +476,8 @@ interface GradedFileShape {
   gradedSample?: GradedSampleRow[];
   /** Scorecard audit payload from the admin grading action. */
   scorecardAudit?: ScorecardAuditSnapshot;
+  /** Diagnostic-only marketContext gate calibration replay. */
+  marketContextCalibration?: MarketContextCalibrationSnapshot;
   summary: {
     gradedAt?: string;
     /** Legacy headline fields — diagnostic only. */
@@ -698,6 +794,7 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
           totalRejected: s.candidatesMissingActual + (s.candidatesPushed ?? 0),
         },
     scorecardAudit: g.scorecardAudit,
+    marketContextCalibration: g.marketContextCalibration,
   };
 }
 
@@ -756,6 +853,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             summary?: GradedFileShape["summary"];
             gradedSample?: GradedSampleRow[];
             scorecardAudit?: ScorecardAuditSnapshot;
+            marketContextCalibration?: MarketContextCalibrationSnapshot;
           }
         | null
         | undefined;
@@ -767,6 +865,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             summary: resultsJson.summary,
             gradedSample: resultsJson.gradedSample,
             scorecardAudit: resultsJson.scorecardAudit,
+            marketContextCalibration: resultsJson.marketContextCalibration,
           })
         : undefined;
       const fileGraded = toGradedSnapshot(

@@ -32,6 +32,7 @@ import {
   gradeStoredWeek1Backtest,
   buildScorecardAudit,
 } from "../backtest/week-1-grading";
+import { buildMarketContextCalibration } from "../backtest/market-context-calibration";
 import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
 import {
   applyScorecardToCandidates,
@@ -1287,6 +1288,15 @@ export async function runAdminAction(
         closestToQualifyingCount: 50,
         missingHistoryExamplesCount: 25,
       });
+      // Diagnostic-only calibration replay. The live model
+      // continues to use the production marketContextGate
+      // (0.45); this payload simply REPORTS what would have
+      // happened at 0.40 / 0.35 so the operator can decide
+      // whether to propose a gate change in a separate PR.
+      const marketContextCalibration = buildMarketContextCalibration({
+        candidates: evaluatedCandidates,
+        graded: grade.graded,
+      });
       // Persist to DB. New row carries both candidatesJson +
       // resultsJson so the pregame snapshot isn't overwritten;
       // the latest row wins.
@@ -1318,6 +1328,12 @@ export async function runAdminAction(
           // "why is recommendedPlays empty?" without a second
           // round trip.
           scorecardAudit,
+          // DIAGNOSTIC ONLY — what WOULD have qualified if the
+          // marketContext gate were 0.40 or 0.35, with every
+          // other gate unchanged. Persisted so the calibration
+          // section on /monitor and /backtest/week-1 renders
+          // without re-running the replay.
+          marketContextCalibration,
         },
       });
       // File mirror — small, secret-free.
@@ -1429,10 +1445,15 @@ export async function runAdminAction(
                 .join("\n") +
               `\n`
             : "") +
+          `\nMarket-context gate calibration (DIAGNOSTIC ONLY — production gate unchanged at 0.45):\n` +
+          `  Production 0.45: ${marketContextCalibration.production.qualifiedCount} plays  ${marketContextCalibration.production.wins}W·${marketContextCalibration.production.losses}L·${marketContextCalibration.production.pushes}P  hit=${marketContextCalibration.production.hitRatePct.toFixed(1)}%  ROI=${marketContextCalibration.production.roiPct.toFixed(1)}%  ${marketContextCalibration.production.unitsProfit.toFixed(2)}u\n` +
+          `  Diagnostic 0.40: ${marketContextCalibration.gate040.qualifiedCount} plays  ${marketContextCalibration.gate040.wins}W·${marketContextCalibration.gate040.losses}L·${marketContextCalibration.gate040.pushes}P  hit=${marketContextCalibration.gate040.hitRatePct.toFixed(1)}%  ROI=${marketContextCalibration.gate040.roiPct.toFixed(1)}%  ${marketContextCalibration.gate040.unitsProfit.toFixed(2)}u\n` +
+          `  Diagnostic 0.35: ${marketContextCalibration.gate035.qualifiedCount} plays  ${marketContextCalibration.gate035.wins}W·${marketContextCalibration.gate035.losses}L·${marketContextCalibration.gate035.pushes}P  hit=${marketContextCalibration.gate035.hitRatePct.toFixed(1)}%  ROI=${marketContextCalibration.gate035.roiPct.toFixed(1)}%  ${marketContextCalibration.gate035.unitsProfit.toFixed(2)}u\n` +
           `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
         data: {
           summary: grade.summary,
           scorecardAudit,
+          marketContextCalibration,
           dbSaved: dbSave.ok,
           gradedFile,
         },
