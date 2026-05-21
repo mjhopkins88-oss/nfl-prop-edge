@@ -1034,6 +1034,42 @@ export async function runAdminAction(
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
+      // Mirror the data-mode-status file that
+      // run-week-1-starter-test.ts writes, so /backtest/week-1
+      // and /monitor (which read this file) reflect the latest
+      // admin-triggered run. File mirrors the DB save below —
+      // either source survives a Railway redeploy.
+      const statusFile = path.join(
+        repoRoot,
+        "data",
+        "backtests",
+        "2025",
+        "week-1-data-mode-status.fixture.json",
+      );
+      fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+      fs.writeFileSync(
+        statusFile,
+        JSON.stringify(
+          {
+            generatedAt: new Date().toISOString(),
+            season: 2025,
+            week: 1,
+            dataMode: "stored",
+            status: r.status,
+            candidateCount: r.candidates.length,
+            syntheticFixture: false,
+            realWeek1BacktestReady: ok,
+            missingStoredOdds: r.status === "MISSING_STORED_ODDS",
+            missingProcessedNfl: r.status === "MISSING_PROCESSED_NFL",
+            scheduleReport: r.scheduleReport ?? null,
+            notes: r.notes,
+            nextSteps: r.nextSteps,
+            source: "admin-stored-backtest",
+          },
+          null,
+          2,
+        ) + "\n",
+      );
       // When validation fails, attach a structured diagnostic
       // so the admin UI surfaces the exact mismatch instead of
       // an opaque "0 candidates" message. The diagnostic is a

@@ -12,9 +12,16 @@ import {
   loadWeek1V1V2Comparison,
   loadWeek1GameEdgePreview,
 } from "@/lib/backtest/week-1-summary";
+import {
+  loadStoredWeek1MonitorSnapshot,
+  type StoredWeek1MonitorSnapshot,
+} from "@/lib/backtest/week-1-monitor-summary";
 import { getWeek1StarterTestContext } from "@/lib/app-context";
 
-export default function MonitorPage() {
+export const dynamic = "force-dynamic";
+
+export default async function MonitorPage() {
+  const stored = await loadStoredWeek1MonitorSnapshot({ season: 2025, week: 1 });
   const fixture = loadFixtureBacktestSummary();
   const proxySummary = loadFixtureProxySummary();
   const compareLatest = loadFixtureComparisonSummary();
@@ -25,16 +32,36 @@ export default function MonitorPage() {
   const week1Parlays = loadWeek1ParlayPreview();
   const week1GameEdge = loadWeek1GameEdgePreview();
 
+  // A stored snapshot with READY status + candidates is the
+  // primary source. Fixture starter-test outputs (8 evaluated,
+  // 2 qualified, fake 100% hit rate) become secondary and get
+  // clearly labelled.
+  const storedIsPrimary =
+    stored !== undefined &&
+    stored.realWeek1BacktestReady &&
+    stored.candidateCount > 0;
+
   const readiness = computeReadiness({
     fixture,
     week1Results,
+    stored,
+    storedIsPrimary,
   });
 
   return (
     <div className="space-y-8">
-      <Hero readiness={readiness} />
-      <OverallHealth fixture={fixture} week1Results={week1Results} />
-      <WeekByWeekTable week1Results={week1Results} />
+      <Hero readiness={readiness} storedIsPrimary={storedIsPrimary} />
+      {stored ? <StoredWeek1Panel stored={stored} /> : null}
+      <OverallHealth
+        fixture={fixture}
+        week1Results={week1Results}
+        storedIsPrimary={storedIsPrimary}
+      />
+      <WeekByWeekTable
+        week1Results={week1Results}
+        stored={stored}
+        storedIsPrimary={storedIsPrimary}
+      />
       <PlayerPropPerformance fixture={fixture} />
       <V1V2Panel
         compareLatest={compareLatest}
@@ -60,7 +87,21 @@ interface Readiness {
 function computeReadiness(args: {
   fixture: ReturnType<typeof loadFixtureBacktestSummary>;
   week1Results: ReturnType<typeof loadWeek1Results>;
+  stored: StoredWeek1MonitorSnapshot | undefined;
+  storedIsPrimary: boolean;
 }): Readiness {
+  if (args.storedIsPrimary && args.stored) {
+    return {
+      status: "RESEARCH",
+      reason: `Real stored Week 1 backtest loaded (${args.stored.candidateCount} candidates from ${args.stored.source}). Pregame candidates only — grading is still pending.`,
+    };
+  }
+  if (args.stored && args.stored.status !== "READY") {
+    return {
+      status: "RESEARCH",
+      reason: `Stored Week 1 backtest status: ${args.stored.status} (${args.stored.source}). Fixture starter-test values shown below are fixture-only.`,
+    };
+  }
   if (!args.fixture && !args.week1Results) {
     return {
       status: "INSUFFICIENT_DATA",
@@ -85,7 +126,13 @@ function computeReadiness(args: {
   };
 }
 
-function Hero({ readiness }: { readiness: Readiness }) {
+function Hero({
+  readiness,
+  storedIsPrimary,
+}: {
+  readiness: Readiness;
+  storedIsPrimary: boolean;
+}) {
   const starter = getWeek1StarterTestContext();
   return (
     <section>
@@ -108,6 +155,11 @@ function Hero({ readiness }: { readiness: Readiness }) {
         >
           Active test · {starter.label}
         </span>
+        {storedIsPrimary ? (
+          <span className="inline-flex items-center gap-2 rounded-full bg-sea-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80">
+            Real stored Week 1 backtest active
+          </span>
+        ) : null}
         <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
           Leakage guard · pregame outcomes stripped
         </span>
@@ -128,47 +180,128 @@ function Hero({ readiness }: { readiness: Readiness }) {
   );
 }
 
+function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
+  const readyTone = stored.realWeek1BacktestReady
+    ? "text-sea-700"
+    : "text-amber-800";
+  return (
+    <section
+      className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6"
+      data-testid="monitor-stored-week-1"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Real Week 1 Stored Backtest
+        </h2>
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+          Source · {stored.source}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Data mode" value="STORED" />
+        <Stat
+          label="Real ready"
+          value={stored.realWeek1BacktestReady ? "yes" : "no"}
+          sub={stored.status}
+        />
+        <Stat label="Synthetic fixture" value="no" />
+        <Stat
+          label="Schedule validation"
+          value={stored.scheduleValidationStatus ?? "—"}
+        />
+        <Stat label="Candidates" value={`${stored.candidateCount}`} />
+        <Stat label="Stored odds" value={stored.storedOddsPresent ? "yes" : "no"} />
+        <Stat label="Processed NFL" value={stored.processedNflPresent ? "yes" : "no"} />
+        <Stat
+          label="Grading"
+          value={
+            stored.gradingStatus === "graded"
+              ? "graded"
+              : stored.gradingStatus === "ungraded"
+                ? "pending — pregame only"
+                : "unavailable"
+          }
+        />
+      </div>
+      <p className={`mt-3 text-[11px] ${readyTone}`}>
+        {stored.realWeek1BacktestReady
+          ? "Stored Week 1 pregame candidates loaded. Hit rate / ROI not shown until graded results land."
+          : `Stored run not ready: ${stored.status}. Run /admin/ingestion → Migrate → Run Week 1 stored backtest.`}
+      </p>
+      {stored.generatedAt ? (
+        <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-ink-500">
+          Generated at · {stored.generatedAt}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function OverallHealth({
   fixture,
   week1Results,
+  storedIsPrimary,
 }: {
   fixture: ReturnType<typeof loadFixtureBacktestSummary>;
   week1Results: ReturnType<typeof loadWeek1Results>;
+  storedIsPrimary: boolean;
 }) {
+  // When the real stored Week-1 run is the primary source, the
+  // fixture starter-test's 8/2/100%/88.9% numbers MUST NOT be
+  // displayed as the latest hit rate / ROI — that would
+  // misrepresent fixture-synthetic data as real performance.
   return (
     <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
       <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
-        Overall model health
+        {storedIsPrimary
+          ? "Fixture starter-test (synthetic) — overall health"
+          : "Overall model health"}
       </h2>
+      {storedIsPrimary ? (
+        <p className="mt-1 text-[11px] text-amber-800">
+          Fixture preview — not stored Week 1 performance. Use the
+          stored panel above for real candidates.
+        </p>
+      ) : null}
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
           label="Evaluated props"
           value={`${(fixture?.evaluated ?? 0) + (week1Results?.evaluatedProps.length ?? 0)}`}
-          sub={`${fixture?.evaluated ?? 0} fixture + ${week1Results?.evaluatedProps.length ?? 0} Week 1`}
+          sub={`${fixture?.evaluated ?? 0} fixture + ${week1Results?.evaluatedProps.length ?? 0} Week 1 fixture`}
         />
         <Stat
           label="Qualified bets"
           value={`${(fixture?.qualifiedBets ?? 0) + (week1Results?.qualifiedBets.length ?? 0)}`}
         />
         <Stat
-          label="Latest hit rate"
+          label={storedIsPrimary ? "Fixture hit rate" : "Latest hit rate"}
           value={
-            week1Results
-              ? `${(week1Results.hitRate * 100).toFixed(1)}%`
-              : fixture
+            storedIsPrimary
+              ? fixture
                 ? `${(fixture.hitRate * 100).toFixed(1)}%`
                 : "—"
+              : week1Results
+                ? `${(week1Results.hitRate * 100).toFixed(1)}%`
+                : fixture
+                  ? `${(fixture.hitRate * 100).toFixed(1)}%`
+                  : "—"
           }
+          sub={storedIsPrimary ? "fixture-only" : undefined}
         />
         <Stat
-          label="Latest ROI"
+          label={storedIsPrimary ? "Fixture ROI" : "Latest ROI"}
           value={
-            week1Results
-              ? `${week1Results.roiPct.toFixed(1)}%`
-              : fixture
+            storedIsPrimary
+              ? fixture
                 ? `${fixture.roiPct.toFixed(1)}%`
                 : "—"
+              : week1Results
+                ? `${week1Results.roiPct.toFixed(1)}%`
+                : fixture
+                  ? `${fixture.roiPct.toFixed(1)}%`
+                  : "—"
           }
+          sub={storedIsPrimary ? "fixture-only" : undefined}
         />
         <Stat
           label="Avg edge"
@@ -185,7 +318,7 @@ function OverallHealth({
               ? `${(week1Results.averageConfidenceAdjustedEdge * 100).toFixed(1)}%`
               : "—"
           }
-          sub="Week 1 only"
+          sub="Week 1 fixture only"
         />
         <Stat
           label="Brier score"
@@ -202,8 +335,12 @@ function OverallHealth({
 
 function WeekByWeekTable({
   week1Results,
+  stored,
+  storedIsPrimary,
 }: {
   week1Results: ReturnType<typeof loadWeek1Results>;
+  stored: StoredWeek1MonitorSnapshot | undefined;
+  storedIsPrimary: boolean;
 }) {
   return (
     <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
@@ -225,9 +362,40 @@ function WeekByWeekTable({
             </tr>
           </thead>
           <tbody className="text-ink-800">
+            {storedIsPrimary && stored ? (
+              <tr className="border-t border-white/40">
+                <td className="py-2 pr-3">Week 1 (stored, real)</td>
+                <td className="py-2 pr-3 text-right tabular-nums">
+                  {stored.candidateCount}
+                </td>
+                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                  pending
+                </td>
+                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                  pending
+                </td>
+                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                  pending
+                </td>
+                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                  pending
+                </td>
+                <td className="py-2 pr-3 text-[11px] text-ink-500">—</td>
+                <td className="py-2 text-[11px] text-sea-700">
+                  Pregame candidates only — not graded yet
+                </td>
+              </tr>
+            ) : null}
             {week1Results ? (
               <tr className="border-t border-white/40">
-                <td className="py-2 pr-3">Week 1 (starter test)</td>
+                <td className="py-2 pr-3">
+                  Week 1 (fixture starter test)
+                  {storedIsPrimary ? (
+                    <div className="text-[10px] text-amber-800">
+                      synthetic
+                    </div>
+                  ) : null}
+                </td>
                 <td className="py-2 pr-3 text-right tabular-nums">
                   {week1Results.evaluatedProps.length}
                 </td>
@@ -252,7 +420,7 @@ function WeekByWeekTable({
                   Fixture data — not proof of live edge
                 </td>
               </tr>
-            ) : (
+            ) : !stored ? (
               <tr className="border-t border-white/40">
                 <td className="py-2 pr-3" colSpan={8}>
                   <span className="text-ink-500">
@@ -264,7 +432,7 @@ function WeekByWeekTable({
                   </span>
                 </td>
               </tr>
-            )}
+            ) : null}
           </tbody>
         </table>
       </div>
