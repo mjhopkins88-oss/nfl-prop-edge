@@ -454,28 +454,57 @@ function loadGamesFromCsv(
 ): GameRow[] {
   if (!fs.existsSync(filePath)) {
     throw new Error(
-      `${filePath} not found. Run scripts/ingest-nfl-history.py to populate it, or pass --source db / --source mock.`,
+      `${filePath} not found. Run scripts/ingest-nfl-history.ts (TypeScript) or scripts/ingest-nfl-history.py to populate it, or pass --source db / --source mock.`,
     );
   }
   const rows = parseCsv(fs.readFileSync(filePath, "utf8"));
   if (rows.length === 0) {
     log(
       "warn",
-      `${filePath} has 0 data rows. Populate it with scripts/ingest-nfl-history.py or use --source db / --source mock.`,
+      `${filePath} has 0 data rows. Populate it with scripts/ingest-nfl-history.ts or use --source db / --source mock.`,
     );
     return [];
   }
-  return rows
-    .filter((r) => Number(r.season) === season)
-    .filter((r) => !weeks || weeks.has(Number(r.week)))
-    .map<GameRow>((r) => ({
-      gameId: r.game_id,
+  // Two schemas in the wild:
+  //   - legacy Python script: game_id, season, week, kickoff_utc, home_team, away_team
+  //   - TypeScript nflverse normalizer: gameId, season, week, startTimeUtc, homeTeam, awayTeam
+  // Accept both. Skip rows without a parseable kickoff timestamp.
+  const out: GameRow[] = [];
+  let skippedMissingTime = 0;
+  let skippedInvalidTime = 0;
+  for (const r of rows) {
+    if (Number(r.season) !== season) continue;
+    if (weeks && !weeks.has(Number(r.week))) continue;
+    const gameId = r.game_id || r.gameId;
+    const kickoffISO = r.kickoff_utc || r.startTimeUtc;
+    const homeTeam = r.home_team || r.homeTeam;
+    const awayTeam = r.away_team || r.awayTeam;
+    if (!gameId || !homeTeam || !awayTeam) continue;
+    if (!kickoffISO) {
+      skippedMissingTime += 1;
+      continue;
+    }
+    const ts = Date.parse(kickoffISO);
+    if (!Number.isFinite(ts)) {
+      skippedInvalidTime += 1;
+      continue;
+    }
+    out.push({
+      gameId,
       season: Number(r.season),
       week: Number(r.week),
-      kickoffISO: r.kickoff_utc,
-      homeTeamAbbr: r.home_team,
-      awayTeamAbbr: r.away_team,
-    }));
+      kickoffISO: new Date(ts).toISOString(),
+      homeTeamAbbr: homeTeam,
+      awayTeamAbbr: awayTeam,
+    });
+  }
+  if (skippedMissingTime > 0) {
+    log("warn", `${filePath}: skipped ${skippedMissingTime} rows with no kickoff time`);
+  }
+  if (skippedInvalidTime > 0) {
+    log("warn", `${filePath}: skipped ${skippedInvalidTime} rows with unparseable kickoff time`);
+  }
+  return out;
 }
 
 async function loadGamesFromDb(
