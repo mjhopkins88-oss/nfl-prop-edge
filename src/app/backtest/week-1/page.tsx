@@ -19,6 +19,7 @@ import {
   loadAllStoredMonitorSnapshots,
   type StoredWeek1MonitorSnapshot,
 } from "@/lib/backtest/week-1-monitor-summary";
+import { WeekSelector } from "@/components/WeekSelector";
 
 export const dynamic = "force-dynamic";
 
@@ -63,13 +64,24 @@ export default async function Week1StarterTestPage() {
       <Hero
         scheduleStatus={scheduleValidation?.status}
       />
-      {allStoredWeeks.length > 1 ? (
-        <StoredSeasonPointer
-          currentWeek={1}
-          weeks={allStoredWeeks.map((w) => ({
+      {allStoredWeeks.length > 0 ? (
+        <WeekSelector
+          mode="route"
+          selectedWeek={1}
+          options={allStoredWeeks.map((w) => ({
             week: w.week,
             graded: w.graded !== undefined,
           }))}
+          routeFor={(week) =>
+            week === undefined
+              ? "/monitor"
+              : week === 1
+                ? "/backtest/week-1"
+                : `/backtest/weeks/${week}`
+          }
+          label="Switch week"
+          hint="All routes to /monitor (season aggregate). Each numeric week routes to its detail page."
+          testid="week-1-week-selector"
         />
       ) : null}
       {!hasOutput && <RunHint />}
@@ -110,54 +122,6 @@ export default async function Week1StarterTestPage() {
       {gameEdge && <GameEdgeSection gameEdge={gameEdge} />}
       <Footnote />
     </div>
-  );
-}
-
-function StoredSeasonPointer({
-  currentWeek,
-  weeks,
-}: {
-  currentWeek: number;
-  weeks: Array<{ week: number; graded: boolean }>;
-}) {
-  return (
-    <section
-      className="rounded-2xl bg-sea-50/80 p-4 ring-1 ring-sea-200/70"
-      data-testid="stored-season-pointer"
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sea-900">
-          Stored season · this is Week {currentWeek} of {weeks.length}
-        </h2>
-        <span className="text-[10px] uppercase tracking-[0.14em] text-sea-700">
-          See /monitor for the season rollup
-        </span>
-      </div>
-      <ul className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-        {weeks.map((w) => (
-          <li key={w.week}>
-            <span
-              className={
-                w.week === currentWeek
-                  ? "inline-flex items-center gap-1 rounded-full bg-sea-200 px-2 py-0.5 font-semibold text-sea-900 ring-1 ring-sea-300"
-                  : "inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-0.5 text-ink-800 ring-1 ring-ink-200"
-              }
-            >
-              W{w.week}
-              <span className="text-[9px] uppercase tracking-[0.14em] text-ink-500">
-                {w.graded ? "graded" : "pregame"}
-              </span>
-            </span>
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 text-[10px] text-ink-600">
-        Each (season, week) StoredBacktestRun is persisted to
-        Postgres separately — adding new weeks never overwrites
-        Week 1. This detail page still shows Week 1 only;
-        /monitor rolls up all stored weeks.
-      </p>
-    </section>
   );
 }
 
