@@ -184,7 +184,36 @@ export function validateCandidateAgainstRealSchedule(args: {
       homeTeam: home,
     });
   }
-  return buildWeek1ScheduleValidationReport({ candidates: candidateGames });
+  // Pass the dynamically loaded schedule through to the
+  // validator. Without this the validator falls back to the
+  // static Week 1 fixture — Week 2+ would never PASS even with
+  // valid Week N candidates.
+  return buildWeek1ScheduleValidationReport({
+    candidates: candidateGames,
+    schedule: {
+      games: schedule.games.map((g) => {
+        const full = g as Partial<{
+          season: number;
+          week: number;
+          kickoffTime: string;
+          venue: string;
+          neutralSite: boolean;
+          sourceNote: string;
+        }> & { gameId: string; awayTeam: string; homeTeam: string };
+        return {
+          season: full.season ?? args.season,
+          week: full.week ?? args.week,
+          gameId: full.gameId,
+          awayTeam: full.awayTeam,
+          homeTeam: full.homeTeam,
+          kickoffTime: full.kickoffTime ?? "",
+          venue: full.venue ?? "",
+          neutralSite: full.neutralSite ?? false,
+          sourceNote: full.sourceNote ?? "from processed games.csv",
+        };
+      }),
+    },
+  });
 }
 
 /**
