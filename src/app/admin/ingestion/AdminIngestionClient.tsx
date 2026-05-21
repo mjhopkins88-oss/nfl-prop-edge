@@ -205,8 +205,8 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("run-nflverse-ingestion")}
           />
           <ActionRow
-            label="3. Run smoke dry-run"
-            description="Plan + estimated credits. No API call."
+            label="3. Run smoke calibration dry-run"
+            description="One event-list call + one event odds call estimate. No API call."
             disabled={!token || busy !== null}
             busy={busy === "dry-run"}
             onRun={() => void runAction("dry-run")}

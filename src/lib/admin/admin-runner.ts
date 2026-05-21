@@ -316,6 +316,13 @@ function buildNflverseIngestionSpec(repoRoot: string): SubprocessSpec {
 }
 
 function buildDryRunSpec(repoRoot: string): SubprocessSpec {
+  // Mirror the paid-smoke calibration argv exactly — same season,
+  // scope, source, calibration ceiling, --max-odds-requests, and
+  // --max-credits — but use --dry-run instead of --execute. The
+  // dry-run preview must show the cost of what the paid button
+  // would actually do; otherwise the page reports 647 credits
+  // (the full-Week-1 plan) and the up-front budget guard refuses
+  // before any preview can render.
   return {
     command: defaultTsxBin(repoRoot),
     args: [
@@ -328,6 +335,11 @@ function buildDryRunSpec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--calibration",
+      "--max-odds-requests",
+      "1",
+      "--max-credits",
+      "50",
       "--dry-run",
     ],
     env: { ...process.env },

@@ -1022,9 +1022,77 @@ async function main(): Promise<void> {
     else console.log("[21] FAIL — abort-line parser");
   }
 
+  // 22. dry-run uses the same calibration shape as paid-smoke
+  //     but with --dry-run instead of --execute. Without this,
+  //     the preview falls through to the full-Week-1 plan (647
+  //     credits) and the up-front budget guard refuses it.
+  {
+    const r = makeReport("dry-run argv mirrors paid-smoke calibration");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "Dry-run complete. Estimated credits: 41 (budget 50).\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 10,
+    });
+    const result = await runAdminAction({
+      action: "dry-run",
+      repoRoot,
+      spawner: spawner.fn,
+    });
+    check(r, result.ok === true, `dry-run ok=${result.ok}`);
+    check(
+      r,
+      spawner.calls.length === 1,
+      `expected one spawn call, got ${spawner.calls.length}`,
+    );
+    const spec = spawner.calls[0];
+    check(r, spec.args.includes("--calibration"), "argv must include --calibration");
+    const moIdx = spec.args.indexOf("--max-odds-requests");
+    check(
+      r,
+      moIdx >= 0 && spec.args[moIdx + 1] === "1",
+      `must pass --max-odds-requests 1, got ${spec.args[moIdx + 1]}`,
+    );
+    const mcIdx = spec.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && spec.args[mcIdx + 1] === "50",
+      `must pass --max-credits 50, got ${spec.args[mcIdx + 1]}`,
+    );
+    check(r, spec.args.includes("--dry-run"), "argv must include --dry-run");
+    check(
+      r,
+      !spec.args.includes("--execute"),
+      "argv must NOT include --execute (dry-run only)",
+    );
+    check(
+      r,
+      spec.env.ALLOW_REAL_ODDS_API_CALLS === undefined ||
+        spec.env.ALLOW_REAL_ODDS_API_CALLS !== "true",
+      "dry-run must not inject ALLOW_REAL_ODDS_API_CALLS=true",
+    );
+    check(
+      r,
+      typeof result.data?.estimatedCredits === "number" &&
+        (result.data.estimatedCredits as number) <= 50,
+      `parsed estimate must be ≤ 50, got ${result.data?.estimatedCredits}`,
+    );
+    check(
+      r,
+      result.summary.includes("41") || result.summary.includes("dry-run"),
+      `summary should mention parsed estimate, got: ${result.summary}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[22] PASS — dry-run argv = calibration shape with --dry-run");
+    else console.log("[22] FAIL — dry-run calibration argv");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 21 admin-ingestion assertions passed.");
+    console.log("All 22 admin-ingestion assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {
