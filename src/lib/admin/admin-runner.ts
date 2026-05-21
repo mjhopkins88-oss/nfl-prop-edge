@@ -38,6 +38,12 @@ import {
   rehydrateCanonicalOddsFromDbIfMissing,
   type PersistenceClient,
 } from "../persistence/week-1-persistence";
+import { getExpectedWeek1Schedule } from "../backtest/week-1-schedule-validation";
+import {
+  normalizeTeamAbbreviation,
+  validateCanonicalOddsGameIds,
+} from "../backtest/week-1-game-id-mapper";
+import { parseCsvRows } from "../ingestion/nflverse";
 import {
   hasPriorSmokeSuccess,
   recordActionResult,
@@ -910,14 +916,22 @@ export async function runAdminAction(
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       // Mirror canonical rows to Postgres so a redeploy doesn't
-      // erase the migration result. Read the file we just wrote
-      // and re-derive rows via buildCanonicalOddsRows would be
-      // wasteful; the migration already produced them. Re-parse
-      // the written file instead.
+      // erase the migration result. First delete every stored
+      // row for (2025, 1) so stale rows from a pre-fix migration
+      // (e.g., LA-era gameIds) cannot survive — the upsert key
+      // doesn't catch every shape of stale data. Then write the
+      // newly-normalized rows.
       let dbUpserted = 0;
+      let dbDeleted = 0;
       let dbError: string | undefined;
       if (ok && r.target) {
         try {
+          const cleared = await persistence.deleteCanonicalOddsRowsForWeek({
+            season: 2025,
+            week: 1,
+          });
+          if (cleared.ok) dbDeleted = cleared.deleted ?? 0;
+          else dbError = cleared.error ?? undefined;
           const parsed = parseWrittenCanonicalCsv(r.target);
           const saved = await persistence.saveCanonicalOddsRowsToDb({
             season: 2025,
@@ -925,7 +939,7 @@ export async function runAdminAction(
             rows: parsed,
           });
           if (saved.ok) dbUpserted = saved.upserted ?? parsed.length;
-          else dbError = saved.error ?? "unknown DB error";
+          else dbError = saved.error ?? dbError ?? "unknown DB error";
         } catch (err) {
           dbError = (err as Error).message;
         }
@@ -951,6 +965,7 @@ export async function runAdminAction(
             paidApiCallAttempted: false,
             persistence: {
               dbAvailable: persistence.isAvailable(),
+              dbDeleted,
               dbUpserted,
               dbError: dbError ?? null,
             },
@@ -971,7 +986,9 @@ export async function runAdminAction(
         status: ok ? "success" : "failure",
         summary: ok
           ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}${
-              dbUpserted > 0 ? `; mirrored ${dbUpserted} to Postgres.` : "."
+              dbUpserted > 0
+                ? `; deleted ${dbDeleted} stale + upserted ${dbUpserted} in Postgres.`
+                : "."
             }`
           : `Migration ${r.status}. No canonical file written.`,
         detail:
@@ -985,6 +1002,7 @@ export async function runAdminAction(
           target: r.target,
           rowsWritten: r.rowsWritten,
           diagnostics: r.diagnostics,
+          dbDeleted,
           dbUpserted,
           dbAvailable: persistence.isAvailable(),
         },
@@ -1013,8 +1031,22 @@ export async function runAdminAction(
       const r = buildRealWeek1CandidatesFromStoredData({
         season: 2025,
         week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
+      // When validation fails, attach a structured diagnostic
+      // so the admin UI surfaces the exact mismatch instead of
+      // an opaque "0 candidates" message. The diagnostic is a
+      // pure file-read (canonical CSV + fixture + games.csv) —
+      // no network, no DB call.
+      const debug =
+        r.status === "SCHEDULE_VALIDATION_FAILED"
+          ? buildScheduleValidationDebug({
+              repoRoot,
+              season: 2025,
+              week: 1,
+            })
+          : null;
       // Mirror the run output to Postgres so the page can read
       // it back after a redeploy.
       const dbSave = await persistence.saveStoredBacktestRunToDb({
@@ -1035,12 +1067,40 @@ export async function runAdminAction(
           rehydration.rehydrated
             ? ` (rehydrated ${rehydration.rowsRestored} odds rows from Postgres)`
             : ""
+        }${
+          debug
+            ? ` · ${debug.invalidGameIds.length} invalid gameIds, ${debug.teamPairIssues.length} pair mismatches`
+            : ""
         }`,
         detail:
           r.notes.join("\n") +
           `\n--- persistence ---\ncanonical odds source: ${rehydration.source}` +
           (rehydration.error ? `\nrehydration error: ${rehydration.error}` : "") +
-          `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
+          `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}` +
+          (debug
+            ? `\n--- schedule-validation debug ---\n` +
+              `canonical rows: ${debug.canonicalRowCount}\n` +
+              `distinct gameIds: ${debug.distinctCanonicalGameIds.join(", ")}\n` +
+              `gameIds in odds but NOT in fixture: ${debug.invalidGameIds.join(", ") || "(none)"}\n` +
+              `gameIds in fixture but NOT in odds: ${debug.missingFromOdds.join(", ") || "(none)"}\n` +
+              `team-pair mismatches:\n` +
+              (debug.teamPairIssues.length === 0
+                ? "  (none)\n"
+                : debug.teamPairIssues
+                    .map(
+                      (i) =>
+                        `  · ${i.gameId} expects ${i.expectedTeams.join("/")}; bad: ${i.badPairs.join(" · ")}`,
+                    )
+                    .join("\n") + "\n") +
+              `first ${debug.firstProblematicRows.length} problematic rows:\n` +
+              debug.firstProblematicRows
+                .map(
+                  (r2) =>
+                    `  · gameId=${r2.gameId} team=${r2.team} opp=${r2.opponent} player=${r2.playerName} book=${r2.sportsbook}`,
+                )
+                .join("\n") +
+              "\nRecommended: re-run the migration so the writer rewrites every row through normalizeTeamAbbreviation. The migration now also deletes stale DB rows for (season, week) before saving."
+            : ""),
         data: {
           status: r.status,
           candidateCount: r.candidates.length,
@@ -1048,6 +1108,7 @@ export async function runAdminAction(
           canonicalOddsSource: rehydration.source,
           dbAvailable: persistence.isAvailable(),
           dbRunSaved: dbSave.ok,
+          scheduleValidationDebug: debug,
         },
       };
       recordActionResult({
@@ -1064,6 +1125,137 @@ export async function runAdminAction(
       throw new Error(`Unknown admin action: ${String(unknown)}`);
     }
   }
+}
+
+interface ScheduleValidationDebug {
+  canonicalRowCount: number;
+  distinctCanonicalGameIds: string[];
+  expectedFixtureGameIds: string[];
+  invalidGameIds: string[];
+  missingFromOdds: string[];
+  teamPairIssues: {
+    gameId: string;
+    expectedTeams: string[];
+    badPairs: string[];
+  }[];
+  firstProblematicRows: {
+    gameId: string;
+    team: string;
+    opponent: string;
+    playerName: string;
+    sportsbook: string;
+  }[];
+}
+
+/**
+ * Build a structured diagnostic explaining why stored-mode
+ * schedule validation failed. Pure file IO: reads the canonical
+ * odds CSV + the static Week 1 fixture + (optionally) the
+ * processed games.csv. Surfaces every mismatch so the admin
+ * page can show the actual broken rows instead of "0
+ * candidates".
+ */
+function buildScheduleValidationDebug(args: {
+  repoRoot: string;
+  season: number;
+  week: number;
+}): ScheduleValidationDebug {
+  const canonicalPath = path.join(
+    args.repoRoot,
+    "data",
+    "processed",
+    "odds",
+    String(args.season),
+    `week-${args.week}-prop-markets.csv`,
+  );
+  let canonical: Array<{
+    season: number;
+    week: number;
+    gameId: string;
+    team: string;
+    opponent: string;
+    playerName: string;
+    sportsbook: string;
+  }> = [];
+  if (fs.existsSync(canonicalPath)) {
+    canonical = parseCsvRows(fs.readFileSync(canonicalPath, "utf8")).map(
+      (r) => ({
+        season: Number(r.season),
+        week: Number(r.week),
+        gameId: r.gameId ?? "",
+        team: r.team ?? "",
+        opponent: r.opponent ?? "",
+        playerName: r.playerName ?? "",
+        sportsbook: r.sportsbook ?? "",
+      }),
+    );
+  }
+  const fixture = getExpectedWeek1Schedule();
+  const fixtureIds = new Set(fixture.games.map((g) => g.gameId));
+  const canonicalIds = [...new Set(canonical.map((r) => r.gameId))].sort();
+
+  const idValidation = validateCanonicalOddsGameIds({
+    rows: canonical,
+    schedule: fixture.games,
+  });
+
+  const fixtureByGameId = new Map(
+    fixture.games.map((g) => [g.gameId, g] as const),
+  );
+  const teamPairIssues: ScheduleValidationDebug["teamPairIssues"] = [];
+  for (const gameId of canonicalIds) {
+    const fx = fixtureByGameId.get(gameId);
+    if (!fx) continue;
+    const expected = [
+      normalizeTeamAbbreviation(fx.awayTeam),
+      normalizeTeamAbbreviation(fx.homeTeam),
+    ];
+    const rowsForGame = canonical.filter((r) => r.gameId === gameId);
+    const pairs = new Map<string, number>();
+    for (const r of rowsForGame)
+      pairs.set(`${r.team}/${r.opponent}`, (pairs.get(`${r.team}/${r.opponent}`) ?? 0) + 1);
+    const badPairs: string[] = [];
+    for (const [pair, count] of pairs) {
+      const [team, opponent] = pair.split("/");
+      const teamN = normalizeTeamAbbreviation(team);
+      const oppN = normalizeTeamAbbreviation(opponent);
+      const teamOk = teamN === expected[0] || teamN === expected[1];
+      const oppOk = oppN === expected[0] || oppN === expected[1];
+      if (!teamOk || !oppOk || teamN === oppN) {
+        badPairs.push(`${pair} × ${count}`);
+      }
+    }
+    if (badPairs.length > 0) {
+      teamPairIssues.push({ gameId, expectedTeams: expected, badPairs });
+    }
+  }
+
+  const invalidIdsSet = new Set(idValidation.invalidGameIds);
+  const teamPairBadIds = new Set(teamPairIssues.map((i) => i.gameId));
+  const firstProblematicRows = canonical
+    .filter(
+      (r) => invalidIdsSet.has(r.gameId) || teamPairBadIds.has(r.gameId),
+    )
+    .slice(0, 20)
+    .map((r) => ({
+      gameId: r.gameId,
+      team: r.team,
+      opponent: r.opponent,
+      playerName: r.playerName,
+      sportsbook: r.sportsbook,
+    }));
+
+  return {
+    canonicalRowCount: canonical.length,
+    distinctCanonicalGameIds: canonicalIds,
+    expectedFixtureGameIds: [...fixtureIds].sort(),
+    invalidGameIds: idValidation.invalidGameIds,
+    missingFromOdds: [...fixtureIds].filter(
+      (g) => !canonicalIds.includes(g),
+    ),
+    teamPairIssues,
+    firstProblematicRows,
+  };
 }
 
 /**

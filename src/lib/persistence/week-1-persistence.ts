@@ -80,6 +80,14 @@ export interface PersistenceClient {
     rows: CanonicalPropRow[];
   }): Promise<PersistenceCallResult & { upserted?: number }>;
 
+  /** Force-delete every stored odds row for (season, week)
+   *  before a fresh migration so stale gameIds / team values
+   *  from an earlier (buggy) ingestion cannot survive. */
+  deleteCanonicalOddsRowsForWeek(args: {
+    season: number;
+    week: number;
+  }): Promise<PersistenceCallResult & { deleted?: number }>;
+
   loadCanonicalOddsRowsFromDb(args: {
     season: number;
     week: number;
@@ -123,6 +131,9 @@ export function nullPersistenceClient(): PersistenceClient {
   return {
     isAvailable: () => false,
     async saveCanonicalOddsRowsToDb() {
+      return { ...NOT_AVAILABLE };
+    },
+    async deleteCanonicalOddsRowsForWeek() {
       return { ...NOT_AVAILABLE };
     },
     async loadCanonicalOddsRowsFromDb() {
@@ -188,6 +199,16 @@ export function inMemoryPersistenceClient(): PersistenceClient & {
         upserted: number;
       };
     },
+    async deleteCanonicalOddsRowsForWeek(args) {
+      let deleted = 0;
+      for (const [key, row] of store.oddsRows) {
+        if (row.season === args.season && row.week === args.week) {
+          store.oddsRows.delete(key);
+          deleted += 1;
+        }
+      }
+      return ok({ deleted }) as PersistenceCallResult & { deleted: number };
+    },
     async loadCanonicalOddsRowsFromDb(args) {
       const rows = [...store.oddsRows.values()].filter(
         (r) => r.season === args.season && r.week === args.week,
@@ -239,6 +260,9 @@ interface PrismaLike {
       where: Record<string, unknown>;
       orderBy?: unknown;
     }) => Promise<Record<string, unknown>[]>;
+    deleteMany: (args: {
+      where: Record<string, unknown>;
+    }) => Promise<{ count: number }>;
   };
   adminIngestionState: {
     upsert: (args: {
@@ -339,6 +363,20 @@ export function prismaPersistenceClient(prisma: PrismaLike): PersistenceClient {
       } catch (err) {
         return { ...fail(err), upserted } as PersistenceCallResult & {
           upserted: number;
+        };
+      }
+    },
+    async deleteCanonicalOddsRowsForWeek(args) {
+      try {
+        const res = await prisma.storedPropMarket.deleteMany({
+          where: { season: args.season, week: args.week },
+        });
+        return { ...okPg(), deleted: res.count } as PersistenceCallResult & {
+          deleted: number;
+        };
+      } catch (err) {
+        return { ...fail(err), deleted: 0 } as PersistenceCallResult & {
+          deleted: number;
         };
       }
     },
