@@ -475,6 +475,12 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
             <ScorecardAuditMonitor audit={stored.graded.scorecardAudit} />
           ) : null}
 
+          {stored.graded.marketContextCalibration ? (
+            <MarketContextCalibrationMonitor
+              calibration={stored.graded.marketContextCalibration}
+            />
+          ) : null}
+
           <p className="mt-3 text-[11px] text-ink-500">
             Graded at · {stored.graded.gradedAt}.
           </p>
@@ -2143,6 +2149,89 @@ function ScorecardAuditMonitor({
           </ul>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function MarketContextCalibrationMonitor({
+  calibration,
+}: {
+  calibration: NonNullable<
+    StoredWeek1MonitorSnapshot["graded"]
+  >["marketContextCalibration"];
+}) {
+  if (!calibration) return null;
+  return (
+    <div
+      className="mt-4 space-y-2 rounded-2xl bg-amber-50/70 p-3 ring-1 ring-amber-200/60"
+      data-testid="monitor-market-context-calibration"
+    >
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900">
+          Market Context Gate Calibration · DIAGNOSTIC ONLY
+        </h3>
+        <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+          Production gate · {calibration.productionGate.toFixed(2)}
+        </span>
+      </div>
+      <p className="text-[10px] text-amber-900">
+        Calibration replay does not change the live model. Production
+        result above is what the model actually recommended; the
+        rows below are hypothetical.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+              <th className="pb-1 pr-2">Gate</th>
+              <th className="pb-1 pr-2 text-right">Plays</th>
+              <th className="pb-1 pr-2 text-right">W·L·P</th>
+              <th className="pb-1 pr-2 text-right">Hit</th>
+              <th className="pb-1 pr-2 text-right">ROI</th>
+              <th className="pb-1 text-right">Units</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink-800">
+            {[calibration.production, calibration.gate040, calibration.gate035].map(
+              (g) => (
+                <tr key={g.gateThreshold} className="border-t border-white/40">
+                  <td className="py-1 pr-2">
+                    {g.isProduction ? (
+                      <span className="text-sea-700 font-semibold">
+                        Production {g.gateThreshold.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span className="text-amber-900">
+                        Diagnostic {g.gateThreshold.toFixed(2)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {g.qualifiedCount}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {g.wins}·{g.losses}·{g.pushes}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {g.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td
+                    className={
+                      "py-1 pr-2 text-right tabular-nums " +
+                      (g.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {g.roiPct.toFixed(1)}%
+                  </td>
+                  <td className="py-1 text-right tabular-nums">
+                    {g.unitsProfit.toFixed(2)}
+                  </td>
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

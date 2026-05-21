@@ -1219,6 +1219,12 @@ function StoredGradedSection({
         <ScorecardAuditSection audit={snapshot.graded.scorecardAudit} />
       ) : null}
 
+      {snapshot.graded?.marketContextCalibration ? (
+        <MarketContextCalibrationSection
+          calibration={snapshot.graded.marketContextCalibration}
+        />
+      ) : null}
+
       {sample.length > 0 && (
         <div className="mt-4">
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
@@ -1640,6 +1646,313 @@ function ScorecardAuditSection({
           </p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function MarketContextCalibrationSection({
+  calibration,
+}: {
+  calibration: NonNullable<StoredWeek1MonitorSnapshot["graded"]>["marketContextCalibration"];
+}) {
+  if (!calibration) return null;
+  return (
+    <div
+      className="mt-4 rounded-2xl bg-white/65 p-4 ring-1 ring-amber-200/70"
+      data-testid="market-context-calibration"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900">
+          Market Context Gate Calibration · DIAGNOSTIC ONLY
+        </h3>
+        <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+          Production gate unchanged · {calibration.productionGate.toFixed(2)}
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] text-amber-900">{calibration.note}</p>
+
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+              <th className="pb-1 pr-2">Gate</th>
+              <th className="pb-1 pr-2 text-right">Qualified</th>
+              <th className="pb-1 pr-2 text-right">W·L·P</th>
+              <th className="pb-1 pr-2 text-right">No result</th>
+              <th className="pb-1 pr-2 text-right">Hit</th>
+              <th className="pb-1 pr-2 text-right">ROI</th>
+              <th className="pb-1 pr-2 text-right">Units</th>
+              <th className="pb-1 pr-2 text-right">Avg edge</th>
+              <th className="pb-1 text-right">Avg conf</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink-800">
+            {[
+              calibration.production,
+              calibration.gate040,
+              calibration.gate035,
+            ].map((g) => (
+              <tr
+                key={g.gateThreshold}
+                className="border-t border-white/40 align-top"
+              >
+                <td className="py-1 pr-2">
+                  {g.isProduction ? (
+                    <span className="rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80">
+                      Production · {g.gateThreshold.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+                      Diagnostic · {g.gateThreshold.toFixed(2)}
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.qualifiedCount}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.wins} · {g.losses} · {g.pushes}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.noResult}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.hitRatePct.toFixed(1)}%
+                </td>
+                <td
+                  className={
+                    "py-1 pr-2 text-right tabular-nums " +
+                    (g.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                  }
+                >
+                  {g.roiPct.toFixed(1)}%
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.unitsProfit.toFixed(2)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.averageEdgePct.toFixed(1)}%
+                </td>
+                <td className="py-1 text-right tabular-nums">
+                  {g.averageConfidence.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <CalibrationGateDetails
+        title="Diagnostic gate 0.40 — what would qualify"
+        gate={calibration.gate040}
+      />
+      <CalibrationGateDetails
+        title="Diagnostic gate 0.35 — what would qualify"
+        gate={calibration.gate035}
+      />
+      <p className="mt-3 text-[10px] text-amber-900">
+        These rows describe candidates that would have been
+        recommended IF the marketContext gate were lowered.
+        Production model continues to use{" "}
+        {calibration.productionGate.toFixed(2)}. Do not treat
+        these numbers as live performance.
+      </p>
+    </div>
+  );
+}
+
+function CalibrationGateDetails({
+  title,
+  gate,
+}: {
+  title: string;
+  gate: NonNullable<
+    StoredWeek1MonitorSnapshot["graded"]
+  >["marketContextCalibration"] extends infer T
+    ? T extends { gate040: infer G }
+      ? G
+      : never
+    : never;
+}) {
+  if (gate.qualifiedCount === 0) {
+    return (
+      <p className="mt-3 text-[11px] text-ink-500">
+        <span className="font-semibold">{title}:</span> 0 candidates
+        would qualify even with the gate lowered.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+        {title} · {gate.qualifiedCount} plays
+      </div>
+      <div className="mt-1 overflow-x-auto">
+        <table className="min-w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+              <th className="pb-1 pr-2">Player</th>
+              <th className="pb-1 pr-2">Prop · Line</th>
+              <th className="pb-1 pr-2">Side</th>
+              <th className="pb-1 pr-2 text-right">Model p</th>
+              <th className="pb-1 pr-2 text-right">Mkt p</th>
+              <th className="pb-1 pr-2 text-right">Edge</th>
+              <th className="pb-1 pr-2 text-right">Conf</th>
+              <th className="pb-1 pr-2 text-right">Risk</th>
+              <th className="pb-1 pr-2 text-right">MC raw</th>
+              <th className="pb-1 pr-2 text-right">Actual</th>
+              <th className="pb-1 pr-2 text-right">Outcome</th>
+              <th className="pb-1 text-right">P/L</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink-800">
+            {gate.candidates.slice(0, 50).map((c) => (
+              <tr
+                key={c.candidateId}
+                className="border-t border-white/40 align-top"
+              >
+                <td className="py-1 pr-2">{c.playerName}</td>
+                <td className="py-1 pr-2">
+                  {c.propType.replace(/_/g, " ")} · {c.line}
+                </td>
+                <td className="py-1 pr-2">{c.recommendedSide}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {(c.modelProbability * 100).toFixed(1)}%
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {(c.marketProbability * 100).toFixed(1)}%
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {(c.edge * 100).toFixed(1)}%
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {c.confidence.toFixed(2)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {c.riskScore.toFixed(2)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {c.marketContextScoreRaw.toFixed(2)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {c.actualValue ?? "—"}
+                </td>
+                <td className="py-1 pr-2 text-right">{c.outcome}</td>
+                <td
+                  className={
+                    "py-1 text-right tabular-nums " +
+                    (c.profitPerUnit > 0
+                      ? "text-sea-700"
+                      : c.profitPerUnit < 0
+                        ? "text-coral-700"
+                        : "")
+                  }
+                >
+                  {c.profitPerUnit.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {gate.byPropType.length > 0 ? (
+        <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <CalibrationBreakdownPanel
+            title="By prop type"
+            rows={gate.byPropType.map((r) => ({
+              label: r.propType,
+              count: r.count,
+              wins: r.wins,
+              losses: r.losses,
+              pushes: r.pushes,
+              hitRatePct: r.hitRatePct,
+              roiPct: r.roiPct,
+              unitsProfit: r.unitsProfit,
+            }))}
+          />
+          <CalibrationBreakdownPanel
+            title="By confidence tier"
+            rows={gate.byConfidenceTier.map((r) => ({
+              label: r.tier,
+              count: r.count,
+              wins: r.wins,
+              losses: r.losses,
+              pushes: r.pushes,
+              hitRatePct: r.hitRatePct,
+              roiPct: r.roiPct,
+              unitsProfit: r.unitsProfit,
+            }))}
+          />
+          <CalibrationBreakdownPanel
+            title="By edge bucket"
+            rows={gate.byEdgeBucket.map((r) => ({
+              label: r.label,
+              count: r.count,
+              wins: r.wins,
+              losses: r.losses,
+              pushes: r.pushes,
+              hitRatePct: r.hitRatePct,
+              roiPct: r.roiPct,
+              unitsProfit: r.unitsProfit,
+            }))}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CalibrationBreakdownPanel({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{
+    label: string;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+  }>;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {title}
+      </div>
+      <table className="mt-1 min-w-full text-[11px]">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            <th className="pb-1 pr-2">Label</th>
+            <th className="pb-1 pr-2 text-right">Plays</th>
+            <th className="pb-1 pr-2 text-right">Hit</th>
+            <th className="pb-1 text-right">ROI</th>
+          </tr>
+        </thead>
+        <tbody className="text-ink-800">
+          {rows.map((r) => (
+            <tr key={r.label} className="border-t border-white/40">
+              <td className="py-1 pr-2">{r.label.replace(/_/g, " ")}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{r.count}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {r.hitRatePct.toFixed(1)}%
+              </td>
+              <td
+                className={
+                  "py-1 text-right tabular-nums " +
+                  (r.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                }
+              >
+                {r.roiPct.toFixed(1)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
