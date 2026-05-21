@@ -18,6 +18,7 @@ import path from "node:path";
 
 export type AdminAction =
   | "readiness-check"
+  | "run-nflverse-ingestion"
   | "dry-run"
   | "paid-smoke"
   | "paid-week1"

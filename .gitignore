@@ -74,6 +74,8 @@ data/cache/**
 # Admin ingestion state — runtime persistence, never committed.
 data/admin/**
 !data/admin/.gitkeep
+data/admin-ingestion/**
+!data/admin-ingestion/.gitkeep
 
 # python
 __pycache__/
