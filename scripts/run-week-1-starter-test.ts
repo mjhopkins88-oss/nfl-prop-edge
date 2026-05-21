@@ -33,7 +33,7 @@ const OUTPUT_DIR = path.join(
   "2025",
 );
 
-type Phase = "pregame" | "simulation" | "all";
+type Phase = "pregame" | "simulation" | "full" | "all";
 
 interface CliArgs {
   algorithmMode: "V1_SCORECARD" | "V2_PIPELINE" | "COMPARE_V1_V2";
@@ -67,9 +67,14 @@ function parseArgs(argv: string[]): CliArgs {
       }
       case "--phase": {
         const v = next().toLowerCase();
-        if (v !== "pregame" && v !== "simulation" && v !== "all") {
+        if (
+          v !== "pregame" &&
+          v !== "simulation" &&
+          v !== "full" &&
+          v !== "all"
+        ) {
           throw new Error(
-            `--phase must be pregame | simulation | all (got ${v})`,
+            `--phase must be pregame | simulation | full | all (got ${v})`,
           );
         }
         args.phase = v as Phase;
@@ -119,6 +124,200 @@ function writeJson(filePath: string, data: unknown): void {
 
 function fmtPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+/**
+ * Locked pregame recommendation snapshot — what we would have
+ * advised at kickoff. Mirrors the pregame `candidates` array but
+ * also surfaces the `recommendation` / `qualified` flags so a
+ * downstream consumer can show "locked" plays without re-reading
+ * the bigger snapshot object.
+ */
+function writeLockedPregameRecommendations(args: {
+  pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  outputDir: string;
+}): void {
+  const locked = args.pregame.candidates.map((c) => ({
+    propMarketId: c.id,
+    playerName: c.playerName,
+    team: c.team,
+    opponent: c.opponent,
+    propType: c.propType,
+    line: c.line,
+    selectedSide: c.selectedSide,
+    recommendation: c.recommendation,
+    qualified: c.qualified,
+    confidence: c.confidence,
+    edge: c.edge,
+    edgeBucket: c.edgeBucket,
+    primaryDisqualifier: c.primaryDisqualifier,
+    locked: true,
+    season: c.season,
+    week: c.week,
+  }));
+  const lockedQualified = locked.filter((l) => l.qualified).length;
+  writeJson(path.join(args.outputDir, "week-1-locked-pregame-recommendations.fixture.json"), {
+    generatedAt: args.pregame.generatedAt,
+    season: args.pregame.season,
+    week: args.pregame.week,
+    algorithmMode: args.pregame.algorithmMode,
+    lockedAt: args.pregame.generatedAt,
+    totalCandidates: locked.length,
+    lockedQualifiedCount: lockedQualified,
+    lockedPasses: locked.length - lockedQualified,
+    recommendations: locked,
+  });
+}
+
+/**
+ * Pregame "data audit" file — single-source-of-truth on what
+ * inputs the pregame snapshot consumed and what it deliberately
+ * excluded. Used by the Week 1 page's data-integrity panel.
+ */
+function writeDataAudit(args: {
+  pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  outputDir: string;
+}): void {
+  const { pregame } = args;
+  const propTypeCounts: Record<string, number> = {};
+  for (const c of pregame.candidates) {
+    propTypeCounts[c.propType] = (propTypeCounts[c.propType] ?? 0) + 1;
+  }
+  writeJson(path.join(args.outputDir, "week-1-data-audit.fixture.json"), {
+    generatedAt: pregame.generatedAt,
+    season: pregame.season,
+    week: pregame.week,
+    algorithmMode: pregame.algorithmMode,
+    pregameOnly: pregame.pregameOnly,
+    includedPropTypes: pregame.propTypes,
+    excludedPropTypes: pregame.excludedPropTypes,
+    candidateCount: pregame.candidates.length,
+    candidatesByPropType: propTypeCounts,
+    actualResultsVisibleToModel: false,
+    touchdownPropsAllowed: false,
+    dataSources: [
+      "stored nflverse-style historical stats (data/fixtures/backtest/week-1/player-week-stats.fixture.json)",
+      "stored historical Odds API quotes (data/fixtures/backtest/week-1/prop-quotes.fixture.json)",
+      "stored weather / stadium snapshots (data/fixtures/backtest/week-1/weather.fixture.json)",
+      "static coaching / proxy / matchup data",
+    ],
+    notes: [
+      "Pregame phase uses only data strictly before season=2025 week=1.",
+      "No paid API calls made during this run.",
+      "No automated betting paths invoked.",
+      "Pregame outcomes are explicitly stripped (actualStat=null, result=PASS, profit=0).",
+    ],
+  });
+}
+
+/**
+ * Odds-coverage snapshot — counts how many prop markets are
+ * present per (gameId, propType) so missing-quote situations
+ * show up clearly on the Week 1 page.
+ */
+function writeOddsCoverage(args: {
+  pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  outputDir: string;
+}): void {
+  const byPropType: Record<string, number> = {};
+  const byGame: Record<string, number> = {};
+  for (const c of args.pregame.candidates) {
+    byPropType[c.propType] = (byPropType[c.propType] ?? 0) + 1;
+    byGame[c.gameId] = (byGame[c.gameId] ?? 0) + 1;
+  }
+  writeJson(path.join(args.outputDir, "week-1-odds-coverage.fixture.json"), {
+    generatedAt: args.pregame.generatedAt,
+    season: args.pregame.season,
+    week: args.pregame.week,
+    totalProps: args.pregame.candidates.length,
+    byPropType,
+    byGame,
+    source: "stored fixture (data/fixtures/backtest/week-1/prop-quotes.fixture.json)",
+    paidApiCalls: 0,
+    note: "Fixture / Stored Data — not a real Odds API pull.",
+  });
+}
+
+/**
+ * nflverse-style coverage snapshot — what stats are present for
+ * each player in the Week 1 fixture set.
+ */
+function writeNflDataCoverage(args: {
+  pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  outputDir: string;
+}): void {
+  const playerSeen = new Set<string>();
+  const players: Array<{ playerName: string; team: string; propType: string }> = [];
+  for (const c of args.pregame.candidates) {
+    const key = `${c.playerName}::${c.propType}`;
+    if (playerSeen.has(key)) continue;
+    playerSeen.add(key);
+    players.push({
+      playerName: c.playerName,
+      team: c.team,
+      propType: c.propType,
+    });
+  }
+  writeJson(path.join(args.outputDir, "week-1-nfl-data-coverage.fixture.json"), {
+    generatedAt: args.pregame.generatedAt,
+    season: args.pregame.season,
+    week: args.pregame.week,
+    uniquePlayerProps: players.length,
+    players,
+    source: "stored fixture (data/fixtures/backtest/week-1/player-week-stats.fixture.json)",
+    historyWindow: "strict-before season=2025 week=1 (includes prior 2024 weeks)",
+    note: "Fixture / Stored Data — not a real nflverse pull.",
+  });
+}
+
+/**
+ * No-future-data-leakage check — explicit, machine-verifiable
+ * boolean for the data-integrity panel.
+ */
+function writeLeakageCheck(args: {
+  pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  outputDir: string;
+}): void {
+  const violations: Array<{ id: string; reason: string }> = [];
+  for (const c of args.pregame.candidates) {
+    if (c.actualStat !== null) {
+      violations.push({
+        id: c.id,
+        reason: `actualStat=${c.actualStat} present in pregame snapshot`,
+      });
+    }
+    if (c.result !== "PASS") {
+      violations.push({
+        id: c.id,
+        reason: `graded result ${c.result} present in pregame snapshot`,
+      });
+    }
+    if (c.profitLossUnits !== 0) {
+      violations.push({
+        id: c.id,
+        reason: `non-zero profitLossUnits ${c.profitLossUnits} in pregame snapshot`,
+      });
+    }
+    if (c.season !== args.pregame.season || c.week !== args.pregame.week) {
+      violations.push({
+        id: c.id,
+        reason: `candidate season/week ${c.season}/W${c.week} does not match pregame ${args.pregame.season}/W${args.pregame.week}`,
+      });
+    }
+  }
+  writeJson(path.join(args.outputDir, "week-1-leakage-check.fixture.json"), {
+    generatedAt: args.pregame.generatedAt,
+    season: args.pregame.season,
+    week: args.pregame.week,
+    pregameOnly: args.pregame.pregameOnly,
+    actualResultsVisibleToModel: false,
+    leakageDetected: violations.length > 0,
+    violations,
+    notes: [
+      "Verified by buildWeekPregameSnapshot's outcome-strip pass.",
+      "Cross-checked by scripts/test-week-1-data-integrity.ts.",
+    ],
+  });
 }
 
 function summarize(result: WeekSimulationResult): void {
@@ -176,6 +375,15 @@ function main(): number {
     fixtureRoot: WEEK_1_FIXTURE_ROOT,
   });
   writeJson(path.join(OUTPUT_DIR, "week-1-pregame.fixture.json"), pregame);
+  // Companion pregame artifacts read by the Week 1 page +
+  // Monitor's data-integrity panels. None of these depend on
+  // Week-1 outcomes — they're computed from the pregame snapshot
+  // and are always safe to write.
+  writeLockedPregameRecommendations({ pregame, outputDir: OUTPUT_DIR });
+  writeDataAudit({ pregame, outputDir: OUTPUT_DIR });
+  writeOddsCoverage({ pregame, outputDir: OUTPUT_DIR });
+  writeNflDataCoverage({ pregame, outputDir: OUTPUT_DIR });
+  writeLeakageCheck({ pregame, outputDir: OUTPUT_DIR });
 
   if (args.phase === "pregame") {
     // eslint-disable-next-line no-console

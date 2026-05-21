@@ -1,6 +1,11 @@
 import Link from "next/link";
 import {
+  loadWeek1DataAudit,
   loadWeek1GameEdgePreview,
+  loadWeek1LeakageCheck,
+  loadWeek1LockedRecommendations,
+  loadWeek1NflDataCoverage,
+  loadWeek1OddsCoverage,
   loadWeek1ParlayPreview,
   loadWeek1Pregame,
   loadWeek1Results,
@@ -9,6 +14,11 @@ import {
 
 export default function Week1StarterTestPage() {
   const pregame = loadWeek1Pregame();
+  const locked = loadWeek1LockedRecommendations();
+  const dataAudit = loadWeek1DataAudit();
+  const oddsCoverage = loadWeek1OddsCoverage();
+  const nflCoverage = loadWeek1NflDataCoverage();
+  const leakage = loadWeek1LeakageCheck();
   const results = loadWeek1Results();
   const comparison = loadWeek1V1V2Comparison();
   const parlays = loadWeek1ParlayPreview();
@@ -20,6 +30,15 @@ export default function Week1StarterTestPage() {
       <Hero />
       {!hasOutput && <RunHint />}
       <PregameInputs />
+      {(dataAudit || oddsCoverage || nflCoverage || leakage) && (
+        <DataIntegritySection
+          dataAudit={dataAudit}
+          oddsCoverage={oddsCoverage}
+          nflCoverage={nflCoverage}
+          leakage={leakage}
+        />
+      )}
+      {locked && <LockedSnapshotSection locked={locked} />}
       {pregame && <PregameCandidates pregame={pregame} />}
       {results && <ResultsSection results={results} />}
       {comparison && <V1V2Section comparison={comparison} />}
@@ -444,6 +463,120 @@ function Stat({
       <div className="mt-0.5 text-base font-semibold text-ink-900">{value}</div>
       {sub && <div className="text-[11px] text-ink-600">{sub}</div>}
     </div>
+  );
+}
+
+function DataIntegritySection({
+  dataAudit,
+  oddsCoverage,
+  nflCoverage,
+  leakage,
+}: {
+  dataAudit: ReturnType<typeof loadWeek1DataAudit>;
+  oddsCoverage: ReturnType<typeof loadWeek1OddsCoverage>;
+  nflCoverage: ReturnType<typeof loadWeek1NflDataCoverage>;
+  leakage: ReturnType<typeof loadWeek1LeakageCheck>;
+}) {
+  const leakageClean =
+    leakage && !leakage.leakageDetected ? "Clean" : leakage ? "Detected" : "Unknown";
+  return (
+    <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+        Data integrity
+      </h2>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Actual results visible to model"
+          value={
+            dataAudit
+              ? dataAudit.actualResultsVisibleToModel
+                ? "Yes"
+                : "No"
+              : "—"
+          }
+          sub="Pregame stripping enforced"
+        />
+        <Stat
+          label="Leakage status"
+          value={leakageClean}
+          sub={
+            leakage
+              ? leakage.violations.length === 0
+                ? "0 violations"
+                : `${leakage.violations.length} flagged`
+              : undefined
+          }
+        />
+        <Stat
+          label="Odds coverage"
+          value={oddsCoverage ? `${oddsCoverage.totalProps} props` : "—"}
+          sub={oddsCoverage ? oddsCoverage.note : undefined}
+        />
+        <Stat
+          label="NFL stats coverage"
+          value={
+            nflCoverage ? `${nflCoverage.uniquePlayerProps} player-props` : "—"
+          }
+          sub={nflCoverage ? nflCoverage.historyWindow : undefined}
+        />
+      </div>
+      {dataAudit && (
+        <div className="mt-4 text-[11px] text-ink-600">
+          Included markets:{" "}
+          <span className="text-ink-800">
+            {dataAudit.includedPropTypes.join(" · ")}
+          </span>
+          <br />
+          Excluded markets:{" "}
+          <span className="text-ink-700">
+            {dataAudit.excludedPropTypes.join(" · ")} ·{" "}
+            <strong>no touchdown props</strong>
+          </span>
+        </div>
+      )}
+      {dataAudit && dataAudit.notes.length > 0 && (
+        <ul className="mt-3 space-y-0.5 text-[11px] text-ink-600">
+          {dataAudit.notes.map((n) => (
+            <li key={n}>· {n}</li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function LockedSnapshotSection({
+  locked,
+}: {
+  locked: NonNullable<ReturnType<typeof loadWeek1LockedRecommendations>>;
+}) {
+  return (
+    <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Locked pregame recommendations
+        </h2>
+        <span className="text-[11px] text-ink-500">
+          Locked at {new Date(locked.lockedAt).toLocaleString("en-US")}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Total candidates"
+          value={`${locked.totalCandidates}`}
+        />
+        <Stat
+          label="Locked qualified"
+          value={`${locked.lockedQualifiedCount}`}
+        />
+        <Stat label="Locked passes" value={`${locked.lockedPasses}`} />
+        <Stat label="Algorithm" value={locked.algorithmMode} />
+      </div>
+      <p className="mt-3 text-[11px] uppercase tracking-[0.14em] text-ink-500">
+        Locked snapshot is the source of truth for grading — Week 1 actuals
+        cannot retroactively change these picks.
+      </p>
+    </section>
   );
 }
 
