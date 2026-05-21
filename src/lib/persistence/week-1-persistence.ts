@@ -71,8 +71,36 @@ export interface StoredBacktestRecord {
   gameEdgeJson?: Record<string, unknown> | null;
 }
 
+export interface PersistenceCounts {
+  storedPropMarketRows: number;
+  storedBacktestRuns: number;
+  oddsIngestionRuns: number;
+  adminStateExists: boolean;
+}
+
+export interface PersistencePingResult extends PersistenceCallResult {
+  /** True when the four persistence tables respond to a trivial
+   *  query. False when DB is unreachable OR `db push` hasn't
+   *  been run (tables missing). */
+  tablesReady: boolean;
+}
+
 export interface PersistenceClient {
   isAvailable(): boolean;
+
+  /** Lightweight health probe. Does NOT throw — returns false +
+   *  the underlying error string when the tables are missing,
+   *  the DB is unreachable, or persistence is disabled. */
+  ping(): Promise<PersistencePingResult>;
+
+  /** Row + state counts for the admin verify action. Returns
+   *  `{ ok: false, counts: undefined }` when persistence is
+   *  disabled or the tables are missing — the caller falls back
+   *  to file inspection. */
+  countPersistence(args: {
+    season: number;
+    week: number;
+  }): Promise<PersistenceCallResult & { counts?: PersistenceCounts }>;
 
   saveCanonicalOddsRowsToDb(args: {
     season: number;
@@ -130,6 +158,12 @@ const NOT_AVAILABLE: PersistenceCallResult = {
 export function nullPersistenceClient(): PersistenceClient {
   return {
     isAvailable: () => false,
+    async ping() {
+      return { ...NOT_AVAILABLE, tablesReady: false };
+    },
+    async countPersistence() {
+      return { ...NOT_AVAILABLE };
+    },
     async saveCanonicalOddsRowsToDb() {
       return { ...NOT_AVAILABLE };
     },
@@ -193,6 +227,31 @@ export function inMemoryPersistenceClient(): PersistenceClient & {
   return {
     __store: store,
     isAvailable: () => true,
+    async ping() {
+      return { ok: true, source: "stub" as const, tablesReady: true };
+    },
+    async countPersistence(args) {
+      const rows = [...store.oddsRows.values()].filter(
+        (r) => r.season === args.season && r.week === args.week,
+      ).length;
+      const runs = store.backtestRuns.filter(
+        (r) => r.season === args.season && r.week === args.week,
+      ).length;
+      const ingest = store.oddsRuns.filter(
+        (r) =>
+          r.season === args.season && (r.week ?? args.week) === args.week,
+      ).length;
+      return {
+        ok: true,
+        source: "stub",
+        counts: {
+          storedPropMarketRows: rows,
+          storedBacktestRuns: runs,
+          oddsIngestionRuns: ingest,
+          adminStateExists: store.adminState !== undefined,
+        },
+      };
+    },
     async saveCanonicalOddsRowsToDb(args) {
       for (const row of args.rows) store.oddsRows.set(keyOf(row), row);
       return ok({ upserted: args.rows.length }) as PersistenceCallResult & {
@@ -263,6 +322,7 @@ interface PrismaLike {
     deleteMany: (args: {
       where: Record<string, unknown>;
     }) => Promise<{ count: number }>;
+    count: (args: { where: Record<string, unknown> }) => Promise<number>;
   };
   adminIngestionState: {
     upsert: (args: {
@@ -280,6 +340,7 @@ interface PrismaLike {
       where: Record<string, unknown>;
       orderBy?: unknown;
     }) => Promise<Record<string, unknown> | null>;
+    count: (args: { where: Record<string, unknown> }) => Promise<number>;
   };
   storedBacktestRun: {
     create: (args: { data: Record<string, unknown> }) => Promise<{ id: string }>;
@@ -287,6 +348,7 @@ interface PrismaLike {
       where: Record<string, unknown>;
       orderBy?: unknown;
     }) => Promise<Record<string, unknown> | null>;
+    count: (args: { where: Record<string, unknown> }) => Promise<number>;
   };
   $disconnect: () => Promise<void>;
 }
@@ -314,6 +376,54 @@ function fail(err: unknown): PersistenceCallResult {
 export function prismaPersistenceClient(prisma: PrismaLike): PersistenceClient {
   return {
     isAvailable: () => true,
+    async ping() {
+      // Trivial query against the singleton row. Catches both
+      // "DB unreachable" and "table missing" (P2021 / P2010
+      // from Prisma) in one shot.
+      try {
+        await prisma.adminIngestionState.findUnique({
+          where: { id: "singleton" },
+        });
+        return { ok: true, source: "postgres", tablesReady: true };
+      } catch (err) {
+        return { ...fail(err), tablesReady: false };
+      }
+    },
+    async countPersistence(args) {
+      try {
+        const [
+          storedPropMarketRows,
+          storedBacktestRuns,
+          oddsIngestionRuns,
+          adminStateRow,
+        ] = await Promise.all([
+          prisma.storedPropMarket.count({
+            where: { season: args.season, week: args.week },
+          }),
+          prisma.storedBacktestRun.count({
+            where: { season: args.season, week: args.week },
+          }),
+          prisma.oddsIngestionRun.count({
+            where: { season: args.season, week: args.week },
+          }),
+          prisma.adminIngestionState.findUnique({
+            where: { id: "singleton" },
+          }),
+        ]);
+        return {
+          ok: true,
+          source: "postgres",
+          counts: {
+            storedPropMarketRows,
+            storedBacktestRuns,
+            oddsIngestionRuns,
+            adminStateExists: adminStateRow !== null,
+          },
+        };
+      } catch (err) {
+        return fail(err);
+      }
+    },
     async saveCanonicalOddsRowsToDb(args) {
       let upserted = 0;
       try {

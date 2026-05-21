@@ -36,6 +36,7 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "migrate-odds-to-canonical",
   "stored-backtest",
   "grade-week1-stored",
+  "verify-persistence",
 ];
 
 function isAdminAction(s: unknown): s is AdminAction {
