@@ -377,3 +377,27 @@ export function loadWeek1ScheduleValidation():
     "week-1-schedule-validation.fixture.json",
   );
 }
+
+export interface Week1DataModeStatus {
+  generatedAt: string;
+  season: number;
+  week: number;
+  dataMode: "fixture" | "stored";
+  status: string;
+  candidateCount: number;
+  syntheticFixture: boolean;
+  realWeek1BacktestReady: boolean;
+  missingStoredOdds: boolean;
+  missingProcessedNfl: boolean;
+  scheduleReport?: Week1ScheduleValidation | null;
+  notes: string[];
+  nextSteps: string[];
+}
+
+export function loadWeek1DataModeStatus():
+  | Week1DataModeStatus
+  | undefined {
+  return readJsonIfExists<Week1DataModeStatus>(
+    "week-1-data-mode-status.fixture.json",
+  );
+}

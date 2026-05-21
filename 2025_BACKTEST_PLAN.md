@@ -339,6 +339,43 @@ Synthetic fixtures stay clearly labeled synthetic until #2 and
 #3 are wired in. The smoke test → one-week test cadence in the
 runbook above does not change.
 
+## Transition from synthetic fixture to real stored Week 1
+
+The runner now has two data modes:
+
+| `--data-mode` | What it reads | Schedule validation | `realWeek1BacktestReady` |
+|---|---|---|---|
+| `fixture` (default) | `data/fixtures/backtest/week-1/*.fixture.json` (KC@BAL, BUF@MIA placeholders) | `SYNTHETIC_ONLY` | `false` |
+| `stored` | `data/processed/odds/{season}/week-{N}-*.csv` + `data/processed/nfl/*.csv` | `PASS` once both inputs are present and reference real Week 1 game IDs | `true` only when stored mode returns `READY` |
+
+Stored mode never falls back to the synthetic fixture path. If
+either input is missing, the runner writes
+`data/backtests/2025/week-1-data-mode-status.fixture.json` with
+`status: "MISSING_STORED_ODDS"` / `"MISSING_PROCESSED_NFL"` and
+the page surfaces a yellow "Real Week 1 stored data not loaded
+yet" panel with the next-command hints.
+
+Fixture mode validates pipeline mechanics. Fixture mode is
+**not** proof of real Week 1 performance. Real Week 1
+simulation requires all four:
+
+1. Correct 2025 Week 1 schedule —
+   `data/fixtures/nfl/2025-week-1-schedule.fixture.json` is
+   committed and authoritative until processed
+   `data/processed/nfl/games.csv` lands.
+2. Stored pregame Odds API snapshots under
+   `data/processed/odds/{season}/week-{N}-prop-markets.csv` +
+   `week-{N}-prop-quotes.csv`. The loader also accepts the
+   legacy flat `data/processed/prop_markets.csv` layout.
+3. Processed NFL historical features
+   (`data/processed/nfl/player_week_stats.csv` etc.) populated
+   by the nflverse ingestion script.
+4. Schedule validator must return `PASS`. The leakage check
+   must continue to return zero violations.
+
+`realWeek1BacktestReady` must be `true` before any Week 1
+performance numbers are interpreted as model output.
+
 ## Operating reminders
 
 - Backtest must use stored / committed data only — no paid

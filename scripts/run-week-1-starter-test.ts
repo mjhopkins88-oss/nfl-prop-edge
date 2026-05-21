@@ -23,6 +23,12 @@ import {
   type ScheduleValidationReport,
 } from "../src/lib/backtest/week-1-schedule-validation";
 import { loadBacktestFixtures } from "../src/lib/backtest/data-loader";
+import {
+  buildRealWeek1CandidatesFromStoredData,
+  type BuildRealWeek1CandidatesResult,
+} from "../src/lib/backtest/real-week-candidate-builder";
+
+type DataMode = "fixture" | "stored";
 
 const WEEK_1_FIXTURE_ROOT = path.join(
   process.cwd(),
@@ -47,6 +53,7 @@ interface CliArgs {
   season: number;
   week: number;
   fixtures: boolean;
+  dataMode: DataMode;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -56,6 +63,7 @@ function parseArgs(argv: string[]): CliArgs {
     season: 2025,
     week: 1,
     fixtures: true,
+    dataMode: "fixture",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -95,12 +103,24 @@ function parseArgs(argv: string[]): CliArgs {
       case "--fixtures":
         args.fixtures = true;
         break;
+      case "--data-mode": {
+        const v = next().toLowerCase();
+        if (v !== "fixture" && v !== "stored") {
+          throw new Error(`--data-mode must be fixture | stored (got ${v})`);
+        }
+        args.dataMode = v as DataMode;
+        break;
+      }
       case "--help":
       case "-h":
         console.log(
           "Usage: npx tsx scripts/run-week-1-starter-test.ts [--algorithm-mode v1|v2|compare]\n" +
-            "                                                  [--phase pregame|simulation|all]\n" +
-            "                                                  [--season 2025] [--week 1] [--fixtures]",
+            "                                                  [--phase pregame|simulation|full|all]\n" +
+            "                                                  [--season 2025] [--week 1] [--fixtures]\n" +
+            "                                                  [--data-mode fixture|stored]\n" +
+            "  --data-mode fixture (default) — synthetic fixture path; SYNTHETIC_ONLY status expected.\n" +
+            "  --data-mode stored             — real path; reads data/processed/odds/{season}/week-{N}-*.csv\n" +
+            "                                   and data/processed/nfl/*.csv. Never calls a paid API.",
         );
         process.exit(0);
         break;
@@ -108,8 +128,12 @@ function parseArgs(argv: string[]): CliArgs {
         throw new Error(`Unknown argument: ${a}`);
     }
   }
-  if (!args.fixtures) {
-    throw new Error("Only --fixtures mode is supported right now.");
+  // --fixtures is only required in fixture mode. Stored mode
+  // never reads the synthetic backtest fixture root.
+  if (args.dataMode === "fixture" && !args.fixtures) {
+    throw new Error(
+      "fixture data-mode requires --fixtures (we never auto-fall-back to live data).",
+    );
   }
   if (args.season !== 2025 || args.week !== 1) {
     throw new Error(
@@ -390,6 +414,55 @@ function summarize(result: WeekSimulationResult): void {
 
 function main(): number {
   const args = parseArgs(process.argv.slice(2));
+
+  // Stored mode runs the real-week candidate builder first. If
+  // its result isn't READY, we still write a clean data-mode
+  // status file so the page can show "Real Week 1 stored data
+  // not loaded yet" with the exact next-command hint. Never
+  // synthesizes fake data.
+  let storedResult: BuildRealWeek1CandidatesResult | undefined;
+  if (args.dataMode === "stored") {
+    storedResult = buildRealWeek1CandidatesFromStoredData({
+      season: args.season,
+      week: args.week,
+    });
+    writeJson(path.join(OUTPUT_DIR, "week-1-data-mode-status.fixture.json"), {
+      generatedAt: new Date().toISOString(),
+      season: args.season,
+      week: args.week,
+      dataMode: "stored",
+      status: storedResult.status,
+      candidateCount: storedResult.candidates.length,
+      syntheticFixture: false,
+      realWeek1BacktestReady: storedResult.status === "READY",
+      missingStoredOdds:
+        storedResult.status === "MISSING_STORED_ODDS",
+      missingProcessedNfl:
+        storedResult.status === "MISSING_PROCESSED_NFL",
+      scheduleReport: storedResult.scheduleReport ?? null,
+      notes: storedResult.notes,
+      nextSteps: storedResult.nextSteps,
+    });
+    if (storedResult.status !== "READY") {
+      // eslint-disable-next-line no-console
+      console.log(
+        `stored mode: status=${storedResult.status}; wrote week-1-data-mode-status.fixture.json. No synthetic fallback.`,
+      );
+      for (const note of storedResult.notes) console.log(`  · ${note}`);
+      for (const step of storedResult.nextSteps) console.log(`  next: ${step}`);
+      return 0;
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `stored mode: status=READY with ${storedResult.candidates.length} real candidates. Continuing with the standard pregame + simulation pass.`,
+    );
+    // Falls through to the fixture-driven pregame snapshot for
+    // now. Wiring stored candidates through `runWeekSimulation`
+    // is the next iteration — at this commit the goal is to
+    // prove the stored path returns READY/MISSING cleanly and
+    // to surface it on the page.
+  }
+
   // Pregame snapshot — explicitly built BEFORE the graded
   // simulation so the no-future-data guarantee is provable.
   const pregame = buildWeekPregameSnapshot({
@@ -416,6 +489,36 @@ function main(): number {
     candidates: candidateGames,
   });
   writeScheduleValidation({ scheduleReport, outputDir: OUTPUT_DIR });
+  // Always write the data-mode status file in fixture mode too
+  // so the page has a consistent shape to read.
+  if (args.dataMode === "fixture") {
+    writeJson(path.join(OUTPUT_DIR, "week-1-data-mode-status.fixture.json"), {
+      generatedAt: new Date().toISOString(),
+      season: args.season,
+      week: args.week,
+      dataMode: "fixture",
+      status:
+        scheduleReport.status === "PASS"
+          ? "READY"
+          : "FIXTURE_SYNTHETIC",
+      candidateCount: pregame.candidates.length,
+      syntheticFixture: scheduleReport.syntheticFixture,
+      realWeek1BacktestReady: scheduleReport.realWeek1BacktestReady,
+      missingStoredOdds: true,
+      missingProcessedNfl: true,
+      scheduleReport,
+      notes: [
+        "Fixture mode — synthetic Week-1 placeholders are expected to fail schedule validation.",
+        "Switch to --data-mode stored once nflverse + Odds API ingestion have written processed files.",
+      ],
+      nextSteps: [
+        "npx tsx scripts/ingest-historical-prop-lines.ts --scope smoke-test --source mock --dry-run",
+        "ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope smoke-test --execute",
+        "ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope week --season 2025 --week 1 --execute",
+        "npx tsx scripts/run-week-1-starter-test.ts --phase full --data-mode stored --season 2025 --week 1",
+      ],
+    });
+  }
   // Companion pregame artifacts read by the Week 1 page +
   // Monitor's data-integrity panels. None of these depend on
   // Week-1 outcomes — they're computed from the pregame snapshot

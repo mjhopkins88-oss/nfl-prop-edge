@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   loadWeek1DataAudit,
+  loadWeek1DataModeStatus,
   loadWeek1GameEdgePreview,
   loadWeek1LeakageCheck,
   loadWeek1LockedRecommendations,
@@ -21,6 +22,7 @@ export default function Week1StarterTestPage() {
   const nflCoverage = loadWeek1NflDataCoverage();
   const leakage = loadWeek1LeakageCheck();
   const scheduleValidation = loadWeek1ScheduleValidation();
+  const dataModeStatus = loadWeek1DataModeStatus();
   const results = loadWeek1Results();
   const comparison = loadWeek1V1V2Comparison();
   const parlays = loadWeek1ParlayPreview();
@@ -37,6 +39,7 @@ export default function Week1StarterTestPage() {
       />
       {!hasOutput && <RunHint />}
       <PregameInputs />
+      {dataModeStatus && <DataSourceModeSection status={dataModeStatus} />}
       {scheduleValidation && (
         <ScheduleValidationSection validation={scheduleValidation} />
       )}
@@ -759,6 +762,85 @@ function LockedSnapshotSection({
         Locked snapshot is the source of truth for grading — Week 1 actuals
         cannot retroactively change these picks.
       </p>
+    </section>
+  );
+}
+
+function DataSourceModeSection({
+  status,
+}: {
+  status: NonNullable<ReturnType<typeof loadWeek1DataModeStatus>>;
+}) {
+  const isReady = status.realWeek1BacktestReady;
+  const modeChip =
+    status.dataMode === "stored"
+      ? isReady
+        ? "bg-sea-50 text-sea-800 ring-sea-200/70"
+        : "bg-amber-50 text-amber-900 ring-amber-200/70"
+      : "bg-amber-50 text-amber-900 ring-amber-200/70";
+  return (
+    <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Data source mode
+        </h2>
+        <span
+          className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ring-1 ${modeChip}`}
+          data-testid="data-mode-chip"
+        >
+          {status.dataMode} · {status.status}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Synthetic fixture"
+          value={status.syntheticFixture ? "Yes" : "No"}
+          sub={status.syntheticFixture ? "Pipeline test only" : "Real candidates"}
+        />
+        <Stat
+          label="Real Week 1 ready"
+          value={status.realWeek1BacktestReady ? "Yes" : "No"}
+          sub={
+            status.realWeek1BacktestReady
+              ? "Schedule passes + data loaded"
+              : "Switch to stored mode after ingestion"
+          }
+        />
+        <Stat
+          label="Missing stored odds"
+          value={status.missingStoredOdds ? "Yes" : "No"}
+        />
+        <Stat
+          label="Missing processed NFL"
+          value={status.missingProcessedNfl ? "Yes" : "No"}
+        />
+      </div>
+      {!isReady && (
+        <div className="mt-4 rounded-xl bg-amber-50/80 p-3 ring-1 ring-amber-200/60">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900">
+            Real Week 1 stored data not loaded yet
+          </div>
+          {status.notes.length > 0 && (
+            <ul className="mt-1 space-y-0.5 text-[11px] text-amber-900">
+              {status.notes.slice(0, 4).map((n) => (
+                <li key={n}>· {n}</li>
+              ))}
+            </ul>
+          )}
+          {status.nextSteps.length > 0 && (
+            <div className="mt-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900">
+                Next steps
+              </div>
+              <ol className="mt-1 list-inside list-decimal space-y-0.5 font-mono text-[10px] text-amber-900">
+                {status.nextSteps.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
