@@ -31,6 +31,7 @@ import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-ca
 import {
   hasPriorSmokeSuccess,
   recordActionResult,
+  recordPaidSmokeAttempt,
   recordSmokeSuccess,
   recordWeek1Success,
   type AdminAction,
@@ -157,6 +158,10 @@ const realSubprocessRunner: SubprocessRunner = async (spec) => {
 const CREDITS_DONE_RE =
   /Done\.\s+Credits\s+estimated=(\d+)\s+actual=(\d+)\s+remaining=([\d?]+)/;
 const ESTIMATED_RE = /Estimated credits:\s+(\d+)\s+\(budget\s+(\d+)\)/;
+const ABORT_OVERAGE_RE =
+  /ABORT mid-run:\s*actual credits\s+(\d+)\s+exceed estimate/;
+const ABORT_PRECALL_RE =
+  /ABORT before request:\s*projected cumulative actual\s+(\d+)/;
 const NORMALIZED_RE =
   /normalized:\s+(\d+)\s+games,\s+(\d+)\s+player-weeks,\s+(\d+)\s+team-weeks,\s+(\d+)\s+roster entries,\s+(\d+)\s+snap rows/;
 const WRITTEN_LINE_RE = /^\s+(.*data[/\\]processed[/\\]nfl[/\\][^\s]+\.csv)\s*$/gm;
@@ -180,6 +185,16 @@ export function parseIngestionOutput(stdout: string): ParsedCredits {
   if (m2) {
     out.estimatedCredits = Number(m2[1]);
     out.budget = Number(m2[2]);
+  }
+  // When the run aborted, surface the cumulative credits used at
+  // the abort point. Both abort paths log a number we can pick up.
+  if (out.creditsUsed === undefined) {
+    const aOver = ABORT_OVERAGE_RE.exec(stdout);
+    if (aOver) out.creditsUsed = Number(aOver[1]);
+  }
+  if (out.creditsUsed === undefined) {
+    const aPre = ABORT_PRECALL_RE.exec(stdout);
+    if (aPre) out.creditsUsed = Number(aPre[1]);
   }
   return out;
 }
@@ -322,6 +337,12 @@ function buildDryRunSpec(repoRoot: string): SubprocessSpec {
 }
 
 function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
+  // Calibration mode is the smallest paid sample we ever run from
+  // the admin UI: 1 events-list call + 1 event-odds call, with a
+  // 50-credit hard cap. The corrected pricing model already routes
+  // calibration via SMOKE_CALIBRATION_MAX_CREDITS, but we pass
+  // --max-credits explicitly so the runtime guard is set even if
+  // the constant changes later. See ODDS_API_CREDIT_AUDIT.md.
   return {
     command: defaultTsxBin(repoRoot),
     args: [
@@ -334,6 +355,11 @@ function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--calibration",
+      "--max-odds-requests",
+      "1",
+      "--max-credits",
+      "50",
       "--execute",
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
@@ -510,6 +536,15 @@ export async function runAdminAction(
       if (ok) {
         recordSmokeSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
       }
+      // Record every paid smoke attempt (success or failure) with
+      // the credits-used parsed from output. Lets the UI surface
+      // "last smoke used X credits before aborting" on retry.
+      recordPaidSmokeAttempt({
+        result: ok ? "success" : "failure",
+        creditsUsed: parsed.creditsUsed,
+        reason: ok ? undefined : result.summary,
+        repoRoot,
+      });
       recordActionResult({
         action: "paid-smoke",
         result: ok ? "success" : "failure",

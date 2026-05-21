@@ -36,6 +36,12 @@ export interface AdminIngestionState {
   smokeCreditsUsed?: number;
   /** Set when paid-week1 succeeds. */
   week1IngestionSucceededAt?: string;
+  /** Most recent paid-smoke attempt — success OR failure. Used to
+   *  show "last smoke used X credits before aborting" in the UI. */
+  lastPaidSmokeAttemptAt?: string;
+  lastPaidSmokeResult?: "success" | "failure";
+  lastPaidSmokeCreditsUsed?: number;
+  lastPaidSmokeReason?: string;
 }
 
 const STATE_REL_PATH = path.join("data", "admin", "ingestion-state.json");
@@ -94,6 +100,27 @@ export function recordSmokeSuccess(args: {
     smokeSucceededAt: new Date().toISOString(),
     smokeCreditsUsed:
       typeof args.creditsUsed === "number" ? args.creditsUsed : current.smokeCreditsUsed,
+  };
+  writeAdminState(next, args.repoRoot);
+  return next;
+}
+
+export function recordPaidSmokeAttempt(args: {
+  result: "success" | "failure";
+  creditsUsed?: number;
+  reason?: string;
+  repoRoot?: string;
+}): AdminIngestionState {
+  const current = readAdminState(args.repoRoot);
+  const next: AdminIngestionState = {
+    ...current,
+    lastPaidSmokeAttemptAt: new Date().toISOString(),
+    lastPaidSmokeResult: args.result,
+    lastPaidSmokeCreditsUsed:
+      typeof args.creditsUsed === "number"
+        ? args.creditsUsed
+        : current.lastPaidSmokeCreditsUsed,
+    lastPaidSmokeReason: args.reason ?? current.lastPaidSmokeReason,
   };
   writeAdminState(next, args.repoRoot);
   return next;

@@ -6,6 +6,8 @@
  * bodies are never included.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { NextResponse } from "next/server";
 import {
   isAdminTokenConfigured,
@@ -19,6 +21,21 @@ import {
   isOddsApiKeyConfigured,
 } from "@/lib/admin/admin-runner";
 import { buildReadinessReport } from "../../../../../../scripts/check-real-week-1-readiness";
+
+function readCalibrationResult(): Record<string, unknown> | null {
+  const p = path.join(
+    process.cwd(),
+    "data",
+    "admin-ingestion",
+    "latest-odds-calibration.json",
+  );
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +78,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       smokeSucceededAt: state.smokeSucceededAt ?? null,
       smokeCreditsUsed: state.smokeCreditsUsed ?? null,
       week1IngestionSucceededAt: state.week1IngestionSucceededAt ?? null,
+      lastPaidSmokeAttemptAt: state.lastPaidSmokeAttemptAt ?? null,
+      lastPaidSmokeResult: state.lastPaidSmokeResult ?? null,
+      lastPaidSmokeCreditsUsed: state.lastPaidSmokeCreditsUsed ?? null,
+      lastPaidSmokeReason: state.lastPaidSmokeReason ?? null,
     },
+    calibration: readCalibrationResult(),
     nextRecommendedAction: recommendNext({
       configuration: {
         oddsApiKeyConfigured: isOddsApiKeyConfigured(),

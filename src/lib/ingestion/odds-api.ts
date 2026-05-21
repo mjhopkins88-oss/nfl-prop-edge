@@ -20,6 +20,7 @@
  * See: https://the-odds-api.com/liveapi/guides/v4/#historical-data
  */
 
+import { HISTORICAL_PLAYER_PROP_CREDITS_PER_MARKET as PLAYER_PROP_PER_MARKET } from "../../config/api-budget";
 import type { PropType } from "../types";
 
 // --- constants --------------------------------------------------------
@@ -53,11 +54,37 @@ export const MAX_MARKETS_PER_REQUEST = 7;
 export const SNAPSHOT_GRANULARITY_MIN = 5;
 export const DEFAULT_HOURS_BEFORE_KICKOFF = 3.5;
 
-/** Per-call credit costs used by the estimator. */
+/**
+ * Per-call credit costs used by the estimator.
+ *
+ * Historical event odds are billed at different per-market rates
+ * depending on market category. The 2026-05 paid smoke confirmed
+ * that player-prop markets cost ~10 credits per (market × region)
+ * — substantially more than the standard markets. See
+ * `ODDS_API_CREDIT_AUDIT.md` for the trace.
+ */
 export const CREDITS = {
   EVENTS_LIST_PER_SNAPSHOT: 1,
-  EVENT_ODDS_PER_MARKET_PER_REGION: 1,
+  EVENT_ODDS_STANDARD_PER_MARKET_PER_REGION: 1,
+  EVENT_ODDS_PLAYER_PER_MARKET_PER_REGION: PLAYER_PROP_PER_MARKET,
+  /** Backwards-compat: the conservative rate, used when the
+   *  caller can't tell us which markets. */
+  EVENT_ODDS_PER_MARKET_PER_REGION: PLAYER_PROP_PER_MARKET,
 } as const;
+
+/** Per-market credit cost for one market key in one region. */
+export function creditsForMarketKey(marketKey: string): number {
+  if (marketKey.startsWith("player_"))
+    return CREDITS.EVENT_ODDS_PLAYER_PER_MARKET_PER_REGION;
+  return CREDITS.EVENT_ODDS_STANDARD_PER_MARKET_PER_REGION;
+}
+
+/** Sum the per-region credit cost across a list of market keys. */
+export function creditsForMarketSet(marketKeys: readonly string[]): number {
+  let sum = 0;
+  for (const m of marketKeys) sum += creditsForMarketKey(m);
+  return sum;
+}
 
 /** Map an Odds API market key to our internal PropType enum value. */
 export const ODDS_API_TO_PROP_TYPE: Record<OddsApiMarketKey, PropType> = {
@@ -326,6 +353,8 @@ export interface RunPlan {
   uniqueSnapshots: number;
   totalEvents: number;
   marketsPerEvent: number;
+  /** Per-event-odds-call credit cost under the corrected model. */
+  perEventOddsCallCredits: number;
   estimatedCredits: number;
 }
 
@@ -334,27 +363,37 @@ export interface RunPlan {
  *
  * Cost model:
  *   uniqueSnapshots * EVENTS_LIST_PER_SNAPSHOT
- *   + totalEvents * marketsPerEvent * EVENT_ODDS_PER_MARKET_PER_REGION
+ *   + totalEvents * sum(creditsForMarketKey(m)) * regions
  *
- * The Odds API charges per (market × region) for historical event odds.
- * Region is fixed at 1 (us) for V1, so the per-event cost == marketsPerEvent.
+ * When `markets` is a list of keys we use the per-key rate
+ * (player_* → 10, others → 1). When only a count is passed, we
+ * fall back to the conservative player-prop rate so estimates
+ * never under-count.
  */
 export function estimateCredits({
   uniqueSnapshots,
   totalEvents,
   marketsPerEvent,
+  marketKeys,
+  regions = 1,
 }: {
   uniqueSnapshots: number;
   totalEvents: number;
   marketsPerEvent: number;
+  marketKeys?: readonly string[];
+  regions?: number;
 }): RunPlan {
+  const perEventOddsCall = marketKeys
+    ? creditsForMarketSet(marketKeys) * regions
+    : marketsPerEvent * regions * CREDITS.EVENT_ODDS_PER_MARKET_PER_REGION;
   const credits =
     uniqueSnapshots * CREDITS.EVENTS_LIST_PER_SNAPSHOT +
-    totalEvents * marketsPerEvent * CREDITS.EVENT_ODDS_PER_MARKET_PER_REGION;
+    totalEvents * perEventOddsCall;
   return {
     uniqueSnapshots,
     totalEvents,
     marketsPerEvent,
+    perEventOddsCallCredits: perEventOddsCall,
     estimatedCredits: credits,
   };
 }

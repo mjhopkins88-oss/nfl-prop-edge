@@ -42,7 +42,19 @@ interface StatusResponse {
     smokeSucceededAt: string | null;
     smokeCreditsUsed: number | null;
     week1IngestionSucceededAt: string | null;
+    lastPaidSmokeAttemptAt: string | null;
+    lastPaidSmokeResult: "success" | "failure" | null;
+    lastPaidSmokeCreditsUsed: number | null;
+    lastPaidSmokeReason: string | null;
   };
+  calibration?: {
+    perMarketEstimatedRate?: number;
+    perMarketObservedRate?: number | null;
+    firstOddsCallActualCost?: number | null;
+    creditsUsedActual?: number;
+    creditsRemaining?: number | null;
+    finishedAt?: string;
+  } | null;
   nextRecommendedAction?: string;
   guardrails?: {
     starterMarketsOnly: string[];
@@ -199,9 +211,25 @@ export function AdminIngestionClient() {
             busy={busy === "dry-run"}
             onRun={() => void runAction("dry-run")}
           />
+          {status?.state?.lastPaidSmokeResult === "failure" &&
+          status.state.lastPaidSmokeCreditsUsed ? (
+            <div className="rounded border border-amber-700/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+              ⚠ Last paid smoke used{" "}
+              <span className="font-semibold">
+                {status.state.lastPaidSmokeCreditsUsed} credits
+              </span>{" "}
+              before aborting. The next retry uses calibration mode
+              (1 events-list + 1 event-odds call, 50-credit cap).
+              {status.state.lastPaidSmokeReason ? (
+                <p className="mt-1 text-amber-300/80">
+                  {status.state.lastPaidSmokeReason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <PaidActionRow
-            label="4. Run paid smoke test"
-            description="One snapshot. Requires ALLOW_REAL_ODDS_API_CALLS=true and confirmation text."
+            label="4. Run paid smoke test (calibration)"
+            description="1 events + 1 odds call, 50-credit hard cap. Requires ALLOW_REAL_ODDS_API_CALLS=true and confirmation text."
             confirmExpected={PAID_SMOKE_CONFIRM}
             confirmValue={paidSmokeConfirm}
             onConfirmChange={setPaidSmokeConfirm}
