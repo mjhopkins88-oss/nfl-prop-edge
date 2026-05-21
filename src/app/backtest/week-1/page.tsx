@@ -827,18 +827,45 @@ function DataSourceModeSection({
               ))}
             </ul>
           )}
-          {status.nextSteps.length > 0 && (
-            <div className="mt-2">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900">
-                Next steps
-              </div>
-              <ol className="mt-1 list-inside list-decimal space-y-0.5 font-mono text-[10px] text-amber-900">
-                {status.nextSteps.map((s) => (
-                  <li key={s}>{s}</li>
-                ))}
-              </ol>
+          <div className="mt-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900">
+              Transition checklist (in order)
             </div>
-          )}
+            <ol className="mt-1 list-inside list-decimal space-y-1 font-mono text-[10px] text-amber-900">
+              <li>
+                <span className="font-semibold not-italic">Process NFL data (free, no API key).</span>{" "}
+                <code className="rounded bg-white/70 px-1 py-0.5">npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run</code>
+              </li>
+              <li>
+                <span className="font-semibold not-italic">Smoke test Odds API plan (dry-run, no credits).</span>{" "}
+                <code className="rounded bg-white/70 px-1 py-0.5">npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --scope smoke-test --source mock --dry-run</code>
+              </li>
+              <li>
+                <span className="font-semibold not-italic">After explicit approval only — paid smoke test:</span>{" "}
+                <code className="rounded bg-white/70 px-1 py-0.5">ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --scope smoke-test --execute</code>
+              </li>
+              <li>
+                <span className="font-semibold not-italic">After paid smoke test succeeds — paid Week 1 ingestion:</span>{" "}
+                <code className="rounded bg-white/70 px-1 py-0.5">ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --scope week --week 1 --execute</code>
+              </li>
+              <li>
+                <span className="font-semibold not-italic">Run stored-mode Week 1 test:</span>{" "}
+                <code className="rounded bg-white/70 px-1 py-0.5">npx tsx scripts/run-week-1-starter-test.ts --phase full --data-mode stored --season 2025 --week 1</code>
+              </li>
+            </ol>
+          </div>
+          <div
+            className="mt-3 rounded-lg bg-rose-50/70 p-2 ring-1 ring-coral-300/60"
+            data-testid="do-not-judge-warning"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-coral-700">
+              Do not judge model performance until realWeek1BacktestReady=true.
+            </div>
+            <p className="mt-1 text-[10px] text-coral-700">
+              Fixture mode validates pipeline mechanics only. Any
+              numbers it produces are not evidence of edge.
+            </p>
+          </div>
         </div>
       )}
     </section>
