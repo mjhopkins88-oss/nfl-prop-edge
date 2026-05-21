@@ -235,39 +235,46 @@ function main(): void {
     else console.log("[6] FAIL — implied prob");
   }
 
-  // 7. Script source: references the right loader + slice
-  //    labels + answers block.
+  // 7. Source-level: the CLI script loads stored snapshots and
+  //    routes them through the shared library — which is where
+  //    the slice labels and answer-question strings live.
   {
-    const r = makeReport("script source has loader + slice labels + answers");
-    const text = readSrc("scripts/edge-slice-diagnostic-report.ts");
+    const r = makeReport("script + library wire loader + slice labels + answers");
+    const scriptText = readSrc("scripts/edge-slice-diagnostic-report.ts");
+    const libText = readSrc("src/lib/backtest/edge-slice-diagnostic.ts");
     check(
       r,
-      /loadAllStoredMonitorSnapshots/.test(text),
-      "must call loadAllStoredMonitorSnapshots",
+      /loadAllStoredMonitorSnapshots/.test(scriptText),
+      "script must call loadAllStoredMonitorSnapshots",
     );
     check(
       r,
-      /marketContextCalibration\.gate040/.test(text) ||
-        /cal\.gate040\.candidates/.test(text),
-      "must read gate040 candidates from the calibration payload",
+      /buildEdgeSliceReport/.test(scriptText),
+      "script must call buildEdgeSliceReport",
+    );
+    check(
+      r,
+      /cal\.gate040\.candidates/.test(libText) ||
+        /gate040\.candidates/.test(libText),
+      "library must read gate040 candidates from the calibration payload",
     );
     for (const label of ["edge ≥ 4%", "edge ≥ 6%", "edge ≥ 8%", "edge ≥ 10%", "elite-only"]) {
-      check(r, text.includes(label), `must define slice label '${label}'`);
+      check(r, libText.includes(label), `library must define slice label '${label}'`);
     }
     check(
       r,
-      /Does ROI improve as edge threshold increases/.test(text),
-      "must print the ROI-vs-edge question",
+      /Does ROI improve as edge threshold increases/.test(libText),
+      "library must print the ROI-vs-edge question",
     );
     check(
       r,
-      /systematically overestimating/.test(text),
-      "must print the overestimation question",
+      /systematically overestimating/.test(libText),
+      "library must print the overestimation question",
     );
     record(r);
     if (r.reasons.length === 0)
-      console.log("[7] PASS — script source wires loader + slices + answers");
-    else console.log("[7] FAIL — script source");
+      console.log("[7] PASS — script + library wire loader + slices + answers");
+    else console.log("[7] FAIL — source wiring");
   }
 
   // 8. No banned hooks in the script or the audit module it
@@ -276,6 +283,7 @@ function main(): void {
     const r = makeReport("no banned hooks");
     const files = [
       "scripts/edge-slice-diagnostic-report.ts",
+      "src/lib/backtest/edge-slice-diagnostic.ts",
       "src/lib/backtest/diagnostic-qualification-audit.ts",
       "src/lib/backtest/market-context-calibration.ts",
     ];
