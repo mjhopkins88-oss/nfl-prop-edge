@@ -32,6 +32,42 @@ export interface GradedSideSnapshot {
   unitsProfit: number;
 }
 
+export interface GradedMarketBucket {
+  propType: string;
+  total: number;
+  decisive: number;
+  overSide: GradedSideSnapshot;
+  underSide: GradedSideSnapshot;
+}
+
+export interface GradedLineBucket {
+  label: string;
+  lineLow: number;
+  lineHigh: number;
+  total: number;
+  decisive: number;
+  overSide: GradedSideSnapshot;
+  underSide: GradedSideSnapshot;
+}
+
+export interface GradedSampleRow {
+  candidateId: string;
+  gameId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  overOdds: number;
+  underOdds: number;
+  actualValue: number | null;
+  overOutcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
+  underOutcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
+  overProfitPerUnit: number;
+  underProfitPerUnit: number;
+  decisive: boolean;
+}
+
 export interface GradedSnapshot {
   gradedAt: string;
   /** Diagnostic numbers across all candidates. Per-side hit
@@ -46,7 +82,17 @@ export interface GradedSnapshot {
     overSide: GradedSideSnapshot;
     underSide: GradedSideSnapshot;
     betterSide: "OVER" | "UNDER" | "TIE";
+    /** Per-market-type universe breakdown (PASSING_ATTEMPTS,
+     *  RECEPTIONS, etc.). Populated when the grader has at
+     *  least one row per market. */
+    byPropType: GradedMarketBucket[];
+    /** Per-line-bucket (≤5, 5–10, 10–25, 25–35, 35+). */
+    byLineBucket: GradedLineBucket[];
   };
+  /** Up to 100 individual graded candidates persisted by the
+   *  admin grading action. Sorted by candidateId for stable
+   *  rendering. */
+  gradedSample: GradedSampleRow[];
   /** Model's actual betting performance — qualified plays only.
    *  Empty until candidates carry a `recommendation` field. */
   recommendedPlays: {
@@ -158,10 +204,34 @@ interface GradedSideShape {
   unitsProfit: number;
 }
 
+interface GradedMarketBucketShape {
+  propType: string;
+  total: number;
+  decisive: number;
+  overSide: GradedSideShape;
+  underSide: GradedSideShape;
+}
+
+interface GradedLineBucketShape {
+  label: string;
+  lineLow: number;
+  lineHigh: number;
+  total: number;
+  decisive: number;
+  overSide: GradedSideShape;
+  underSide: GradedSideShape;
+}
+
 interface GradedFileShape {
   gradedAt: string;
   season: number;
   week: number;
+  /** Optional individual graded rows (admin grading action
+   *  persists up to 100). The page renders them. */
+  samples?: GradedSampleRow[];
+  /** Same shape, just a different key name used by the DB
+   *  resultsJson path. */
+  gradedSample?: GradedSampleRow[];
   summary: {
     gradedAt?: string;
     /** Legacy headline fields — diagnostic only. */
@@ -183,7 +253,11 @@ interface GradedFileShape {
       overSide: GradedSideShape;
       underSide: GradedSideShape;
       betterSide: "OVER" | "UNDER" | "TIE";
+      byPropType?: GradedMarketBucketShape[];
+      byLineBucket?: GradedLineBucketShape[];
     };
+    byPropType?: GradedMarketBucketShape[];
+    byLineBucket?: GradedLineBucketShape[];
     recommendedPlays?: {
       enabled: boolean;
       note: string;
@@ -261,9 +335,40 @@ function sideToSnapshot(s: GradedSideShape): GradedSideSnapshot {
   };
 }
 
+function bucketToSnapshot(b: GradedMarketBucketShape): GradedMarketBucket {
+  return {
+    propType: b.propType,
+    total: b.total,
+    decisive: b.decisive,
+    overSide: sideToSnapshot(b.overSide),
+    underSide: sideToSnapshot(b.underSide),
+  };
+}
+
+function lineBucketToSnapshot(b: GradedLineBucketShape): GradedLineBucket {
+  return {
+    label: b.label,
+    lineLow: b.lineLow,
+    lineHigh: b.lineHigh,
+    total: b.total,
+    decisive: b.decisive,
+    overSide: sideToSnapshot(b.overSide),
+    underSide: sideToSnapshot(b.underSide),
+  };
+}
+
 function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | undefined {
   if (!g) return undefined;
   const s = g.summary;
+  // Breakdown buckets may live either inside universeDiagnostics
+  // (preferred) or directly on the summary (legacy headline
+  // fields). Map both shapes.
+  const byPropType = (
+    s.universeDiagnostics?.byPropType ?? s.byPropType ?? []
+  ).map(bucketToSnapshot);
+  const byLineBucket = (
+    s.universeDiagnostics?.byLineBucket ?? s.byLineBucket ?? []
+  ).map(lineBucketToSnapshot);
   return {
     gradedAt: g.gradedAt,
     universeDiagnostics: s.universeDiagnostics
@@ -275,6 +380,8 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
           overSide: sideToSnapshot(s.universeDiagnostics.overSide),
           underSide: sideToSnapshot(s.universeDiagnostics.underSide),
           betterSide: s.universeDiagnostics.betterSide,
+          byPropType,
+          byLineBucket,
         }
       : {
           totalCandidates: s.totalCandidates,
@@ -284,7 +391,10 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
           overSide: sideToSnapshot(s.overSide),
           underSide: sideToSnapshot(s.underSide),
           betterSide: s.betterSide,
+          byPropType,
+          byLineBucket,
         },
+    gradedSample: g.gradedSample ?? g.samples ?? [],
     recommendedPlays: s.recommendedPlays ?? {
       enabled: false,
       note: "Recommended-plays section not present in this graded payload.",
@@ -382,7 +492,10 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
       // file mirror so a redeploy that wipes only one source
       // still finds the data.
       const resultsJson = run.resultsJson as
-        | { summary?: GradedFileShape["summary"] }
+        | {
+            summary?: GradedFileShape["summary"];
+            gradedSample?: GradedSampleRow[];
+          }
         | null
         | undefined;
       const dbGraded = resultsJson?.summary
@@ -391,6 +504,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             season: args.season,
             week: args.week,
             summary: resultsJson.summary,
+            gradedSample: resultsJson.gradedSample,
           })
         : undefined;
       const fileGraded = toGradedSnapshot(

@@ -1272,6 +1272,11 @@ export async function runAdminAction(
         resultsJson: {
           summary: grade.summary,
           gradedSampleSize: grade.graded.length,
+          // Persist up to 100 per-candidate graded rows so the
+          // /backtest/week-1 page can render the actual plays
+          // + outcomes without re-running the grader. Cap keeps
+          // the row JSON modest in size.
+          gradedSample: grade.graded.slice(0, 100),
         },
       });
       // File mirror — small, secret-free.
