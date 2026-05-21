@@ -233,3 +233,116 @@ export function loadWeek1GameEdgePreview():
     "week-1-game-edge-preview.fixture.json",
   );
 }
+
+export interface Week1LockedRecommendations {
+  generatedAt: string;
+  season: number;
+  week: number;
+  algorithmMode: string;
+  lockedAt: string;
+  totalCandidates: number;
+  lockedQualifiedCount: number;
+  lockedPasses: number;
+  recommendations: Array<{
+    propMarketId: string;
+    playerName: string;
+    team: string;
+    opponent: string;
+    propType: string;
+    line: number;
+    selectedSide: "OVER" | "UNDER";
+    recommendation: string;
+    qualified: boolean;
+    confidence: number;
+    edge: number;
+    edgeBucket: string;
+    primaryDisqualifier?: string;
+    locked: boolean;
+    season: number;
+    week: number;
+  }>;
+}
+
+export function loadWeek1LockedRecommendations():
+  | Week1LockedRecommendations
+  | undefined {
+  return readJsonIfExists<Week1LockedRecommendations>(
+    "week-1-locked-pregame-recommendations.fixture.json",
+  );
+}
+
+export interface Week1DataAudit {
+  generatedAt: string;
+  season: number;
+  week: number;
+  algorithmMode: string;
+  pregameOnly: boolean;
+  includedPropTypes: string[];
+  excludedPropTypes: string[];
+  candidateCount: number;
+  candidatesByPropType: Record<string, number>;
+  actualResultsVisibleToModel: boolean;
+  touchdownPropsAllowed: boolean;
+  dataSources: string[];
+  notes: string[];
+}
+
+export function loadWeek1DataAudit(): Week1DataAudit | undefined {
+  return readJsonIfExists<Week1DataAudit>(
+    "week-1-data-audit.fixture.json",
+  );
+}
+
+export interface Week1OddsCoverage {
+  generatedAt: string;
+  season: number;
+  week: number;
+  totalProps: number;
+  byPropType: Record<string, number>;
+  byGame: Record<string, number>;
+  source: string;
+  paidApiCalls: number;
+  note: string;
+}
+
+export function loadWeek1OddsCoverage(): Week1OddsCoverage | undefined {
+  return readJsonIfExists<Week1OddsCoverage>(
+    "week-1-odds-coverage.fixture.json",
+  );
+}
+
+export interface Week1NflDataCoverage {
+  generatedAt: string;
+  season: number;
+  week: number;
+  uniquePlayerProps: number;
+  players: Array<{ playerName: string; team: string; propType: string }>;
+  source: string;
+  historyWindow: string;
+  note: string;
+}
+
+export function loadWeek1NflDataCoverage():
+  | Week1NflDataCoverage
+  | undefined {
+  return readJsonIfExists<Week1NflDataCoverage>(
+    "week-1-nfl-data-coverage.fixture.json",
+  );
+}
+
+export interface Week1LeakageCheck {
+  generatedAt: string;
+  season: number;
+  week: number;
+  pregameOnly: boolean;
+  actualResultsVisibleToModel: boolean;
+  leakageDetected: boolean;
+  violations: Array<{ id: string; reason: string }>;
+  notes: string[];
+}
+
+export function loadWeek1LeakageCheck(): Week1LeakageCheck | undefined {
+  return readJsonIfExists<Week1LeakageCheck>(
+    "week-1-leakage-check.fixture.json",
+  );
+}
