@@ -224,53 +224,188 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
         />
       </div>
       {stored.graded ? (
-        <div className="mt-4 space-y-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
-            Graded results · stored Week 1
-          </h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat
-              label="Qualified plays"
-              value={`${stored.graded.qualifiedPlays}`}
-              sub={`${stored.graded.candidatesWithActual} with actual stat`}
-            />
-            <Stat
-              label="OVER hit rate"
-              value={`${stored.graded.overSide.hitRatePct.toFixed(1)}%`}
-              sub={`${stored.graded.overSide.wins}W · ${stored.graded.overSide.losses}L`}
-            />
-            <Stat
-              label="OVER ROI"
-              value={`${stored.graded.overSide.roiPct.toFixed(1)}%`}
-              sub={`${stored.graded.overSide.unitsProfit.toFixed(2)} units`}
-            />
-            <Stat
-              label="UNDER hit rate"
-              value={`${stored.graded.underSide.hitRatePct.toFixed(1)}%`}
-              sub={`${stored.graded.underSide.wins}W · ${stored.graded.underSide.losses}L`}
-            />
-            <Stat
-              label="UNDER ROI"
-              value={`${stored.graded.underSide.roiPct.toFixed(1)}%`}
-              sub={`${stored.graded.underSide.unitsProfit.toFixed(2)} units`}
-            />
-            <Stat
-              label="Better side"
-              value={stored.graded.betterSide}
-              sub={
-                stored.graded.candidatesMissingActual > 0
-                  ? `${stored.graded.candidatesMissingActual} no-stat skipped`
-                  : undefined
-              }
-            />
+        <>
+          <div className="mt-4 space-y-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+                Candidate Universe Diagnostics
+              </h3>
+              <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+                Model diagnostic only · not betting performance
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat
+                label="Universe size"
+                value={`${stored.graded.universeDiagnostics.totalCandidates}`}
+                sub={`${stored.graded.universeDiagnostics.candidatesWithActual} with actual stat`}
+              />
+              <Stat
+                label="OVER directional hit"
+                value={`${stored.graded.universeDiagnostics.overSide.hitRatePct.toFixed(1)}%`}
+                sub={`${stored.graded.universeDiagnostics.overSide.wins}W · ${stored.graded.universeDiagnostics.overSide.losses}L (diagnostic)`}
+              />
+              <Stat
+                label="UNDER directional hit"
+                value={`${stored.graded.universeDiagnostics.underSide.hitRatePct.toFixed(1)}%`}
+                sub={`${stored.graded.universeDiagnostics.underSide.wins}W · ${stored.graded.universeDiagnostics.underSide.losses}L (diagnostic)`}
+              />
+              <Stat
+                label="Line-side better-paid"
+                value={stored.graded.universeDiagnostics.betterSide}
+                sub={
+                  stored.graded.universeDiagnostics.candidatesMissingActual > 0
+                    ? `${stored.graded.universeDiagnostics.candidatesMissingActual} no-stat`
+                    : undefined
+                }
+              />
+            </div>
+            <p className="text-[11px] text-ink-500">
+              The 290 candidates are the evaluated UNIVERSE, not
+              recommended bets. The hit rates above describe what
+              the LINES paid blindly; they are NOT the model&rsquo;s
+              betting ROI. Use the section below for actual model
+              picks.
+            </p>
           </div>
-          <p className="text-[11px] text-ink-500">
-            Graded at · {stored.graded.gradedAt}. Naive both-side
-            grading at the recorded line + book odds. Not the
-            scorecard model&rsquo;s pick — see
-            /admin/ingestion for the grading action.
+
+          <div className="mt-4 space-y-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+                Recommended Plays Performance
+              </h3>
+              <span
+                className={
+                  stored.graded.recommendedPlays.enabled
+                    ? "rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80"
+                    : "rounded-full bg-ink-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-700 ring-1 ring-ink-300/80"
+                }
+              >
+                {stored.graded.recommendedPlays.enabled
+                  ? "Real betting performance"
+                  : "Not yet evaluated"}
+              </span>
+            </div>
+            {stored.graded.recommendedPlays.enabled ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat
+                  label="Plays"
+                  value={`${stored.graded.recommendedPlays.count}`}
+                  sub={`${stored.graded.recommendedPlays.wins}W · ${stored.graded.recommendedPlays.losses}L · ${stored.graded.recommendedPlays.pushes}P`}
+                />
+                <Stat
+                  label="Hit rate"
+                  value={`${stored.graded.recommendedPlays.hitRatePct.toFixed(1)}%`}
+                />
+                <Stat
+                  label="ROI"
+                  value={`${stored.graded.recommendedPlays.roiPct.toFixed(1)}%`}
+                  sub={`${stored.graded.recommendedPlays.unitsProfit.toFixed(2)} units`}
+                />
+                <Stat
+                  label="Avg edge / confidence"
+                  value={`${stored.graded.recommendedPlays.averageEdgePct.toFixed(1)}% / ${stored.graded.recommendedPlays.averageConfidence.toFixed(2)}`}
+                />
+              </div>
+            ) : (
+              <p className="rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
+                {stored.graded.recommendedPlays.note}
+              </p>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+                Parlay Performance
+              </h3>
+              <span
+                className={
+                  stored.graded.parlayPerformance.enabled
+                    ? "rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80"
+                    : "rounded-full bg-ink-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-700 ring-1 ring-ink-300/80"
+                }
+              >
+                {stored.graded.parlayPerformance.enabled
+                  ? "Real parlay performance"
+                  : "Not yet evaluated"}
+              </span>
+            </div>
+            {stored.graded.parlayPerformance.enabled ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat
+                  label="Evaluated / Selected / Rejected"
+                  value={`${stored.graded.parlayPerformance.evaluated} / ${stored.graded.parlayPerformance.selected} / ${stored.graded.parlayPerformance.rejected}`}
+                />
+                <Stat
+                  label="Selected hit rate"
+                  value={`${stored.graded.parlayPerformance.selectedAggregate.hitRatePct.toFixed(1)}%`}
+                  sub={`${stored.graded.parlayPerformance.selectedAggregate.wins}W · ${stored.graded.parlayPerformance.selectedAggregate.losses}L · ${stored.graded.parlayPerformance.selectedAggregate.noResult}NR`}
+                />
+                <Stat
+                  label="Selected ROI"
+                  value={`${stored.graded.parlayPerformance.selectedAggregate.roiPct.toFixed(1)}%`}
+                  sub={`${stored.graded.parlayPerformance.selectedAggregate.unitsProfit.toFixed(2)} units`}
+                />
+                <Stat
+                  label="Avg projected / required hit"
+                  value={`${stored.graded.parlayPerformance.selectedAggregate.averageModeledHitProbabilityPct.toFixed(1)}% / ${stored.graded.parlayPerformance.selectedAggregate.averageRequiredHitProbabilityPct.toFixed(1)}%`}
+                />
+              </div>
+            ) : (
+              <p className="rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
+                {stored.graded.parlayPerformance.note}
+              </p>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+              Disqualification breakdown
+            </h3>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-[11px]">
+              <DisqStat
+                label="Edge too thin"
+                value={stored.graded.disqualificationBreakdown.edgeTooThin}
+              />
+              <DisqStat
+                label="Risk gate"
+                value={stored.graded.disqualificationBreakdown.riskGate}
+              />
+              <DisqStat
+                label="Role stability"
+                value={stored.graded.disqualificationBreakdown.roleStability}
+              />
+              <DisqStat
+                label="Missing result"
+                value={stored.graded.disqualificationBreakdown.missingResult}
+              />
+              <DisqStat
+                label="Ungradeable (push)"
+                value={stored.graded.disqualificationBreakdown.ungradeable}
+              />
+              <DisqStat
+                label="Other"
+                value={stored.graded.disqualificationBreakdown.other}
+              />
+              <DisqStat
+                label="Total rejected"
+                value={stored.graded.disqualificationBreakdown.totalRejected}
+              />
+              <DisqStat
+                label="Passed (universe − rejected)"
+                value={
+                  stored.graded.universeDiagnostics.totalCandidates -
+                  stored.graded.disqualificationBreakdown.totalRejected
+                }
+              />
+            </div>
+          </div>
+
+          <p className="mt-3 text-[11px] text-ink-500">
+            Graded at · {stored.graded.gradedAt}.
           </p>
-        </div>
+        </>
       ) : (
         <p className={`mt-3 text-[11px] ${readyTone}`}>
           {stored.realWeek1BacktestReady
@@ -415,30 +550,36 @@ function WeekByWeekTable({
             {storedIsPrimary && stored ? (
               stored.graded ? (
                 <tr className="border-t border-white/40">
-                  <td className="py-2 pr-3">Week 1 (stored, real)</td>
+                  <td className="py-2 pr-3">Week 1 (stored, universe)</td>
                   <td className="py-2 pr-3 text-right tabular-nums">
                     {stored.candidateCount}
                   </td>
-                  <td className="py-2 pr-3 text-right tabular-nums">
-                    {stored.graded.qualifiedPlays}
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    {stored.graded.recommendedPlays.enabled
+                      ? `${stored.graded.recommendedPlays.count}`
+                      : "pending"}
                   </td>
                   <td className="py-2 pr-3 text-right tabular-nums">
-                    {stored.graded.overSide.wins}/{stored.graded.underSide.wins} ·{" "}
-                    {stored.graded.overSide.losses}/{stored.graded.underSide.losses}
+                    {stored.graded.universeDiagnostics.overSide.wins}/
+                    {stored.graded.universeDiagnostics.underSide.wins} ·{" "}
+                    {stored.graded.universeDiagnostics.overSide.losses}/
+                    {stored.graded.universeDiagnostics.underSide.losses}
                   </td>
                   <td className="py-2 pr-3 text-right tabular-nums">
-                    {stored.graded.overSide.hitRatePct.toFixed(1)}% /{" "}
-                    {stored.graded.underSide.hitRatePct.toFixed(1)}%
+                    {stored.graded.universeDiagnostics.overSide.hitRatePct.toFixed(1)}%
+                    {" / "}
+                    {stored.graded.universeDiagnostics.underSide.hitRatePct.toFixed(1)}%
                   </td>
-                  <td className="py-2 pr-3 text-right tabular-nums">
-                    {stored.graded.overSide.roiPct.toFixed(1)}% /{" "}
-                    {stored.graded.underSide.roiPct.toFixed(1)}%
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    {stored.graded.recommendedPlays.enabled
+                      ? `${stored.graded.recommendedPlays.roiPct.toFixed(1)}%`
+                      : "pending"}
                   </td>
                   <td className="py-2 pr-3 text-[11px]">
-                    Better · {stored.graded.betterSide}
+                    Better · {stored.graded.universeDiagnostics.betterSide}
                   </td>
-                  <td className="py-2 text-[11px] text-sea-700">
-                    OVER / UNDER, naive both-side grading
+                  <td className="py-2 text-[11px] text-amber-800">
+                    Universe diagnostic — not betting ROI
                   </td>
                 </tr>
               ) : (
@@ -964,6 +1105,15 @@ function Stat({
       </div>
       <div className="mt-0.5 text-base font-semibold text-ink-900">{value}</div>
       {sub && <div className="text-[11px] text-ink-600">{sub}</div>}
+    </div>
+  );
+}
+
+function DisqStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between rounded-lg bg-white/65 px-3 py-2 ring-1 ring-white/40">
+      <span className="text-ink-600">{label}</span>
+      <span className="font-semibold tabular-nums text-ink-900">{value}</span>
     </div>
   );
 }

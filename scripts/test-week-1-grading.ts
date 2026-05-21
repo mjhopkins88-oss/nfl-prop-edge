@@ -593,13 +593,25 @@ async function main(): Promise<void> {
       check(r, snap?.gradingStatus === "graded", `gradingStatus=${snap?.gradingStatus}`);
       check(
         r,
-        snap?.graded?.overSide.wins === 1,
-        `graded.overSide.wins=${snap?.graded?.overSide.wins}`,
+        snap?.graded?.universeDiagnostics.overSide.wins === 1,
+        `graded.universeDiagnostics.overSide.wins=${snap?.graded?.universeDiagnostics.overSide.wins}`,
       );
       check(
         r,
-        typeof snap?.graded?.overSide.roiPct === "number",
-        "graded.overSide.roiPct must be a number",
+        typeof snap?.graded?.universeDiagnostics.overSide.roiPct === "number",
+        "graded.universeDiagnostics.overSide.roiPct must be a number",
+      );
+      // Recommended plays + parlay perf are not enabled today
+      // (stored candidates carry no scorecard recommendation).
+      check(
+        r,
+        snap?.graded?.recommendedPlays.enabled === false,
+        `recommendedPlays.enabled=${snap?.graded?.recommendedPlays.enabled}`,
+      );
+      check(
+        r,
+        snap?.graded?.parlayPerformance.enabled === false,
+        `parlayPerformance.enabled=${snap?.graded?.parlayPerformance.enabled}`,
       );
       check(
         r,
@@ -772,9 +784,170 @@ async function main(): Promise<void> {
     else console.log("[8] FAIL — banned hooks");
   }
 
+  // 9. Universe Diagnostics vs Recommended Plays separation:
+  //    universe numbers populate without recommended-plays
+  //    being enabled. Recommended plays + parlay sections stay
+  //    disabled with a clear note.
+  {
+    const r = makeReport("diagnostic vs betting performance sections");
+    const candidates = [
+      candidate({ playerName: "A", propType: "PASSING_ATTEMPTS", line: 30 }),
+      candidate({ playerName: "B", propType: "RECEPTIONS", line: 5 }),
+      candidate({ playerName: "Pusher", propType: "RUSHING_ATTEMPTS", line: 12 }),
+      candidate({ playerName: "NoStats", propType: "PASSING_COMPLETIONS", line: 20 }),
+    ];
+    const grade = gradeStoredWeek1Backtest({
+      candidates,
+      season: 2025,
+      week: 1,
+      playerWeekStats: [
+        statRow({ playerName: "A", team: "KC", passingAttempts: 35 }),
+        statRow({ playerName: "B", team: "KC", receptions: 6 }),
+        statRow({ playerName: "Pusher", team: "KC", rushingAttempts: 12 }),
+      ],
+    });
+    // Universe diagnostics block carries the per-side numbers.
+    check(
+      r,
+      grade.summary.universeDiagnostics.totalCandidates === 4,
+      `universe total=${grade.summary.universeDiagnostics.totalCandidates}`,
+    );
+    check(
+      r,
+      grade.summary.universeDiagnostics.candidatesMissingActual === 1,
+      `universe missing=${grade.summary.universeDiagnostics.candidatesMissingActual}`,
+    );
+    check(
+      r,
+      grade.summary.universeDiagnostics.candidatesPushed === 1,
+      `universe pushed=${grade.summary.universeDiagnostics.candidatesPushed}`,
+    );
+    // Recommended plays disabled with non-empty note + zero numbers.
+    check(
+      r,
+      grade.summary.recommendedPlays.enabled === false,
+      "recommendedPlays must be disabled when no recommendation field exists",
+    );
+    check(
+      r,
+      grade.summary.recommendedPlays.note.length > 20,
+      "recommendedPlays.note should explain the gap",
+    );
+    check(
+      r,
+      grade.summary.recommendedPlays.count === 0,
+      `recommendedPlays.count=${grade.summary.recommendedPlays.count} (must be 0 when disabled)`,
+    );
+    check(
+      r,
+      grade.summary.recommendedPlays.roiPct === 0 &&
+        grade.summary.recommendedPlays.hitRatePct === 0 &&
+        grade.summary.recommendedPlays.unitsProfit === 0,
+      "recommendedPlays metrics must all be 0 when disabled (no fake numbers)",
+    );
+    // Parlay performance same treatment.
+    check(
+      r,
+      grade.summary.parlayPerformance.enabled === false,
+      "parlayPerformance must be disabled",
+    );
+    check(
+      r,
+      grade.summary.parlayPerformance.note.length > 20,
+      "parlayPerformance.note should explain the gap",
+    );
+    check(
+      r,
+      grade.summary.parlayPerformance.evaluated === 0 &&
+        grade.summary.parlayPerformance.selected === 0,
+      "parlayPerformance counts must be 0 when disabled",
+    );
+    // Disqualification breakdown reflects the data-side reasons
+    // we can compute today; model-gate counts stay 0.
+    check(
+      r,
+      grade.summary.disqualificationBreakdown.missingResult === 1,
+      `disq.missingResult=${grade.summary.disqualificationBreakdown.missingResult}`,
+    );
+    check(
+      r,
+      grade.summary.disqualificationBreakdown.ungradeable === 1,
+      `disq.ungradeable=${grade.summary.disqualificationBreakdown.ungradeable}`,
+    );
+    check(
+      r,
+      grade.summary.disqualificationBreakdown.edgeTooThin === 0 &&
+        grade.summary.disqualificationBreakdown.riskGate === 0 &&
+        grade.summary.disqualificationBreakdown.roleStability === 0,
+      "model-gate counters stay 0 until the scorecard pass lands",
+    );
+    check(
+      r,
+      grade.summary.disqualificationBreakdown.totalRejected === 2,
+      `disq.totalRejected=${grade.summary.disqualificationBreakdown.totalRejected}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[9] PASS — universe diagnostics + recommended-plays / parlay gating + disq breakdown");
+    else console.log("[9] FAIL — diagnostic/betting separation");
+  }
+
+  // 10. The headline "betting ROI" must never appear on the
+  //     universe diagnostics block. The structure separates the
+  //     fields so the page CANNOT render fake betting performance
+  //     from the universe side.
+  {
+    const r = makeReport("universe diagnostics carry no `betting` labels");
+    const candidates = [
+      candidate({ playerName: "A", propType: "PASSING_ATTEMPTS", line: 30 }),
+    ];
+    const grade = gradeStoredWeek1Backtest({
+      candidates,
+      season: 2025,
+      week: 1,
+      playerWeekStats: [
+        statRow({ playerName: "A", team: "KC", passingAttempts: 35 }),
+      ],
+    });
+    // The universe block has overSide / underSide aggregates.
+    // The recommendedPlays block has the betting-shaped fields
+    // (hitRatePct, roiPct, unitsProfit). They are STRUCTURALLY
+    // separated, so the page can label them differently.
+    const u = grade.summary.universeDiagnostics as unknown as Record<
+      string,
+      unknown
+    >;
+    check(
+      r,
+      !("hitRatePct" in u),
+      "universe diagnostics must not have a root hitRatePct (it's per-side)",
+    );
+    check(
+      r,
+      !("roiPct" in u),
+      "universe diagnostics must not have a root roiPct",
+    );
+    const rec = grade.summary.recommendedPlays as unknown as Record<
+      string,
+      unknown
+    >;
+    check(r, "hitRatePct" in rec, "recommendedPlays has hitRatePct field");
+    check(r, "roiPct" in rec, "recommendedPlays has roiPct field");
+    check(r, "averageEdgePct" in rec, "recommendedPlays has averageEdgePct field");
+    check(
+      r,
+      "averageConfidence" in rec,
+      "recommendedPlays has averageConfidence field",
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[10] PASS — diagnostic vs betting fields structurally separated");
+    else console.log("[10] FAIL — structural separation");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 8 week-1-grading assertions passed.");
+    console.log("All 10 week-1-grading assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {

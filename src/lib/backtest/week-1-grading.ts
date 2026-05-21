@@ -79,7 +79,120 @@ export interface LineBucket {
   underSide: SideAggregate;
 }
 
+/**
+ * Aggregate naive-grading numbers for ALL 290 candidates. These
+ * are model diagnostics — what the LINES paid out blindly — NOT
+ * "the model's betting performance". Hit rate / ROI on this
+ * block describe the universe of OVER vs UNDER outcomes; they
+ * do not represent bets the scorecard model would have placed.
+ */
+export interface UniverseDiagnostics {
+  totalCandidates: number;
+  candidatesWithActual: number;
+  candidatesMissingActual: number;
+  candidatesPushed: number;
+  /** Directional outcomes across the full universe — diagnostic. */
+  overSide: SideAggregate;
+  underSide: SideAggregate;
+  betterSide: Side | "TIE";
+  byPropType: MarketBucket[];
+  byLineBucket: LineBucket[];
+}
+
+/**
+ * The model's actual betting performance — qualified plays only.
+ * Empty when the stored candidates carry no recommendation
+ * (today's state: the candidate builder produces the universe
+ * but doesn't run the scorecard pass).
+ */
+export interface RecommendedPlaysPerformance {
+  /** False when no recommendation field exists on candidates. */
+  enabled: boolean;
+  /** Plain-text reason when disabled. Page surfaces this so the
+   *  user knows hit/ROI of 0 isn't a real result. */
+  note: string;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+  averageEdgePct: number;
+  averageConfidence: number;
+}
+
+/**
+ * Parlay-builder integration. Today's stored candidates lack
+ * the model fields required to build ParlayLeg inputs, so this
+ * stays disabled with a clear note. Future: persist the
+ * scorecard's per-leg outputs and rebuild parlays here.
+ */
+export interface ParlayPerformance {
+  enabled: boolean;
+  note: string;
+  evaluated: number;
+  selected: number;
+  rejected: number;
+  graded: ParlayGradedRow[];
+  /** Aggregate of SELECTED parlays only. */
+  selectedAggregate: {
+    wins: number;
+    losses: number;
+    pushes: number;
+    noResult: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+    averageModeledHitProbabilityPct: number;
+    averageRequiredHitProbabilityPct: number;
+    averagePayoutMultiplier: number;
+    averageEVPct: number;
+  };
+  /** Counts of rejection reasons across evaluated-but-not-selected. */
+  rejectionReasons: Record<string, number>;
+}
+
+export interface ParlayGradedRow {
+  parlayId: string;
+  parlayType: string;
+  correlationType: string;
+  legCount: number;
+  legResults: ("WIN" | "LOSS" | "PUSH" | "NO_RESULT")[];
+  parlayResult: "WIN" | "LOSS" | "PUSH" | "NO_RESULT";
+  modeledHitProbabilityPct: number;
+  requiredHitProbabilityPct: number;
+  payoutMultiplier: number;
+  evPct: number;
+  unitsProfit: number;
+}
+
+/**
+ * Counts of why candidates couldn't become recommended plays.
+ * `missingResult` + `ungradeable` are populated from grading
+ * directly; the other reasons require model integration and
+ * stay 0 until that lands.
+ */
+export interface DisqualificationBreakdown {
+  edgeTooThin: number;
+  riskGate: number;
+  roleStability: number;
+  missingResult: number;
+  ungradeable: number;
+  other: number;
+  /** Sum of the above so the page can render "passed / rejected". */
+  totalRejected: number;
+}
+
 export interface GradedSummary {
+  gradedAt: string;
+  universeDiagnostics: UniverseDiagnostics;
+  recommendedPlays: RecommendedPlaysPerformance;
+  parlayPerformance: ParlayPerformance;
+  disqualificationBreakdown: DisqualificationBreakdown;
+  /** Backwards-compat headline fields for older callers. NEVER
+   *  used for the "betting performance" headline — only for
+   *  the diagnostic universe number. */
   totalCandidates: number;
   candidatesWithActual: number;
   candidatesMissingActual: number;
@@ -90,7 +203,6 @@ export interface GradedSummary {
   betterSide: Side | "TIE";
   byPropType: MarketBucket[];
   byLineBucket: LineBucket[];
-  gradedAt: string;
 }
 
 export interface GradeResult {
@@ -347,8 +459,110 @@ export function gradeStoredWeek1Backtest(args: {
         ? "UNDER"
         : "TIE";
 
+  const sortedByPropType = [...byPropType.values()].sort(
+    (a, b) => b.total - a.total,
+  );
+  const sortedByLineBucket = [...byLineBucket.values()].sort(
+    (a, b) => a.lineLow - b.lineLow,
+  );
+
+  const universeDiagnostics: UniverseDiagnostics = {
+    totalCandidates: graded.length,
+    candidatesWithActual,
+    candidatesMissingActual,
+    candidatesPushed,
+    overSide,
+    underSide,
+    betterSide,
+    byPropType: sortedByPropType,
+    byLineBucket: sortedByLineBucket,
+  };
+
+  // Recommended plays — empty today. The stored
+  // RealWeekCandidate type carries no `recommendation` or
+  // `qualified` field; producing real numbers here requires
+  // running the V1 scorecard model on each candidate first.
+  // The page surfaces the note instead of zeroes-as-result.
+  const recommendedPlays: RecommendedPlaysPerformance = {
+    enabled: false,
+    note:
+      "Stored candidates carry no scorecard recommendation yet. " +
+      "The 290 candidates are the evaluated UNIVERSE, not bets the " +
+      "model would have placed. Wire `recommendation` + `qualified` " +
+      "onto the candidate builder output to populate this section.",
+    count: 0,
+    wins: 0,
+    losses: 0,
+    pushes: 0,
+    hitRatePct: 0,
+    roiPct: 0,
+    unitsProfit: 0,
+    averageEdgePct: 0,
+    averageConfidence: 0,
+  };
+
+  // Parlay performance — same reason as above. Parlay legs
+  // require model-derived modelProbability + qualified +
+  // recommendation per leg. Until those land on the stored
+  // candidates, we cannot build ParlayLeg inputs that the
+  // existing builder would treat as real picks. We do NOT
+  // bypass the qualification step with synthetic defaults
+  // because the resulting "selected parlays" would be
+  // misleading.
+  const parlayPerformance: ParlayPerformance = {
+    enabled: false,
+    note:
+      "Parlay grading requires per-leg model recommendations on " +
+      "the stored candidates (modelProbability, qualified, " +
+      "recommendation, riskScore). The parlay builder rejects legs " +
+      "lacking those fields. Populate them via the V1 scorecard " +
+      "pass and re-run grading.",
+    evaluated: 0,
+    selected: 0,
+    rejected: 0,
+    graded: [],
+    selectedAggregate: {
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      noResult: 0,
+      hitRatePct: 0,
+      roiPct: 0,
+      unitsProfit: 0,
+      averageModeledHitProbabilityPct: 0,
+      averageRequiredHitProbabilityPct: 0,
+      averagePayoutMultiplier: 0,
+      averageEVPct: 0,
+    },
+    rejectionReasons: {},
+  };
+
+  // Disqualification breakdown — only the data-side reasons
+  // we can compute today. Model-gate reasons (edge-too-thin,
+  // risk-gate, role-stability) stay at 0 until the scorecard
+  // pass runs and persists its decision per candidate.
+  const missingResult = candidatesMissingActual;
+  const ungradeable = candidatesPushed;
+  const disqualificationBreakdown: DisqualificationBreakdown = {
+    edgeTooThin: 0,
+    riskGate: 0,
+    roleStability: 0,
+    missingResult,
+    ungradeable,
+    other: 0,
+    totalRejected: missingResult + ungradeable,
+  };
+
   return {
     summary: {
+      gradedAt: new Date().toISOString(),
+      universeDiagnostics,
+      recommendedPlays,
+      parlayPerformance,
+      disqualificationBreakdown,
+      // Backwards-compat headline fields. Diagnostics only —
+      // the page now puts them under "Candidate Universe
+      // Diagnostics", not under "Betting Performance".
       totalCandidates: graded.length,
       candidatesWithActual,
       candidatesMissingActual,
@@ -357,13 +571,8 @@ export function gradeStoredWeek1Backtest(args: {
       overSide,
       underSide,
       betterSide,
-      byPropType: [...byPropType.values()].sort(
-        (a, b) => b.total - a.total,
-      ),
-      byLineBucket: [...byLineBucket.values()].sort(
-        (a, b) => a.lineLow - b.lineLow,
-      ),
-      gradedAt: new Date().toISOString(),
+      byPropType: sortedByPropType,
+      byLineBucket: sortedByLineBucket,
     },
     graded,
   };

@@ -34,13 +34,67 @@ export interface GradedSideSnapshot {
 
 export interface GradedSnapshot {
   gradedAt: string;
-  totalCandidates: number;
-  candidatesWithActual: number;
-  candidatesMissingActual: number;
-  qualifiedPlays: number;
-  overSide: GradedSideSnapshot;
-  underSide: GradedSideSnapshot;
-  betterSide: "OVER" | "UNDER" | "TIE";
+  /** Diagnostic numbers across all candidates. Per-side hit
+   *  rates here describe what the LINES paid, NOT model
+   *  performance. The page labels this section "Candidate
+   *  Universe Diagnostics — model diagnostic only". */
+  universeDiagnostics: {
+    totalCandidates: number;
+    candidatesWithActual: number;
+    candidatesMissingActual: number;
+    candidatesPushed: number;
+    overSide: GradedSideSnapshot;
+    underSide: GradedSideSnapshot;
+    betterSide: "OVER" | "UNDER" | "TIE";
+  };
+  /** Model's actual betting performance — qualified plays only.
+   *  Empty until candidates carry a `recommendation` field. */
+  recommendedPlays: {
+    enabled: boolean;
+    note: string;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+    averageEdgePct: number;
+    averageConfidence: number;
+  };
+  /** Parlay-builder integration — same gating as recommended
+   *  plays. Stays disabled until per-leg model fields land. */
+  parlayPerformance: {
+    enabled: boolean;
+    note: string;
+    evaluated: number;
+    selected: number;
+    rejected: number;
+    selectedAggregate: {
+      wins: number;
+      losses: number;
+      pushes: number;
+      noResult: number;
+      hitRatePct: number;
+      roiPct: number;
+      unitsProfit: number;
+      averageModeledHitProbabilityPct: number;
+      averageRequiredHitProbabilityPct: number;
+      averagePayoutMultiplier: number;
+      averageEVPct: number;
+    };
+    rejectionReasons: Record<string, number>;
+  };
+  /** Candidate rejection reason counts. */
+  disqualificationBreakdown: {
+    edgeTooThin: number;
+    riskGate: number;
+    roleStability: number;
+    missingResult: number;
+    ungradeable: number;
+    other: number;
+    totalRejected: number;
+  };
 }
 
 export interface StoredWeek1MonitorSnapshot {
@@ -94,33 +148,84 @@ interface FileShape {
   notes?: string[];
 }
 
+interface GradedSideShape {
+  wins: number;
+  losses: number;
+  pushes: number;
+  graded: number;
+  hitRate: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
 interface GradedFileShape {
   gradedAt: string;
   season: number;
   week: number;
   summary: {
+    gradedAt?: string;
+    /** Legacy headline fields — diagnostic only. */
     totalCandidates: number;
     candidatesWithActual: number;
     candidatesMissingActual: number;
+    candidatesPushed?: number;
     qualifiedPlays: number;
     betterSide: "OVER" | "UNDER" | "TIE";
-    overSide: {
-      wins: number;
-      losses: number;
-      pushes: number;
-      graded: number;
-      hitRate: number;
-      roiPct: number;
-      unitsProfit: number;
+    overSide: GradedSideShape;
+    underSide: GradedSideShape;
+    /** New structured sections (added in the diagnostic-vs-
+     *  betting-performance refactor). */
+    universeDiagnostics?: {
+      totalCandidates: number;
+      candidatesWithActual: number;
+      candidatesMissingActual: number;
+      candidatesPushed: number;
+      overSide: GradedSideShape;
+      underSide: GradedSideShape;
+      betterSide: "OVER" | "UNDER" | "TIE";
     };
-    underSide: {
+    recommendedPlays?: {
+      enabled: boolean;
+      note: string;
+      count: number;
       wins: number;
       losses: number;
       pushes: number;
-      graded: number;
-      hitRate: number;
+      hitRatePct: number;
       roiPct: number;
       unitsProfit: number;
+      averageEdgePct: number;
+      averageConfidence: number;
+    };
+    parlayPerformance?: {
+      enabled: boolean;
+      note: string;
+      evaluated: number;
+      selected: number;
+      rejected: number;
+      selectedAggregate: {
+        wins: number;
+        losses: number;
+        pushes: number;
+        noResult: number;
+        hitRatePct: number;
+        roiPct: number;
+        unitsProfit: number;
+        averageModeledHitProbabilityPct: number;
+        averageRequiredHitProbabilityPct: number;
+        averagePayoutMultiplier: number;
+        averageEVPct: number;
+      };
+      rejectionReasons: Record<string, number>;
+    };
+    disqualificationBreakdown?: {
+      edgeTooThin: number;
+      riskGate: number;
+      roleStability: number;
+      missingResult: number;
+      ungradeable: number;
+      other: number;
+      totalRejected: number;
     };
   };
 }
@@ -144,32 +249,84 @@ function readGradedFile(
   }
 }
 
+function sideToSnapshot(s: GradedSideShape): GradedSideSnapshot {
+  return {
+    wins: s.wins,
+    losses: s.losses,
+    pushes: s.pushes,
+    graded: s.graded,
+    hitRatePct: s.hitRate * 100,
+    roiPct: s.roiPct,
+    unitsProfit: s.unitsProfit,
+  };
+}
+
 function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | undefined {
   if (!g) return undefined;
+  const s = g.summary;
   return {
     gradedAt: g.gradedAt,
-    totalCandidates: g.summary.totalCandidates,
-    candidatesWithActual: g.summary.candidatesWithActual,
-    candidatesMissingActual: g.summary.candidatesMissingActual,
-    qualifiedPlays: g.summary.qualifiedPlays,
-    betterSide: g.summary.betterSide,
-    overSide: {
-      wins: g.summary.overSide.wins,
-      losses: g.summary.overSide.losses,
-      pushes: g.summary.overSide.pushes,
-      graded: g.summary.overSide.graded,
-      hitRatePct: g.summary.overSide.hitRate * 100,
-      roiPct: g.summary.overSide.roiPct,
-      unitsProfit: g.summary.overSide.unitsProfit,
+    universeDiagnostics: s.universeDiagnostics
+      ? {
+          totalCandidates: s.universeDiagnostics.totalCandidates,
+          candidatesWithActual: s.universeDiagnostics.candidatesWithActual,
+          candidatesMissingActual: s.universeDiagnostics.candidatesMissingActual,
+          candidatesPushed: s.universeDiagnostics.candidatesPushed,
+          overSide: sideToSnapshot(s.universeDiagnostics.overSide),
+          underSide: sideToSnapshot(s.universeDiagnostics.underSide),
+          betterSide: s.universeDiagnostics.betterSide,
+        }
+      : {
+          totalCandidates: s.totalCandidates,
+          candidatesWithActual: s.candidatesWithActual,
+          candidatesMissingActual: s.candidatesMissingActual,
+          candidatesPushed: s.candidatesPushed ?? 0,
+          overSide: sideToSnapshot(s.overSide),
+          underSide: sideToSnapshot(s.underSide),
+          betterSide: s.betterSide,
+        },
+    recommendedPlays: s.recommendedPlays ?? {
+      enabled: false,
+      note: "Recommended-plays section not present in this graded payload.",
+      count: 0,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      hitRatePct: 0,
+      roiPct: 0,
+      unitsProfit: 0,
+      averageEdgePct: 0,
+      averageConfidence: 0,
     },
-    underSide: {
-      wins: g.summary.underSide.wins,
-      losses: g.summary.underSide.losses,
-      pushes: g.summary.underSide.pushes,
-      graded: g.summary.underSide.graded,
-      hitRatePct: g.summary.underSide.hitRate * 100,
-      roiPct: g.summary.underSide.roiPct,
-      unitsProfit: g.summary.underSide.unitsProfit,
+    parlayPerformance: s.parlayPerformance ?? {
+      enabled: false,
+      note: "Parlay section not present in this graded payload.",
+      evaluated: 0,
+      selected: 0,
+      rejected: 0,
+      selectedAggregate: {
+        wins: 0,
+        losses: 0,
+        pushes: 0,
+        noResult: 0,
+        hitRatePct: 0,
+        roiPct: 0,
+        unitsProfit: 0,
+        averageModeledHitProbabilityPct: 0,
+        averageRequiredHitProbabilityPct: 0,
+        averagePayoutMultiplier: 0,
+        averageEVPct: 0,
+      },
+      rejectionReasons: {},
+    },
+    disqualificationBreakdown: s.disqualificationBreakdown ?? {
+      edgeTooThin: 0,
+      riskGate: 0,
+      roleStability: 0,
+      missingResult: s.candidatesMissingActual,
+      ungradeable: s.candidatesPushed ?? 0,
+      other: 0,
+      totalRejected: s.candidatesMissingActual + (s.candidatesPushed ?? 0),
     },
   };
 }
