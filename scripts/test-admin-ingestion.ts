@@ -35,8 +35,12 @@ import {
   verifyAdminToken,
 } from "../src/lib/admin/admin-auth";
 import {
+  ADMIN_WEEK1_FULL_MAX_CREDITS,
+  ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+  ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS,
   PAID_SMOKE_CONFIRM_TEXT,
   PAID_WEEK1_CONFIRM_TEXT,
+  PAID_WEEK1_SUBSET_CONFIRM_TEXT,
   parseIngestionOutput,
   runAdminAction,
   type SubprocessResult,
@@ -566,8 +570,13 @@ async function main(): Promise<void> {
     );
     check(
       r,
-      PAID_WEEK1_CONFIRM_TEXT === "RUN WEEK 1 PAID INGESTION",
-      `week1 const: ${PAID_WEEK1_CONFIRM_TEXT}`,
+      PAID_WEEK1_CONFIRM_TEXT === "RUN FULL WEEK 1 INGESTION 647 CREDITS",
+      `week1 full const: ${PAID_WEEK1_CONFIRM_TEXT}`,
+    );
+    check(
+      r,
+      PAID_WEEK1_SUBSET_CONFIRM_TEXT === "RUN WEEK 1 SUBSET INGESTION",
+      `week1 subset const: ${PAID_WEEK1_SUBSET_CONFIRM_TEXT}`,
     );
     record(r);
     if (r.reasons.length === 0)
@@ -889,9 +898,498 @@ async function main(): Promise<void> {
     else console.log("[18] FAIL — paid gating regressed");
   }
 
+  // 19. paid-smoke spawns the calibration argv (--calibration,
+  //     --max-odds-requests 1, --max-credits 50).
+  {
+    const r = makeReport("paid-smoke uses calibration argv by default");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "Dry-run complete. Estimated credits: 41 (budget 50).\n" +
+        "Done. Credits estimated=41 actual=41 remaining=950 budget=50. Usage log: x\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 10,
+    });
+    await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-smoke",
+          confirmText: PAID_SMOKE_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    const call = spawner.calls[0];
+    check(r, call.args.includes("--calibration"), "must pass --calibration");
+    const moIdx = call.args.indexOf("--max-odds-requests");
+    check(
+      r,
+      moIdx >= 0 && call.args[moIdx + 1] === "1",
+      `must pass --max-odds-requests 1, got ${call.args[moIdx + 1]}`,
+    );
+    const mcIdx = call.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && call.args[mcIdx + 1] === "50",
+      `must pass --max-credits 50, got ${call.args[mcIdx + 1]}`,
+    );
+    check(r, call.args.includes("--execute"), "must include --execute");
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[19] PASS — paid-smoke argv defaults to calibration (1 odds, 50 credits)");
+    else console.log("[19] FAIL — paid-smoke calibration argv");
+  }
+
+  // 20. Failed paid-smoke records lastPaidSmokeCreditsUsed AND
+  //     does NOT unlock Week 1 paid ingestion.
+  {
+    const r = makeReport("failed smoke records credits, leaves Week 1 locked");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      // Reproduces the 2026-05 abort log line — runner parses 41
+      // out of the cumulative-actual figure.
+      exitCode: 4,
+      stdout:
+        "2026-05-21T00:00:00.000Z ERROR ABORT mid-run: actual credits 41 exceed estimate 5 by >10% (cap 5.5)\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 50,
+    });
+    const fail = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-smoke",
+          confirmText: PAID_SMOKE_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, fail.status === "failure", `status=${fail.status}`);
+    check(r, fail.creditsUsed === 41, `creditsUsed=${fail.creditsUsed}`);
+    const state = readAdminState(repoRoot);
+    check(
+      r,
+      state.lastPaidSmokeResult === "failure",
+      `lastPaidSmokeResult=${state.lastPaidSmokeResult}`,
+    );
+    check(
+      r,
+      state.lastPaidSmokeCreditsUsed === 41,
+      `lastPaidSmokeCreditsUsed=${state.lastPaidSmokeCreditsUsed}`,
+    );
+    check(
+      r,
+      hasPriorSmokeSuccess(repoRoot) === false,
+      "smoke success must NOT be recorded after a failed smoke",
+    );
+    // Confirm Week 1 paid ingestion remains locked.
+    const week1 = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-week1",
+          confirmText: PAID_WEEK1_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, week1.status === "skipped", `week1 status=${week1.status}`);
+    check(
+      r,
+      (week1.reason ?? "").toLowerCase().includes("smoke"),
+      `week1 reason should cite smoke prerequisite, got: ${week1.reason}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[20] PASS — failed smoke records credits, Week 1 stays locked");
+    else console.log("[20] FAIL — failed-smoke state");
+  }
+
+  // 21. parseIngestionOutput extracts cumulative credits from the
+  //     pre-call abort line too.
+  {
+    const r = makeReport("output parser extracts credits from abort lines");
+    const overage = parseIngestionOutput(
+      "2026-05-21T00:00:00.000Z ERROR ABORT mid-run: actual credits 41 exceed estimate 5 by >10% (cap 5.5)\n",
+    );
+    check(r, overage.creditsUsed === 41, `overage creditsUsed=${overage.creditsUsed}`);
+    const precall = parseIngestionOutput(
+      "2026-05-21T00:00:00.000Z ERROR ABORT before request: projected cumulative actual 81 would exceed --max-credits 50\n",
+    );
+    check(
+      r,
+      precall.creditsUsed === 81,
+      `precall creditsUsed=${precall.creditsUsed}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[21] PASS — parser extracts cumulative credits from aborts");
+    else console.log("[21] FAIL — abort-line parser");
+  }
+
+  // 22. dry-run uses the same calibration shape as paid-smoke
+  //     but with --dry-run instead of --execute. Without this,
+  //     the preview falls through to the full-Week-1 plan (647
+  //     credits) and the up-front budget guard refuses it.
+  {
+    const r = makeReport("dry-run argv mirrors paid-smoke calibration");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "Dry-run complete. Estimated credits: 41 (budget 50).\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 10,
+    });
+    const result = await runAdminAction({
+      action: "dry-run",
+      repoRoot,
+      spawner: spawner.fn,
+    });
+    check(r, result.ok === true, `dry-run ok=${result.ok}`);
+    check(
+      r,
+      spawner.calls.length === 1,
+      `expected one spawn call, got ${spawner.calls.length}`,
+    );
+    const spec = spawner.calls[0];
+    check(r, spec.args.includes("--calibration"), "argv must include --calibration");
+    const moIdx = spec.args.indexOf("--max-odds-requests");
+    check(
+      r,
+      moIdx >= 0 && spec.args[moIdx + 1] === "1",
+      `must pass --max-odds-requests 1, got ${spec.args[moIdx + 1]}`,
+    );
+    const mcIdx = spec.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && spec.args[mcIdx + 1] === "50",
+      `must pass --max-credits 50, got ${spec.args[mcIdx + 1]}`,
+    );
+    check(r, spec.args.includes("--dry-run"), "argv must include --dry-run");
+    check(
+      r,
+      !spec.args.includes("--execute"),
+      "argv must NOT include --execute (dry-run only)",
+    );
+    check(
+      r,
+      spec.env.ALLOW_REAL_ODDS_API_CALLS === undefined ||
+        spec.env.ALLOW_REAL_ODDS_API_CALLS !== "true",
+      "dry-run must not inject ALLOW_REAL_ODDS_API_CALLS=true",
+    );
+    check(
+      r,
+      typeof result.data?.estimatedCredits === "number" &&
+        (result.data.estimatedCredits as number) <= 50,
+      `parsed estimate must be ≤ 50, got ${result.data?.estimatedCredits}`,
+    );
+    check(
+      r,
+      result.summary.includes("41") || result.summary.includes("dry-run"),
+      `summary should mention parsed estimate, got: ${result.summary}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[22] PASS — dry-run argv = calibration shape with --dry-run");
+    else console.log("[22] FAIL — dry-run calibration argv");
+  }
+
+  // 23. Week 1 subset refuses without prior smoke success.
+  {
+    const r = makeReport("week1-subset requires prior smoke success");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      durationMs: 0,
+    });
+    check(
+      r,
+      hasPriorSmokeSuccess(repoRoot) === false,
+      "tmp state should start without smoke success",
+    );
+    const result = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "odds-week1-subset-paid",
+          confirmText: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, result.status === "skipped", `status=${result.status}`);
+    check(r, spawner.calls.length === 0, "spawner should not be called");
+    check(
+      r,
+      (result.reason ?? "").toLowerCase().includes("smoke"),
+      `reason should cite smoke prereq, got: ${result.reason}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[23] PASS — week1-subset requires prior smoke success");
+    else console.log("[23] FAIL — week1-subset smoke prereq");
+  }
+
+  // 24. Subset uses the capped argv (4 odds requests, 175 credits)
+  //     and stays under the 200-credit run cap.
+  {
+    const r = makeReport("week1-subset argv caps + result file");
+    const repoRoot = makeTempRepo();
+    recordSmokeSuccess({ creditsUsed: 41, repoRoot });
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "Wrote /home/r/data/processed/prop_markets.csv (32 rows)\n" +
+        "Wrote /home/r/data/processed/prop_quotes.csv (96 rows)\n" +
+        "Done. Credits estimated=164 actual=164 remaining=836 budget=175. Usage log: x\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 1234,
+    });
+    const result = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "odds-week1-subset-paid",
+          confirmText: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, result.ok === true, `ok=${result.ok}`);
+    check(
+      r,
+      ADMIN_WEEK1_SUBSET_MAX_CREDITS < 200,
+      `subset cap ${ADMIN_WEEK1_SUBSET_MAX_CREDITS} must be < 200`,
+    );
+    check(
+      r,
+      ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS === 4,
+      `subset odds-requests = ${ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS}`,
+    );
+    const spec = spawner.calls[0];
+    const moIdx = spec.args.indexOf("--max-odds-requests");
+    check(
+      r,
+      moIdx >= 0 && spec.args[moIdx + 1] === "4",
+      `--max-odds-requests should be 4, got ${spec.args[moIdx + 1]}`,
+    );
+    const mcIdx = spec.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && spec.args[mcIdx + 1] === "175",
+      `--max-credits should be 175, got ${spec.args[mcIdx + 1]}`,
+    );
+    const bIdx = spec.args.indexOf("--budget");
+    check(
+      r,
+      bIdx >= 0 && spec.args[bIdx + 1] === "175",
+      `--budget should be 175, got ${spec.args[bIdx + 1]}`,
+    );
+    check(r, spec.args.includes("--execute"), "must include --execute");
+    check(
+      r,
+      spec.args.includes("--week") && spec.args.includes("1"),
+      "must pin to week 1",
+    );
+    check(
+      r,
+      !spec.args.some((a) => /[;&|`$()<>]/.test(a)),
+      "no shell metachars in argv",
+    );
+    // Result file written with non-secret shape.
+    const resultPath = path.join(
+      repoRoot,
+      "data",
+      "admin-ingestion",
+      "latest-odds-week1-subset-paid.json",
+    );
+    check(r, fs.existsSync(resultPath), `result file at ${resultPath}`);
+    if (fs.existsSync(resultPath)) {
+      const parsed = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+      check(
+        r,
+        parsed.action === "odds-week1-subset-paid",
+        `action: ${parsed.action}`,
+      );
+      check(r, parsed.paidApiCallAttempted === true, "paidApiCallAttempted=true");
+      check(r, parsed.creditsUsed === 164, `creditsUsed=${parsed.creditsUsed}`);
+      check(
+        r,
+        parsed.creditsRemaining === 836,
+        `creditsRemaining=${parsed.creditsRemaining}`,
+      );
+      check(
+        r,
+        parsed.budgetCeiling === 175,
+        `budgetCeiling=${parsed.budgetCeiling}`,
+      );
+      check(
+        r,
+        Array.isArray(parsed.outputFilesWritten) &&
+          parsed.outputFilesWritten.length === 2,
+        `outputFilesWritten count=${parsed.outputFilesWritten?.length}`,
+      );
+      check(
+        r,
+        parsed.guardrails?.noTouchdownProps === true,
+        "guardrails.noTouchdownProps",
+      );
+      check(
+        r,
+        parsed.guardrails?.noAutomatedBetting === true,
+        "guardrails.noAutomatedBetting",
+      );
+      const raw = fs.readFileSync(resultPath, "utf8");
+      check(r, !/ODDS_API_KEY/.test(raw), "no ODDS_API_KEY in result file");
+      check(r, !/sk-/.test(raw), "no sk- key prefix in result file");
+    }
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[24] PASS — week1-subset uses capped argv + writes result file");
+    else console.log("[24] FAIL — week1-subset argv/result");
+  }
+
+  // 25. Full Week 1 refuses unless the elevated confirmText
+  //     ("RUN FULL WEEK 1 INGESTION 647 CREDITS") is typed exactly.
+  //     The subset confirmText must NOT unlock the full run.
+  {
+    const r = makeReport("full Week 1 requires elevated confirmText");
+    const repoRoot = makeTempRepo();
+    recordSmokeSuccess({ creditsUsed: 41, repoRoot });
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      durationMs: 0,
+    });
+    // Subset confirmText must not authorize full Week 1.
+    const subsetWrong = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-week1",
+          confirmText: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, subsetWrong.status === "skipped", `status=${subsetWrong.status}`);
+    // Variant missing the cost: rejected.
+    const noCost = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-week1",
+          confirmText: "RUN FULL WEEK 1 INGESTION",
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, noCost.status === "skipped", `noCost status=${noCost.status}`);
+    check(r, spawner.calls.length === 0, "spawner not called");
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[25] PASS — full Week 1 requires the elevated confirmText");
+    else console.log("[25] FAIL — full Week 1 confirmText");
+  }
+
+  // 26. Full Week 1 spec pins --max-credits 700 (hard-coded) and
+  //     writes its own result file. Not user-overridable.
+  {
+    const r = makeReport("full Week 1 hardcodes 700-credit cap + result file");
+    const repoRoot = makeTempRepo();
+    recordSmokeSuccess({ creditsUsed: 41, repoRoot });
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "Wrote /home/r/data/processed/prop_markets.csv (128 rows)\n" +
+        "Wrote /home/r/data/processed/prop_quotes.csv (384 rows)\n" +
+        "Done. Credits estimated=647 actual=647 remaining=353 budget=700. Usage log: x\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 9999,
+    });
+    const ok = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-week1",
+          confirmText: PAID_WEEK1_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, ok.ok === true, `ok status=${ok.status}`);
+    check(
+      r,
+      ADMIN_WEEK1_FULL_MAX_CREDITS === 700,
+      `full cap = ${ADMIN_WEEK1_FULL_MAX_CREDITS}`,
+    );
+    const spec = spawner.calls[0];
+    const mcIdx = spec.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && spec.args[mcIdx + 1] === "700",
+      `--max-credits should be 700, got ${spec.args[mcIdx + 1]}`,
+    );
+    const bIdx = spec.args.indexOf("--budget");
+    check(
+      r,
+      bIdx >= 0 && spec.args[bIdx + 1] === "700",
+      `--budget should be 700, got ${spec.args[bIdx + 1]}`,
+    );
+    // The cap must come from the hard-coded constant — no occurrence
+    // of the request body's `confirmText` in argv (no smuggle path).
+    check(
+      r,
+      !spec.args.some((a) => a === PAID_WEEK1_CONFIRM_TEXT),
+      "confirmText must never appear in argv",
+    );
+    const resultPath = path.join(
+      repoRoot,
+      "data",
+      "admin-ingestion",
+      "latest-odds-week1-full-paid.json",
+    );
+    check(r, fs.existsSync(resultPath), `full result file at ${resultPath}`);
+    if (fs.existsSync(resultPath)) {
+      const parsed = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+      check(
+        r,
+        parsed.action === "paid-week1",
+        `action: ${parsed.action}`,
+      );
+      check(r, parsed.creditsUsed === 647, `creditsUsed=${parsed.creditsUsed}`);
+      check(
+        r,
+        parsed.budgetCeiling === 700,
+        `budgetCeiling=${parsed.budgetCeiling}`,
+      );
+      check(
+        r,
+        Array.isArray(parsed.outputFilesWritten),
+        "outputFilesWritten is an array",
+      );
+    }
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[26] PASS — full Week 1 pins 700-credit cap + writes result");
+    else console.log("[26] FAIL — full Week 1 cap/result");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 18 admin-ingestion assertions passed.");
+    console.log("All 26 admin-ingestion assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {

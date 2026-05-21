@@ -15,6 +15,7 @@
 
 import {
   ALLOWED_ODDS_REGIONS,
+  HISTORICAL_PLAYER_PROP_CREDITS_PER_MARKET,
   MAX_MARKETS_PER_REQUEST,
   MAX_ODDS_API_CREDITS_PER_RUN,
   MIN_ODDS_API_CREDITS_REMAINING,
@@ -22,30 +23,60 @@ import {
 
 /** Pricing constants, isolated here so the model is easy to audit. */
 export const CREDITS_PER_EVENTS_LIST = 1;
-export const CREDITS_PER_EVENT_ODDS_UNIT = 1; // per (market × region)
+/** Base rate for non-player-prop markets (h2h, spreads, totals). */
+export const CREDITS_PER_EVENT_ODDS_UNIT_BASE = 1;
+/**
+ * Rate for player-prop markets. The Odds API charges player props
+ * at a higher historical rate than standard markets. The 2026-05
+ * paid smoke confirmed ~10 credits per (player-prop × region).
+ */
+export const CREDITS_PER_EVENT_ODDS_UNIT_PLAYER =
+  HISTORICAL_PLAYER_PROP_CREDITS_PER_MARKET;
+
+/** Return the per-(market × region) credit cost for a single market key. */
+export function creditsPerMarketPerRegion(marketKey: string): number {
+  if (marketKey.startsWith("player_")) {
+    return CREDITS_PER_EVENT_ODDS_UNIT_PLAYER;
+  }
+  return CREDITS_PER_EVENT_ODDS_UNIT_BASE;
+}
 
 // --- single-event cost -----------------------------------------------
 
 export interface HistoricalEventOddsArgs {
-  markets: number;
+  /** Either a count (legacy callers) — assumes the conservative
+   *  player-prop rate so estimates never under-count. */
+  markets: number | readonly string[];
   regions: number;
 }
 
 /**
  * Credits to fetch /events/{id}/odds for one event with `markets` and
- * `regions` selected.
+ * `regions` selected. When `markets` is an array of market keys, the
+ * rate is computed per-market (player_* → 10, others → 1). When
+ * `markets` is a number, we conservatively assume the player-prop
+ * rate so legacy callers never under-count.
  */
 export function estimateHistoricalEventOddsCredits(
   args: HistoricalEventOddsArgs,
 ): number {
-  return args.markets * args.regions * CREDITS_PER_EVENT_ODDS_UNIT;
+  if (typeof args.markets === "number") {
+    return (
+      args.markets * args.regions * CREDITS_PER_EVENT_ODDS_UNIT_PLAYER
+    );
+  }
+  let perRegion = 0;
+  for (const m of args.markets) perRegion += creditsPerMarketPerRegion(m);
+  return perRegion * args.regions;
 }
 
 // --- season-wide cost ------------------------------------------------
 
 export interface SeasonBacktestArgs {
   gameCount: number;
-  markets: number;
+  /** Either market keys (preferred, market-aware rate) or a count
+   *  (legacy, conservative player-prop rate). */
+  markets: number | readonly string[];
   regions: number;
   /**
    * Number of unique /events snapshots needed. Defaults to one per
@@ -90,6 +121,14 @@ export interface BudgetValidationInput {
   estimatedCredits: number;
   /** Optional: current `x-requests-remaining` from the most recent call. */
   creditsRemaining?: number;
+  /**
+   * Optional explicit per-run cap. When provided, this overrides
+   * the global `MAX_ODDS_API_CREDITS_PER_RUN` constant. Only the
+   * admin runner uses this — it pins hard-coded caps per action
+   * (50 for calibration, 175 for week1-subset, 700 for week1-full),
+   * never user input.
+   */
+  maxCreditsOverride?: number;
 }
 
 export interface BudgetValidationResult {
@@ -106,13 +145,19 @@ export interface BudgetValidationResult {
  * Refuses (ok=false, with reasons) if any of:
  *   - markets > MAX_MARKETS_PER_REQUEST
  *   - any region not in ALLOWED_ODDS_REGIONS
- *   - estimatedCredits > MAX_ODDS_API_CREDITS_PER_RUN
+ *   - estimatedCredits > effectiveCap (the lower of
+ *     `maxCreditsOverride` and the global constant when no
+ *     override is set)
  *   - creditsRemaining (if supplied) - estimatedCredits < MIN_ODDS_API_CREDITS_REMAINING
  */
 export function validateCreditBudget(
   input: BudgetValidationInput,
 ): BudgetValidationResult {
   const reasons: string[] = [];
+  const effectiveCap =
+    typeof input.maxCreditsOverride === "number"
+      ? input.maxCreditsOverride
+      : MAX_ODDS_API_CREDITS_PER_RUN;
 
   if (input.markets > MAX_MARKETS_PER_REQUEST) {
     reasons.push(
@@ -126,9 +171,12 @@ export function validateCreditBudget(
       );
     }
   }
-  if (input.estimatedCredits > MAX_ODDS_API_CREDITS_PER_RUN) {
+  if (input.estimatedCredits > effectiveCap) {
     reasons.push(
-      `estimated ${input.estimatedCredits} credits > MAX_ODDS_API_CREDITS_PER_RUN=${MAX_ODDS_API_CREDITS_PER_RUN}`,
+      `estimated ${input.estimatedCredits} credits > effective cap ${effectiveCap}` +
+        (typeof input.maxCreditsOverride === "number"
+          ? ` (overridden from MAX_ODDS_API_CREDITS_PER_RUN=${MAX_ODDS_API_CREDITS_PER_RUN})`
+          : ""),
     );
   }
   if (
@@ -145,7 +193,7 @@ export function validateCreditBudget(
     ok: reasons.length === 0,
     reasons,
     estimatedCredits: input.estimatedCredits,
-    budgetMax: MAX_ODDS_API_CREDITS_PER_RUN,
+    budgetMax: effectiveCap,
     minRemainingFloor: MIN_ODDS_API_CREDITS_REMAINING,
   };
 }

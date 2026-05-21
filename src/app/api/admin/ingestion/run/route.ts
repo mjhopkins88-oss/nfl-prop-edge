@@ -31,8 +31,12 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "run-nflverse-ingestion",
   "dry-run",
   "paid-smoke",
+  "odds-week1-subset-paid",
   "paid-week1",
+  "migrate-odds-to-canonical",
   "stored-backtest",
+  "grade-week1-stored",
+  "verify-persistence",
 ];
 
 function isAdminAction(s: unknown): s is AdminAction {

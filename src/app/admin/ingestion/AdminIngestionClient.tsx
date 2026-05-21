@@ -14,8 +14,12 @@ type ActionName =
   | "run-nflverse-ingestion"
   | "dry-run"
   | "paid-smoke"
+  | "odds-week1-subset-paid"
   | "paid-week1"
-  | "stored-backtest";
+  | "migrate-odds-to-canonical"
+  | "stored-backtest"
+  | "grade-week1-stored"
+  | "verify-persistence";
 
 interface StatusResponse {
   ok: boolean;
@@ -42,7 +46,19 @@ interface StatusResponse {
     smokeSucceededAt: string | null;
     smokeCreditsUsed: number | null;
     week1IngestionSucceededAt: string | null;
+    lastPaidSmokeAttemptAt: string | null;
+    lastPaidSmokeResult: "success" | "failure" | null;
+    lastPaidSmokeCreditsUsed: number | null;
+    lastPaidSmokeReason: string | null;
   };
+  calibration?: {
+    perMarketEstimatedRate?: number;
+    perMarketObservedRate?: number | null;
+    firstOddsCallActualCost?: number | null;
+    creditsUsedActual?: number;
+    creditsRemaining?: number | null;
+    finishedAt?: string;
+  } | null;
   nextRecommendedAction?: string;
   guardrails?: {
     starterMarketsOnly: string[];
@@ -63,13 +79,18 @@ interface ActionResponse {
 }
 
 const PAID_SMOKE_CONFIRM = "RUN PAID SMOKE TEST";
-const PAID_WEEK1_CONFIRM = "RUN WEEK 1 PAID INGESTION";
+const PAID_WEEK1_SUBSET_CONFIRM = "RUN WEEK 1 SUBSET INGESTION";
+const PAID_WEEK1_CONFIRM = "RUN FULL WEEK 1 INGESTION 647 CREDITS";
+const FULL_WEEK1_ESTIMATED_CREDITS = 647;
+const STANDARD_RUN_CAP = 200;
+const FULL_WEEK1_ELEVATED_CAP = 700;
 
 export function AdminIngestionClient() {
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
   const [paidSmokeConfirm, setPaidSmokeConfirm] = useState("");
+  const [paidWeek1SubsetConfirm, setPaidWeek1SubsetConfirm] = useState("");
   const [paidWeek1Confirm, setPaidWeek1Confirm] = useState("");
   const [busy, setBusy] = useState<ActionName | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
@@ -193,15 +214,31 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("run-nflverse-ingestion")}
           />
           <ActionRow
-            label="3. Run smoke dry-run"
-            description="Plan + estimated credits. No API call."
+            label="3. Run smoke calibration dry-run"
+            description="One event-list call + one event odds call estimate. No API call."
             disabled={!token || busy !== null}
             busy={busy === "dry-run"}
             onRun={() => void runAction("dry-run")}
           />
+          {status?.state?.lastPaidSmokeResult === "failure" &&
+          status.state.lastPaidSmokeCreditsUsed ? (
+            <div className="rounded border border-amber-700/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+              ⚠ Last paid smoke used{" "}
+              <span className="font-semibold">
+                {status.state.lastPaidSmokeCreditsUsed} credits
+              </span>{" "}
+              before aborting. The next retry uses calibration mode
+              (1 events-list + 1 event-odds call, 50-credit cap).
+              {status.state.lastPaidSmokeReason ? (
+                <p className="mt-1 text-amber-300/80">
+                  {status.state.lastPaidSmokeReason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <PaidActionRow
-            label="4. Run paid smoke test"
-            description="One snapshot. Requires ALLOW_REAL_ODDS_API_CALLS=true and confirmation text."
+            label="4. Run paid smoke test (calibration)"
+            description="1 events + 1 odds call, 50-credit hard cap. Requires ALLOW_REAL_ODDS_API_CALLS=true and confirmation text."
             confirmExpected={PAID_SMOKE_CONFIRM}
             confirmValue={paidSmokeConfirm}
             onConfirmChange={setPaidSmokeConfirm}
@@ -215,8 +252,29 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("paid-smoke", paidSmokeConfirm)}
           />
           <PaidActionRow
-            label="5. Run paid Week 1 ingestion"
-            description="Locked unless the paid smoke test has succeeded first."
+            label="5. Run paid Week 1 subset ingestion"
+            description="Limited subset under 200 credits (≤4 event-odds calls, 175-credit cap). Requires paid smoke success."
+            confirmExpected={PAID_WEEK1_SUBSET_CONFIRM}
+            confirmValue={paidWeek1SubsetConfirm}
+            onConfirmChange={setPaidWeek1SubsetConfirm}
+            disabled={
+              !token ||
+              busy !== null ||
+              !status?.configuration?.allowRealOddsApiCalls ||
+              !status?.configuration?.oddsApiKeyConfigured ||
+              !status?.state?.smokeSucceededAt
+            }
+            busy={busy === "odds-week1-subset-paid"}
+            onRun={() =>
+              void runAction(
+                "odds-week1-subset-paid",
+                paidWeek1SubsetConfirm,
+              )
+            }
+          />
+          <PaidActionRow
+            label="6. Run paid full Week 1 ingestion"
+            description={`Estimated ~${FULL_WEEK1_ESTIMATED_CREDITS} credits. Hard cap raised to ${FULL_WEEK1_ELEVATED_CAP}. Requires exact high-cost confirmation.`}
             confirmExpected={PAID_WEEK1_CONFIRM}
             confirmValue={paidWeek1Confirm}
             onConfirmChange={setPaidWeek1Confirm}
@@ -230,12 +288,46 @@ export function AdminIngestionClient() {
             busy={busy === "paid-week1"}
             onRun={() => void runAction("paid-week1", paidWeek1Confirm)}
           />
+          {status?.data?.storedWeek1OddsLegacyPresent &&
+          !status?.data?.storedWeek1OddsCanonicalPresent ? (
+            <div className="rounded border border-amber-700/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+              Legacy <code>data/processed/prop_markets.csv</code> is
+              present but canonical{" "}
+              <code>data/processed/odds/2025/week-1-prop-markets.csv</code>{" "}
+              is missing. Stored mode reads the canonical file. Run
+              the migration below to copy + enrich (no API call).
+            </div>
+          ) : null}
           <ActionRow
-            label="6. Run Week 1 stored backtest"
+            label="7. Migrate legacy odds → canonical Week 1 file"
+            description="Joins legacy prop_markets.csv + prop_quotes.csv against games.csv + rosters.csv. No API call."
+            buttonLabel="Migrate"
+            disabled={!token || busy !== null}
+            busy={busy === "migrate-odds-to-canonical"}
+            onRun={() => void runAction("migrate-odds-to-canonical")}
+          />
+          <ActionRow
+            label="8. Run Week 1 stored backtest"
             description="Pregame snapshot from stored data. No API call."
             disabled={!token || busy !== null}
             busy={busy === "stored-backtest"}
             onRun={() => void runAction("stored-backtest")}
+          />
+          <ActionRow
+            label="9. Grade Week 1 stored backtest"
+            description="Grades existing stored pregame candidates using processed nflverse results. No API call."
+            buttonLabel="Grade"
+            disabled={!token || busy !== null}
+            busy={busy === "grade-week1-stored"}
+            onRun={() => void runAction("grade-week1-stored")}
+          />
+          <ActionRow
+            label="10. Verify persisted Week 1 data"
+            description="Pings Postgres, counts StoredPropMarket / StoredBacktestRun / OddsIngestionRun rows, reports whether canonical file can be rehydrated from DB. No API call."
+            buttonLabel="Verify"
+            disabled={!token || busy !== null}
+            busy={busy === "verify-persistence"}
+            onRun={() => void runAction("verify-persistence")}
           />
         </div>
       </section>
@@ -322,6 +414,17 @@ function StatusPanel({ status }: { status: StatusResponse }) {
             {status.nextRecommendedAction}
           </p>
         ) : null}
+        <p className="mt-2 text-[11px] text-zinc-500">
+          Estimated full Week 1 cost:{" "}
+          <span className="text-zinc-300">
+            {FULL_WEEK1_ESTIMATED_CREDITS} credits
+          </span>{" "}
+          · current standard cap:{" "}
+          <span className="text-zinc-300">{STANDARD_RUN_CAP}</span>{" "}
+          · full ingestion requires elevated cap (
+          <span className="text-zinc-300">{FULL_WEEK1_ELEVATED_CAP}</span>) and
+          exact confirmation.
+        </p>
       </div>
     </section>
   );

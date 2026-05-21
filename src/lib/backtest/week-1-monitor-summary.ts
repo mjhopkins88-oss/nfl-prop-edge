@@ -1,0 +1,554 @@
+/**
+ * Latest stored Week-1 backtest snapshot used by `/monitor` and
+ * `/backtest/week-1`. Reads the persistence layer first
+ * (Postgres `StoredBacktestRun`), then the file mirror
+ * (`data/backtests/2025/week-1-data-mode-status.fixture.json`),
+ * then nothing. Either source survives a Railway redeploy.
+ *
+ *   · The DB row carries everything we need (status,
+ *     candidatesJson, realWeek1BacktestReady, scheduleValidation
+ *     Status, syntheticFixture, dataMode).
+ *   · The file mirror is written by both
+ *     `scripts/run-week-1-starter-test.ts --data-mode stored`
+ *     and the admin `stored-backtest` action.
+ *
+ * Pure file IO + persistence client read. No paid API call.
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import {
+  getPersistenceClient,
+  type PersistenceClient,
+} from "../persistence/week-1-persistence";
+
+export interface GradedSideSnapshot {
+  wins: number;
+  losses: number;
+  pushes: number;
+  graded: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+export interface GradedMarketBucket {
+  propType: string;
+  total: number;
+  decisive: number;
+  overSide: GradedSideSnapshot;
+  underSide: GradedSideSnapshot;
+}
+
+export interface GradedLineBucket {
+  label: string;
+  lineLow: number;
+  lineHigh: number;
+  total: number;
+  decisive: number;
+  overSide: GradedSideSnapshot;
+  underSide: GradedSideSnapshot;
+}
+
+export interface GradedSampleRow {
+  candidateId: string;
+  gameId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  overOdds: number;
+  underOdds: number;
+  actualValue: number | null;
+  overOutcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
+  underOutcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
+  overProfitPerUnit: number;
+  underProfitPerUnit: number;
+  decisive: boolean;
+}
+
+export interface GradedSnapshot {
+  gradedAt: string;
+  /** Diagnostic numbers across all candidates. Per-side hit
+   *  rates here describe what the LINES paid, NOT model
+   *  performance. The page labels this section "Candidate
+   *  Universe Diagnostics — model diagnostic only". */
+  universeDiagnostics: {
+    totalCandidates: number;
+    candidatesWithActual: number;
+    candidatesMissingActual: number;
+    candidatesPushed: number;
+    overSide: GradedSideSnapshot;
+    underSide: GradedSideSnapshot;
+    betterSide: "OVER" | "UNDER" | "TIE";
+    /** Per-market-type universe breakdown (PASSING_ATTEMPTS,
+     *  RECEPTIONS, etc.). Populated when the grader has at
+     *  least one row per market. */
+    byPropType: GradedMarketBucket[];
+    /** Per-line-bucket (≤5, 5–10, 10–25, 25–35, 35+). */
+    byLineBucket: GradedLineBucket[];
+  };
+  /** Up to 100 individual graded candidates persisted by the
+   *  admin grading action. Sorted by candidateId for stable
+   *  rendering. */
+  gradedSample: GradedSampleRow[];
+  /** Model's actual betting performance — qualified plays only.
+   *  Empty until candidates carry a `recommendation` field. */
+  recommendedPlays: {
+    enabled: boolean;
+    note: string;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+    averageEdgePct: number;
+    averageConfidence: number;
+  };
+  /** Parlay-builder integration — same gating as recommended
+   *  plays. Stays disabled until per-leg model fields land. */
+  parlayPerformance: {
+    enabled: boolean;
+    note: string;
+    evaluated: number;
+    selected: number;
+    rejected: number;
+    selectedAggregate: {
+      wins: number;
+      losses: number;
+      pushes: number;
+      noResult: number;
+      hitRatePct: number;
+      roiPct: number;
+      unitsProfit: number;
+      averageModeledHitProbabilityPct: number;
+      averageRequiredHitProbabilityPct: number;
+      averagePayoutMultiplier: number;
+      averageEVPct: number;
+    };
+    rejectionReasons: Record<string, number>;
+  };
+  /** Candidate rejection reason counts. */
+  disqualificationBreakdown: {
+    edgeTooThin: number;
+    riskGate: number;
+    roleStability: number;
+    missingResult: number;
+    ungradeable: number;
+    other: number;
+    totalRejected: number;
+  };
+}
+
+export interface StoredWeek1MonitorSnapshot {
+  /** Where the data came from. `"none"` means neither source
+   *  had a stored run; the caller should fall back to fixture
+   *  starter-test data. */
+  source: "postgres" | "file";
+  /** ISO string when the source generated this snapshot. */
+  generatedAt?: string;
+  /** Always "stored" — fixture sources go through a different
+   *  loader. */
+  dataMode: "stored";
+  /** Status from the candidate builder: READY,
+   *  MISSING_STORED_ODDS, MISSING_PROCESSED_NFL,
+   *  SCHEDULE_VALIDATION_FAILED, NO_CANDIDATES_AFTER_FILTER. */
+  status: string;
+  candidateCount: number;
+  /** Whether the schedule-validation report passed. PASS / FAIL /
+   *  SYNTHETIC_ONLY / unknown. */
+  scheduleValidationStatus: string | null;
+  /** `true` when status === "READY". */
+  realWeek1BacktestReady: boolean;
+  /** Always `false` for a stored snapshot — that's the whole
+   *  point. Kept as a literal type to make page logic
+   *  exhaustive. */
+  syntheticFixture: false;
+  storedOddsPresent: boolean;
+  processedNflPresent: boolean;
+  missingStoredOdds: boolean;
+  missingProcessedNfl: boolean;
+  /** "graded" when the admin grade-week1-stored action has run,
+   *  "ungraded" while only pregame candidates exist. */
+  gradingStatus: "ungraded" | "graded" | "unavailable";
+  /** Populated when gradingStatus === "graded". */
+  graded?: GradedSnapshot;
+  notes: string[];
+}
+
+interface FileShape {
+  generatedAt?: string;
+  season: number;
+  week: number;
+  dataMode: "stored" | "fixture";
+  status: string;
+  candidateCount: number;
+  syntheticFixture: boolean;
+  realWeek1BacktestReady: boolean;
+  missingStoredOdds: boolean;
+  missingProcessedNfl: boolean;
+  scheduleReport?: { status?: string | null } | null;
+  notes?: string[];
+}
+
+interface GradedSideShape {
+  wins: number;
+  losses: number;
+  pushes: number;
+  graded: number;
+  hitRate: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+interface GradedMarketBucketShape {
+  propType: string;
+  total: number;
+  decisive: number;
+  overSide: GradedSideShape;
+  underSide: GradedSideShape;
+}
+
+interface GradedLineBucketShape {
+  label: string;
+  lineLow: number;
+  lineHigh: number;
+  total: number;
+  decisive: number;
+  overSide: GradedSideShape;
+  underSide: GradedSideShape;
+}
+
+interface GradedFileShape {
+  gradedAt: string;
+  season: number;
+  week: number;
+  /** Optional individual graded rows (admin grading action
+   *  persists up to 100). The page renders them. */
+  samples?: GradedSampleRow[];
+  /** Same shape, just a different key name used by the DB
+   *  resultsJson path. */
+  gradedSample?: GradedSampleRow[];
+  summary: {
+    gradedAt?: string;
+    /** Legacy headline fields — diagnostic only. */
+    totalCandidates: number;
+    candidatesWithActual: number;
+    candidatesMissingActual: number;
+    candidatesPushed?: number;
+    qualifiedPlays: number;
+    betterSide: "OVER" | "UNDER" | "TIE";
+    overSide: GradedSideShape;
+    underSide: GradedSideShape;
+    /** New structured sections (added in the diagnostic-vs-
+     *  betting-performance refactor). */
+    universeDiagnostics?: {
+      totalCandidates: number;
+      candidatesWithActual: number;
+      candidatesMissingActual: number;
+      candidatesPushed: number;
+      overSide: GradedSideShape;
+      underSide: GradedSideShape;
+      betterSide: "OVER" | "UNDER" | "TIE";
+      byPropType?: GradedMarketBucketShape[];
+      byLineBucket?: GradedLineBucketShape[];
+    };
+    byPropType?: GradedMarketBucketShape[];
+    byLineBucket?: GradedLineBucketShape[];
+    recommendedPlays?: {
+      enabled: boolean;
+      note: string;
+      count: number;
+      wins: number;
+      losses: number;
+      pushes: number;
+      hitRatePct: number;
+      roiPct: number;
+      unitsProfit: number;
+      averageEdgePct: number;
+      averageConfidence: number;
+    };
+    parlayPerformance?: {
+      enabled: boolean;
+      note: string;
+      evaluated: number;
+      selected: number;
+      rejected: number;
+      selectedAggregate: {
+        wins: number;
+        losses: number;
+        pushes: number;
+        noResult: number;
+        hitRatePct: number;
+        roiPct: number;
+        unitsProfit: number;
+        averageModeledHitProbabilityPct: number;
+        averageRequiredHitProbabilityPct: number;
+        averagePayoutMultiplier: number;
+        averageEVPct: number;
+      };
+      rejectionReasons: Record<string, number>;
+    };
+    disqualificationBreakdown?: {
+      edgeTooThin: number;
+      riskGate: number;
+      roleStability: number;
+      missingResult: number;
+      ungradeable: number;
+      other: number;
+      totalRejected: number;
+    };
+  };
+}
+
+function readGradedFile(
+  season: number,
+  week: number,
+): GradedFileShape | undefined {
+  const p = path.join(
+    process.cwd(),
+    "data",
+    "backtests",
+    String(season),
+    `week-${week}-graded-summary.fixture.json`,
+  );
+  if (!fs.existsSync(p)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")) as GradedFileShape;
+  } catch {
+    return undefined;
+  }
+}
+
+function sideToSnapshot(s: GradedSideShape): GradedSideSnapshot {
+  return {
+    wins: s.wins,
+    losses: s.losses,
+    pushes: s.pushes,
+    graded: s.graded,
+    hitRatePct: s.hitRate * 100,
+    roiPct: s.roiPct,
+    unitsProfit: s.unitsProfit,
+  };
+}
+
+function bucketToSnapshot(b: GradedMarketBucketShape): GradedMarketBucket {
+  return {
+    propType: b.propType,
+    total: b.total,
+    decisive: b.decisive,
+    overSide: sideToSnapshot(b.overSide),
+    underSide: sideToSnapshot(b.underSide),
+  };
+}
+
+function lineBucketToSnapshot(b: GradedLineBucketShape): GradedLineBucket {
+  return {
+    label: b.label,
+    lineLow: b.lineLow,
+    lineHigh: b.lineHigh,
+    total: b.total,
+    decisive: b.decisive,
+    overSide: sideToSnapshot(b.overSide),
+    underSide: sideToSnapshot(b.underSide),
+  };
+}
+
+function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | undefined {
+  if (!g) return undefined;
+  const s = g.summary;
+  // Breakdown buckets may live either inside universeDiagnostics
+  // (preferred) or directly on the summary (legacy headline
+  // fields). Map both shapes.
+  const byPropType = (
+    s.universeDiagnostics?.byPropType ?? s.byPropType ?? []
+  ).map(bucketToSnapshot);
+  const byLineBucket = (
+    s.universeDiagnostics?.byLineBucket ?? s.byLineBucket ?? []
+  ).map(lineBucketToSnapshot);
+  return {
+    gradedAt: g.gradedAt,
+    universeDiagnostics: s.universeDiagnostics
+      ? {
+          totalCandidates: s.universeDiagnostics.totalCandidates,
+          candidatesWithActual: s.universeDiagnostics.candidatesWithActual,
+          candidatesMissingActual: s.universeDiagnostics.candidatesMissingActual,
+          candidatesPushed: s.universeDiagnostics.candidatesPushed,
+          overSide: sideToSnapshot(s.universeDiagnostics.overSide),
+          underSide: sideToSnapshot(s.universeDiagnostics.underSide),
+          betterSide: s.universeDiagnostics.betterSide,
+          byPropType,
+          byLineBucket,
+        }
+      : {
+          totalCandidates: s.totalCandidates,
+          candidatesWithActual: s.candidatesWithActual,
+          candidatesMissingActual: s.candidatesMissingActual,
+          candidatesPushed: s.candidatesPushed ?? 0,
+          overSide: sideToSnapshot(s.overSide),
+          underSide: sideToSnapshot(s.underSide),
+          betterSide: s.betterSide,
+          byPropType,
+          byLineBucket,
+        },
+    gradedSample: g.gradedSample ?? g.samples ?? [],
+    recommendedPlays: s.recommendedPlays ?? {
+      enabled: false,
+      note: "Recommended-plays section not present in this graded payload.",
+      count: 0,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      hitRatePct: 0,
+      roiPct: 0,
+      unitsProfit: 0,
+      averageEdgePct: 0,
+      averageConfidence: 0,
+    },
+    parlayPerformance: s.parlayPerformance ?? {
+      enabled: false,
+      note: "Parlay section not present in this graded payload.",
+      evaluated: 0,
+      selected: 0,
+      rejected: 0,
+      selectedAggregate: {
+        wins: 0,
+        losses: 0,
+        pushes: 0,
+        noResult: 0,
+        hitRatePct: 0,
+        roiPct: 0,
+        unitsProfit: 0,
+        averageModeledHitProbabilityPct: 0,
+        averageRequiredHitProbabilityPct: 0,
+        averagePayoutMultiplier: 0,
+        averageEVPct: 0,
+      },
+      rejectionReasons: {},
+    },
+    disqualificationBreakdown: s.disqualificationBreakdown ?? {
+      edgeTooThin: 0,
+      riskGate: 0,
+      roleStability: 0,
+      missingResult: s.candidatesMissingActual,
+      ungradeable: s.candidatesPushed ?? 0,
+      other: 0,
+      totalRejected: s.candidatesMissingActual + (s.candidatesPushed ?? 0),
+    },
+  };
+}
+
+function readFile(season: number, week: number): FileShape | undefined {
+  const p = path.join(
+    process.cwd(),
+    "data",
+    "backtests",
+    String(season),
+    `week-${week}-data-mode-status.fixture.json`,
+  );
+  if (!fs.existsSync(p)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")) as FileShape;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Load the latest stored Week-1 snapshot. Returns `undefined`
+ * when neither Postgres nor the file mirror has a stored run,
+ * letting the caller fall back to fixture starter-test data.
+ */
+export async function loadStoredWeek1MonitorSnapshot(args: {
+  season: number;
+  week: number;
+  /** Inject a persistence client for tests. */
+  client?: PersistenceClient;
+}): Promise<StoredWeek1MonitorSnapshot | undefined> {
+  const client = args.client ?? (await getPersistenceClient());
+  if (client.isAvailable()) {
+    const dbRun = await client.loadLatestStoredBacktestRunFromDb({
+      season: args.season,
+      week: args.week,
+    });
+    if (dbRun.ok && dbRun.run) {
+      const run = dbRun.run;
+      const candidatesJson = run.candidatesJson as
+        | { candidates?: unknown[] }
+        | null
+        | undefined;
+      const candidateCount = Array.isArray(candidatesJson?.candidates)
+        ? candidatesJson.candidates.length
+        : 0;
+      const status = String(run.status);
+      const ready = run.realWeek1BacktestReady === true;
+      const missingStoredOdds = status === "MISSING_STORED_ODDS";
+      const missingProcessedNfl = status === "MISSING_PROCESSED_NFL";
+      // Graded summary lives in resultsJson when the
+      // grade-week1-stored action has run. Fall back to the
+      // file mirror so a redeploy that wipes only one source
+      // still finds the data.
+      const resultsJson = run.resultsJson as
+        | {
+            summary?: GradedFileShape["summary"];
+            gradedSample?: GradedSampleRow[];
+          }
+        | null
+        | undefined;
+      const dbGraded = resultsJson?.summary
+        ? toGradedSnapshot({
+            gradedAt: new Date().toISOString(),
+            season: args.season,
+            week: args.week,
+            summary: resultsJson.summary,
+            gradedSample: resultsJson.gradedSample,
+          })
+        : undefined;
+      const fileGraded = toGradedSnapshot(
+        readGradedFile(args.season, args.week),
+      );
+      const graded = dbGraded ?? fileGraded;
+      return {
+        source: "postgres",
+        dataMode: "stored",
+        status,
+        candidateCount,
+        scheduleValidationStatus: run.scheduleValidationStatus ?? null,
+        realWeek1BacktestReady: ready,
+        syntheticFixture: false,
+        storedOddsPresent: !missingStoredOdds,
+        processedNflPresent: !missingProcessedNfl,
+        missingStoredOdds,
+        missingProcessedNfl,
+        gradingStatus: graded ? "graded" : "ungraded",
+        graded,
+        notes: [],
+      };
+    }
+  }
+  const file = readFile(args.season, args.week);
+  if (file && file.dataMode === "stored") {
+    const graded = toGradedSnapshot(readGradedFile(args.season, args.week));
+    return {
+      source: "file",
+      generatedAt: file.generatedAt,
+      dataMode: "stored",
+      status: file.status,
+      candidateCount: file.candidateCount,
+      scheduleValidationStatus: file.scheduleReport?.status ?? null,
+      realWeek1BacktestReady: file.realWeek1BacktestReady,
+      syntheticFixture: false,
+      storedOddsPresent: !file.missingStoredOdds,
+      processedNflPresent: !file.missingProcessedNfl,
+      missingStoredOdds: file.missingStoredOdds,
+      missingProcessedNfl: file.missingProcessedNfl,
+      gradingStatus: graded ? "graded" : "ungraded",
+      graded,
+      notes: file.notes ?? [],
+    };
+  }
+  return undefined;
+}

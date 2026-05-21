@@ -12,9 +12,16 @@ import {
   loadWeek1Results,
   loadWeek1ScheduleValidation,
   loadWeek1V1V2Comparison,
+  type Week1DataModeStatus,
 } from "@/lib/backtest/week-1-summary";
+import {
+  loadStoredWeek1MonitorSnapshot,
+  type StoredWeek1MonitorSnapshot,
+} from "@/lib/backtest/week-1-monitor-summary";
 
-export default function Week1StarterTestPage() {
+export const dynamic = "force-dynamic";
+
+export default async function Week1StarterTestPage() {
   const pregame = loadWeek1Pregame();
   const locked = loadWeek1LockedRecommendations();
   const dataAudit = loadWeek1DataAudit();
@@ -22,16 +29,30 @@ export default function Week1StarterTestPage() {
   const nflCoverage = loadWeek1NflDataCoverage();
   const leakage = loadWeek1LeakageCheck();
   const scheduleValidation = loadWeek1ScheduleValidation();
-  const dataModeStatus = loadWeek1DataModeStatus();
+  // DB-backed stored Week-1 snapshot wins over the file when
+  // available — survives a Railway redeploy.
+  const storedSnapshot = await loadStoredWeek1MonitorSnapshot({
+    season: 2025,
+    week: 1,
+  });
+  const dataModeStatus = mergeStoredIntoDataModeStatus(
+    loadWeek1DataModeStatus(),
+    storedSnapshot,
+  );
   const results = loadWeek1Results();
   const comparison = loadWeek1V1V2Comparison();
   const parlays = loadWeek1ParlayPreview();
   const gameEdge = loadWeek1GameEdgePreview();
-  const hasOutput = Boolean(pregame || results);
+  const hasOutput = Boolean(pregame || results || storedSnapshot);
+  // A successful stored run demotes the synthetic-fixture
+  // banner — the page primary state is the real backtest.
+  const storedReady =
+    Boolean(storedSnapshot && storedSnapshot.realWeek1BacktestReady) ||
+    Boolean(dataModeStatus && dataModeStatus.realWeek1BacktestReady);
 
   return (
     <div className="space-y-8">
-      {scheduleValidation && scheduleValidation.status !== "PASS" && (
+      {scheduleValidation && scheduleValidation.status !== "PASS" && !storedReady && (
         <SyntheticFixtureBanner validation={scheduleValidation} />
       )}
       <Hero
@@ -40,6 +61,12 @@ export default function Week1StarterTestPage() {
       {!hasOutput && <RunHint />}
       <PregameInputs />
       {dataModeStatus && <DataSourceModeSection status={dataModeStatus} />}
+      {storedSnapshot?.graded ? (
+        <StoredGradedSection
+          snapshot={storedSnapshot}
+          graded={storedSnapshot.graded}
+        />
+      ) : null}
       {scheduleValidation && (
         <ScheduleValidationSection validation={scheduleValidation} />
       )}
@@ -872,6 +899,365 @@ function DataSourceModeSection({
   );
 }
 
+function StoredGradedSection({
+  snapshot,
+  graded,
+}: {
+  snapshot: StoredWeek1MonitorSnapshot;
+  graded: NonNullable<StoredWeek1MonitorSnapshot["graded"]>;
+}) {
+  const u = graded.universeDiagnostics;
+  const sample = graded.gradedSample.slice(0, 30);
+  return (
+    <section className="rounded-2xl bg-white/70 p-5 ring-1 ring-white/40 backdrop-blur">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Real Stored Week 1 — Graded Results
+        </h2>
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+          Source · {snapshot.source} · graded {graded.gradedAt}
+        </span>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Candidate Universe Diagnostics
+          </h3>
+          <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+            Model diagnostic only · not betting performance
+          </span>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <Cell label="Total candidates" value={`${u.totalCandidates}`} />
+          <Cell label="With actual stat" value={`${u.candidatesWithActual}`} />
+          <Cell label="Missing actual" value={`${u.candidatesMissingActual}`} />
+          <Cell label="Pushed (line == actual)" value={`${u.candidatesPushed}`} />
+          <Cell
+            label="OVER directional"
+            value={`${u.overSide.hitRatePct.toFixed(1)}%`}
+            sub={`${u.overSide.wins}W · ${u.overSide.losses}L · ${u.overSide.unitsProfit.toFixed(2)} units`}
+          />
+          <Cell
+            label="UNDER directional"
+            value={`${u.underSide.hitRatePct.toFixed(1)}%`}
+            sub={`${u.underSide.wins}W · ${u.underSide.losses}L · ${u.underSide.unitsProfit.toFixed(2)} units`}
+          />
+          <Cell label="Line-side better-paid" value={u.betterSide} />
+          <Cell
+            label="Passed / rejected"
+            value={`${u.totalCandidates - graded.disqualificationBreakdown.totalRejected} / ${graded.disqualificationBreakdown.totalRejected}`}
+          />
+        </div>
+      </div>
+
+      {u.byPropType.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Per prop type (universe)
+          </h3>
+          <table className="mt-2 min-w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Prop type</th>
+                <th className="pb-1 pr-2 text-right">Total</th>
+                <th className="pb-1 pr-2 text-right">Decisive</th>
+                <th className="pb-1 pr-2 text-right">OVER hit</th>
+                <th className="pb-1 pr-2 text-right">UNDER hit</th>
+                <th className="pb-1 pr-2 text-right">OVER ROI</th>
+                <th className="pb-1 text-right">UNDER ROI</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {u.byPropType.map((b) => (
+                <tr key={b.propType} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{b.propType}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{b.total}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{b.decisive}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {b.overSide.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {b.underSide.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td
+                    className={
+                      "py-1 pr-2 text-right tabular-nums " +
+                      (b.overSide.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {b.overSide.roiPct.toFixed(1)}%
+                  </td>
+                  <td
+                    className={
+                      "py-1 text-right tabular-nums " +
+                      (b.underSide.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {b.underSide.roiPct.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {u.byLineBucket.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Per line bucket (universe)
+          </h3>
+          <table className="mt-2 min-w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Bucket</th>
+                <th className="pb-1 pr-2 text-right">Total</th>
+                <th className="pb-1 pr-2 text-right">OVER hit</th>
+                <th className="pb-1 pr-2 text-right">UNDER hit</th>
+                <th className="pb-1 pr-2 text-right">OVER ROI</th>
+                <th className="pb-1 text-right">UNDER ROI</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {u.byLineBucket.map((b) => (
+                <tr key={b.label} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{b.label}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{b.total}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {b.overSide.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {b.underSide.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td
+                    className={
+                      "py-1 pr-2 text-right tabular-nums " +
+                      (b.overSide.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {b.overSide.roiPct.toFixed(1)}%
+                  </td>
+                  <td
+                    className={
+                      "py-1 text-right tabular-nums " +
+                      (b.underSide.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {b.underSide.roiPct.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Recommended Plays Performance
+          </h3>
+          <span
+            className={
+              graded.recommendedPlays.enabled
+                ? "rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80"
+                : "rounded-full bg-ink-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-700 ring-1 ring-ink-300/80"
+            }
+          >
+            {graded.recommendedPlays.enabled
+              ? "Real betting performance"
+              : "Not yet evaluated"}
+          </span>
+        </div>
+        {graded.recommendedPlays.enabled ? (
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <Cell
+              label="Plays"
+              value={`${graded.recommendedPlays.count}`}
+              sub={`${graded.recommendedPlays.wins}W · ${graded.recommendedPlays.losses}L · ${graded.recommendedPlays.pushes}P`}
+            />
+            <Cell
+              label="Hit rate"
+              value={`${graded.recommendedPlays.hitRatePct.toFixed(1)}%`}
+            />
+            <Cell
+              label="ROI"
+              value={`${graded.recommendedPlays.roiPct.toFixed(1)}%`}
+              sub={`${graded.recommendedPlays.unitsProfit.toFixed(2)} units`}
+            />
+            <Cell
+              label="Avg edge / confidence"
+              value={`${graded.recommendedPlays.averageEdgePct.toFixed(1)}% / ${graded.recommendedPlays.averageConfidence.toFixed(2)}`}
+            />
+          </div>
+        ) : (
+          <p className="mt-2 rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
+            {graded.recommendedPlays.note}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Parlay Performance
+          </h3>
+          <span
+            className={
+              graded.parlayPerformance.enabled
+                ? "rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80"
+                : "rounded-full bg-ink-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-700 ring-1 ring-ink-300/80"
+            }
+          >
+            {graded.parlayPerformance.enabled
+              ? "Real parlay performance"
+              : "Not yet evaluated"}
+          </span>
+        </div>
+        {graded.parlayPerformance.enabled ? (
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <Cell
+              label="Evaluated / Selected / Rejected"
+              value={`${graded.parlayPerformance.evaluated} / ${graded.parlayPerformance.selected} / ${graded.parlayPerformance.rejected}`}
+            />
+            <Cell
+              label="Selected hit rate"
+              value={`${graded.parlayPerformance.selectedAggregate.hitRatePct.toFixed(1)}%`}
+            />
+            <Cell
+              label="Selected ROI"
+              value={`${graded.parlayPerformance.selectedAggregate.roiPct.toFixed(1)}%`}
+              sub={`${graded.parlayPerformance.selectedAggregate.unitsProfit.toFixed(2)} units`}
+            />
+            <Cell
+              label="Avg modeled / required"
+              value={`${graded.parlayPerformance.selectedAggregate.averageModeledHitProbabilityPct.toFixed(1)}% / ${graded.parlayPerformance.selectedAggregate.averageRequiredHitProbabilityPct.toFixed(1)}%`}
+            />
+          </div>
+        ) : (
+          <p className="mt-2 rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
+            {graded.parlayPerformance.note}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Disqualification breakdown
+        </h3>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+          {(
+            [
+              ["Edge too thin", graded.disqualificationBreakdown.edgeTooThin],
+              ["Risk gate", graded.disqualificationBreakdown.riskGate],
+              ["Role stability", graded.disqualificationBreakdown.roleStability],
+              ["Missing result", graded.disqualificationBreakdown.missingResult],
+              ["Ungradeable (push)", graded.disqualificationBreakdown.ungradeable],
+              ["Other", graded.disqualificationBreakdown.other],
+              ["Total rejected", graded.disqualificationBreakdown.totalRejected],
+              [
+                "Passed (universe − rejected)",
+                u.totalCandidates - graded.disqualificationBreakdown.totalRejected,
+              ],
+            ] as const
+          ).map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center justify-between rounded-lg bg-white/65 px-3 py-2 ring-1 ring-white/40"
+            >
+              <span className="text-ink-600">{label}</span>
+              <span className="font-semibold tabular-nums text-ink-900">
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {sample.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Individual graded candidates ({sample.length} of {graded.gradedSample.length})
+          </h3>
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full text-[11px]">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                  <th className="pb-1 pr-2">Game</th>
+                  <th className="pb-1 pr-2">Player · prop</th>
+                  <th className="pb-1 pr-2 text-right">Line</th>
+                  <th className="pb-1 pr-2 text-right">Actual</th>
+                  <th className="pb-1 pr-2">OVER</th>
+                  <th className="pb-1">UNDER</th>
+                </tr>
+              </thead>
+              <tbody className="text-ink-800">
+                {sample.map((row) => (
+                  <tr key={row.candidateId} className="border-t border-white/40">
+                    <td className="py-1 pr-2 text-[10px] tabular-nums">{row.gameId}</td>
+                    <td className="py-1 pr-2">
+                      {row.playerName} · {row.propType}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">{row.line}</td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.actualValue ?? "—"}
+                    </td>
+                    <td
+                      className={
+                        "py-1 pr-2 " +
+                        (row.overOutcome === "WIN"
+                          ? "text-sea-700"
+                          : row.overOutcome === "LOSS"
+                            ? "text-coral-700"
+                            : "text-ink-500")
+                      }
+                    >
+                      {row.overOutcome}
+                    </td>
+                    <td
+                      className={
+                        "py-1 " +
+                        (row.underOutcome === "WIN"
+                          ? "text-sea-700"
+                          : row.underOutcome === "LOSS"
+                            ? "text-coral-700"
+                            : "text-ink-500")
+                      }
+                    >
+                      {row.underOutcome}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Cell({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-lg bg-white/65 px-3 py-2 ring-1 ring-white/40">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {label}
+      </div>
+      <div className="mt-0.5 text-sm font-semibold text-ink-900">{value}</div>
+      {sub ? <div className="text-[10px] text-ink-500">{sub}</div> : null}
+    </div>
+  );
+}
+
 function Footnote() {
   return (
     <section className="rounded-2xl bg-amber-50/70 p-4 ring-1 ring-amber-200/60 backdrop-blur">
@@ -886,4 +1272,42 @@ function Footnote() {
       </ul>
     </section>
   );
+}
+
+/**
+ * Merge a DB-backed stored snapshot into the file-shaped
+ * `Week1DataModeStatus`. The DB row is authoritative when
+ * available — it survives Railway redeploys that wipe the file
+ * mirror. Returns whichever shape the existing DataSourceMode
+ * panel already expects, so the page render is unchanged
+ * downstream.
+ */
+function mergeStoredIntoDataModeStatus(
+  fileStatus: Week1DataModeStatus | undefined,
+  stored: StoredWeek1MonitorSnapshot | undefined,
+): Week1DataModeStatus | undefined {
+  if (!stored) return fileStatus;
+  // DB wins. Reconstruct the file shape from the snapshot.
+  const scheduleReport = stored.scheduleValidationStatus
+    ? ({
+        status: stored.scheduleValidationStatus,
+        realWeek1BacktestReady: stored.realWeek1BacktestReady,
+        syntheticFixture: stored.syntheticFixture,
+      } as unknown as Week1DataModeStatus["scheduleReport"])
+    : (fileStatus?.scheduleReport ?? null);
+  return {
+    generatedAt: stored.generatedAt ?? fileStatus?.generatedAt ?? new Date().toISOString(),
+    season: 2025,
+    week: 1,
+    dataMode: "stored",
+    status: stored.status,
+    candidateCount: stored.candidateCount,
+    syntheticFixture: stored.syntheticFixture,
+    realWeek1BacktestReady: stored.realWeek1BacktestReady,
+    missingStoredOdds: stored.missingStoredOdds,
+    missingProcessedNfl: stored.missingProcessedNfl,
+    scheduleReport,
+    notes: stored.notes,
+    nextSteps: fileStatus?.nextSteps ?? [],
+  };
 }

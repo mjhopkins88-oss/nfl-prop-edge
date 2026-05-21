@@ -21,8 +21,12 @@ export type AdminAction =
   | "run-nflverse-ingestion"
   | "dry-run"
   | "paid-smoke"
+  | "odds-week1-subset-paid"
   | "paid-week1"
-  | "stored-backtest";
+  | "migrate-odds-to-canonical"
+  | "stored-backtest"
+  | "grade-week1-stored"
+  | "verify-persistence";
 
 export type AdminResult = "success" | "failure" | "skipped";
 
@@ -34,8 +38,17 @@ export interface AdminIngestionState {
   /** Set by a successful paid-smoke run. Required gate for paid-week1. */
   smokeSucceededAt?: string;
   smokeCreditsUsed?: number;
-  /** Set when paid-week1 succeeds. */
+  /** Set when paid-week1 (full) succeeds. */
   week1IngestionSucceededAt?: string;
+  /** Set when odds-week1-subset-paid succeeds. */
+  week1SubsetSucceededAt?: string;
+  week1SubsetCreditsUsed?: number;
+  /** Most recent paid-smoke attempt — success OR failure. Used to
+   *  show "last smoke used X credits before aborting" in the UI. */
+  lastPaidSmokeAttemptAt?: string;
+  lastPaidSmokeResult?: "success" | "failure";
+  lastPaidSmokeCreditsUsed?: number;
+  lastPaidSmokeReason?: string;
 }
 
 const STATE_REL_PATH = path.join("data", "admin", "ingestion-state.json");
@@ -99,6 +112,27 @@ export function recordSmokeSuccess(args: {
   return next;
 }
 
+export function recordPaidSmokeAttempt(args: {
+  result: "success" | "failure";
+  creditsUsed?: number;
+  reason?: string;
+  repoRoot?: string;
+}): AdminIngestionState {
+  const current = readAdminState(args.repoRoot);
+  const next: AdminIngestionState = {
+    ...current,
+    lastPaidSmokeAttemptAt: new Date().toISOString(),
+    lastPaidSmokeResult: args.result,
+    lastPaidSmokeCreditsUsed:
+      typeof args.creditsUsed === "number"
+        ? args.creditsUsed
+        : current.lastPaidSmokeCreditsUsed,
+    lastPaidSmokeReason: args.reason ?? current.lastPaidSmokeReason,
+  };
+  writeAdminState(next, args.repoRoot);
+  return next;
+}
+
 export function recordWeek1Success(repoRoot?: string): AdminIngestionState {
   const current = readAdminState(repoRoot);
   const next: AdminIngestionState = {
@@ -106,6 +140,23 @@ export function recordWeek1Success(repoRoot?: string): AdminIngestionState {
     week1IngestionSucceededAt: new Date().toISOString(),
   };
   writeAdminState(next, repoRoot);
+  return next;
+}
+
+export function recordWeek1SubsetSuccess(args: {
+  creditsUsed?: number;
+  repoRoot?: string;
+}): AdminIngestionState {
+  const current = readAdminState(args.repoRoot);
+  const next: AdminIngestionState = {
+    ...current,
+    week1SubsetSucceededAt: new Date().toISOString(),
+    week1SubsetCreditsUsed:
+      typeof args.creditsUsed === "number"
+        ? args.creditsUsed
+        : current.week1SubsetCreditsUsed,
+  };
+  writeAdminState(next, args.repoRoot);
   return next;
 }
 

@@ -28,16 +28,50 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildReadinessReport } from "../../../scripts/check-real-week-1-readiness";
 import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-candidate-builder";
+import { gradeStoredWeek1Backtest } from "../backtest/week-1-grading";
+import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
+import {
+  buildCanonicalOddsRows,
+  canonicalMarketsPath,
+  migrateLegacyToCanonical,
+} from "../ingestion/canonical-odds-writer";
+import {
+  getPersistenceClient,
+  rehydrateCanonicalOddsFromDbIfMissing,
+  type PersistenceClient,
+} from "../persistence/week-1-persistence";
+import { getExpectedWeek1Schedule } from "../backtest/week-1-schedule-validation";
+import {
+  normalizeTeamAbbreviation,
+  validateCanonicalOddsGameIds,
+} from "../backtest/week-1-game-id-mapper";
+import { parseCsvRows } from "../ingestion/nflverse";
 import {
   hasPriorSmokeSuccess,
   recordActionResult,
+  recordPaidSmokeAttempt,
   recordSmokeSuccess,
   recordWeek1Success,
+  recordWeek1SubsetSuccess,
   type AdminAction,
 } from "./admin-state";
 
 export const PAID_SMOKE_CONFIRM_TEXT = "RUN PAID SMOKE TEST";
-export const PAID_WEEK1_CONFIRM_TEXT = "RUN WEEK 1 PAID INGESTION";
+export const PAID_WEEK1_SUBSET_CONFIRM_TEXT = "RUN WEEK 1 SUBSET INGESTION";
+/**
+ * Full Week 1 carries the 647-credit estimate in the confirmation
+ * itself — the user has to type the number, not just a label.
+ * Anyone copy/pasting from the audit doc has to acknowledge the
+ * specific cost.
+ */
+export const PAID_WEEK1_CONFIRM_TEXT =
+  "RUN FULL WEEK 1 INGESTION 647 CREDITS";
+
+/** Hard-coded per-action credit ceilings. Never user-provided. */
+export const ADMIN_PAID_SMOKE_MAX_CREDITS = 50;
+export const ADMIN_WEEK1_SUBSET_MAX_CREDITS = 175;
+export const ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS = 4;
+export const ADMIN_WEEK1_FULL_MAX_CREDITS = 700;
 
 export interface AdminActionResult {
   action: AdminAction;
@@ -66,6 +100,9 @@ export interface AdminRunArgs {
   repoRoot?: string;
   /** Injected for tests; defaults to a real spawn-based runner. */
   spawner?: SubprocessRunner;
+  /** Injected for tests; defaults to the lazily-resolved Prisma
+   *  client (or the null client when DATABASE_URL is unset). */
+  persistence?: PersistenceClient;
 }
 
 export interface SubprocessSpec {
@@ -157,6 +194,10 @@ const realSubprocessRunner: SubprocessRunner = async (spec) => {
 const CREDITS_DONE_RE =
   /Done\.\s+Credits\s+estimated=(\d+)\s+actual=(\d+)\s+remaining=([\d?]+)/;
 const ESTIMATED_RE = /Estimated credits:\s+(\d+)\s+\(budget\s+(\d+)\)/;
+const ABORT_OVERAGE_RE =
+  /ABORT mid-run:\s*actual credits\s+(\d+)\s+exceed estimate/;
+const ABORT_PRECALL_RE =
+  /ABORT before request:\s*projected cumulative actual\s+(\d+)/;
 const NORMALIZED_RE =
   /normalized:\s+(\d+)\s+games,\s+(\d+)\s+player-weeks,\s+(\d+)\s+team-weeks,\s+(\d+)\s+roster entries,\s+(\d+)\s+snap rows/;
 const WRITTEN_LINE_RE = /^\s+(.*data[/\\]processed[/\\]nfl[/\\][^\s]+\.csv)\s*$/gm;
@@ -180,6 +221,16 @@ export function parseIngestionOutput(stdout: string): ParsedCredits {
   if (m2) {
     out.estimatedCredits = Number(m2[1]);
     out.budget = Number(m2[2]);
+  }
+  // When the run aborted, surface the cumulative credits used at
+  // the abort point. Both abort paths log a number we can pick up.
+  if (out.creditsUsed === undefined) {
+    const aOver = ABORT_OVERAGE_RE.exec(stdout);
+    if (aOver) out.creditsUsed = Number(aOver[1]);
+  }
+  if (out.creditsUsed === undefined) {
+    const aPre = ABORT_PRECALL_RE.exec(stdout);
+    if (aPre) out.creditsUsed = Number(aPre[1]);
   }
   return out;
 }
@@ -259,6 +310,79 @@ function writeNflverseResultFile(args: {
   return target;
 }
 
+// ---- per-paid-action result-file writers ------------------------------
+
+const WEEK1_SUBSET_RESULT_FILE = path.join(
+  "data",
+  "admin-ingestion",
+  "latest-odds-week1-subset-paid.json",
+);
+const WEEK1_FULL_RESULT_FILE = path.join(
+  "data",
+  "admin-ingestion",
+  "latest-odds-week1-full-paid.json",
+);
+
+/** Parse the `Wrote {path} (N rows)` lines emitted by the
+ *  prop-line script's live mode. */
+const WROTE_LINE_RE = /Wrote\s+(.+?)\s+\((\d+)\s+rows\)/g;
+function parseWrittenOutputFiles(stdout: string): string[] {
+  const out: string[] = [];
+  WROTE_LINE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WROTE_LINE_RE.exec(stdout)) !== null) out.push(m[1]);
+  return out;
+}
+
+interface OddsRunResultArgs {
+  repoRoot: string;
+  resultFile: string;
+  action: AdminAction;
+  startedAt: string;
+  finishedAt: string;
+  status: "success" | "failure";
+  parsed: ParsedCredits;
+  outputFilesWritten: string[];
+  /** True when the canonical Week 1 markets file is on disk after
+   *  the run. The current ingest script writes to the legacy flat
+   *  paths; this surfaces whether the canonical path is up-to-date. */
+  canonicalWeek1MarketsFileUpdated: boolean;
+  errorMessage?: string;
+  maxCreditsCap: number;
+  confirmText: string;
+}
+
+function writeOddsRunResultFile(args: OddsRunResultArgs): string {
+  const target = path.join(args.repoRoot, args.resultFile);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const payload = {
+    action: args.action,
+    startedAt: args.startedAt,
+    finishedAt: args.finishedAt,
+    status: args.status,
+    paidApiCallAttempted: true,
+    creditsEstimated: args.parsed.estimatedCredits ?? null,
+    creditsUsed: args.parsed.creditsUsed ?? null,
+    creditsRemaining:
+      args.parsed.creditsRemaining === undefined
+        ? null
+        : args.parsed.creditsRemaining,
+    budgetCeiling: args.maxCreditsCap,
+    confirmText: args.confirmText,
+    outputFilesWritten: args.outputFilesWritten,
+    canonicalWeek1MarketsFileUpdated: args.canonicalWeek1MarketsFileUpdated,
+    errorMessage: args.errorMessage ?? null,
+    guardrails: {
+      noTouchdownProps: true,
+      noAutomatedBetting: true,
+      noKalshiIntegration: true,
+      starterMarketsOnly: true,
+    },
+  };
+  fs.writeFileSync(target, JSON.stringify(payload, null, 2) + "\n");
+  return target;
+}
+
 // ---- per-action argv builders (fixed lists, no user input) ------------
 
 function ingestScriptPath(repoRoot: string): string {
@@ -301,6 +425,13 @@ function buildNflverseIngestionSpec(repoRoot: string): SubprocessSpec {
 }
 
 function buildDryRunSpec(repoRoot: string): SubprocessSpec {
+  // Mirror the paid-smoke calibration argv exactly — same season,
+  // scope, source, calibration ceiling, --max-odds-requests, and
+  // --max-credits — but use --dry-run instead of --execute. The
+  // dry-run preview must show the cost of what the paid button
+  // would actually do; otherwise the page reports 647 credits
+  // (the full-Week-1 plan) and the up-front budget guard refuses
+  // before any preview can render.
   return {
     command: defaultTsxBin(repoRoot),
     args: [
@@ -313,6 +444,11 @@ function buildDryRunSpec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--calibration",
+      "--max-odds-requests",
+      "1",
+      "--max-credits",
+      "50",
       "--dry-run",
     ],
     env: { ...process.env },
@@ -322,6 +458,12 @@ function buildDryRunSpec(repoRoot: string): SubprocessSpec {
 }
 
 function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
+  // Calibration mode is the smallest paid sample we ever run from
+  // the admin UI: 1 events-list call + 1 event-odds call, with a
+  // 50-credit hard cap. The corrected pricing model already routes
+  // calibration via SMOKE_CALIBRATION_MAX_CREDITS, but we pass
+  // --max-credits explicitly so the runtime guard is set even if
+  // the constant changes later. See ODDS_API_CREDIT_AUDIT.md.
   return {
     command: defaultTsxBin(repoRoot),
     args: [
@@ -334,6 +476,11 @@ function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--calibration",
+      "--max-odds-requests",
+      "1",
+      "--max-credits",
+      "50",
       "--execute",
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
@@ -342,6 +489,49 @@ function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
   };
 }
 
+/**
+ * Smaller Week 1 ingestion — capped to 4 event-odds calls + a
+ * 175-credit ceiling. Fits under the 200-credit
+ * MAX_ODDS_API_CREDITS_PER_RUN policy. Lets us land a partial
+ * Week 1 set + verify the canonical price model without the
+ * full ~647 spend.
+ */
+function buildPaidWeek1SubsetSpec(repoRoot: string): SubprocessSpec {
+  return {
+    command: defaultTsxBin(repoRoot),
+    args: [
+      ingestScriptPath(repoRoot),
+      "--season",
+      "2025",
+      "--scope",
+      "week",
+      "--week",
+      "1",
+      "--source",
+      "csv",
+      "--input",
+      gamesCsvPath(repoRoot),
+      "--max-odds-requests",
+      String(ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS),
+      "--max-credits",
+      String(ADMIN_WEEK1_SUBSET_MAX_CREDITS),
+      "--budget",
+      String(ADMIN_WEEK1_SUBSET_MAX_CREDITS),
+      "--execute",
+    ],
+    env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
+    timeoutMs: 300_000,
+    cwd: repoRoot,
+  };
+}
+
+/**
+ * Full Week 1 ingestion. Pins --budget AND --max-credits to the
+ * hard-coded 700 ceiling (validateCreditBudget honours the
+ * override via maxCreditsOverride; the per-call guard reads
+ * --max-credits). 700 covers the audited 647-credit estimate
+ * with ~8% slack. Never accepts a user-supplied cap.
+ */
 function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
   return {
     command: defaultTsxBin(repoRoot),
@@ -357,10 +547,14 @@ function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--max-credits",
+      String(ADMIN_WEEK1_FULL_MAX_CREDITS),
+      "--budget",
+      String(ADMIN_WEEK1_FULL_MAX_CREDITS),
       "--execute",
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
-    timeoutMs: 600_000,
+    timeoutMs: 900_000,
     cwd: repoRoot,
   };
 }
@@ -372,6 +566,8 @@ export async function runAdminAction(
 ): Promise<AdminActionResult> {
   const repoRoot = args.repoRoot ?? process.cwd();
   const spawner = args.spawner ?? realSubprocessRunner;
+  const persistence =
+    args.persistence ?? (await getPersistenceClient());
 
   switch (args.action) {
     case "readiness-check": {
@@ -487,9 +683,40 @@ export async function runAdminAction(
         repoRoot,
       });
       if (gate) return recordSkip("paid-smoke", gate, repoRoot);
+      const startedAt = new Date().toISOString();
       const sub = await spawner(buildPaidSmokeSpec(repoRoot));
+      const finishedAt = new Date().toISOString();
       const parsed = parseIngestionOutput(sub.stdout);
       const ok = sub.exitCode === 0 && !sub.timedOut;
+      const persistenceNotes: string[] = [];
+      if (ok) {
+        recordSmokeSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+        const dbState = await persistence.saveAdminIngestionStateToDb({
+          smokeSucceededAt: finishedAt,
+          smokeCreditsUsed: parsed.creditsUsed,
+        });
+        if (!dbState.ok && dbState.error)
+          persistenceNotes.push(`db state: ${dbState.error}`);
+      }
+      recordPaidSmokeAttempt({
+        result: ok ? "success" : "failure",
+        creditsUsed: parsed.creditsUsed,
+        reason: ok ? undefined : `smoke ${ok ? "ok" : "failed"}`,
+        repoRoot,
+      });
+      const dbRun = await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-smoke-calibration",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      });
+      if (!dbRun.ok && dbRun.error)
+        persistenceNotes.push(`db run: ${dbRun.error}`);
       const result: AdminActionResult = {
         action: "paid-smoke",
         ok,
@@ -499,19 +726,99 @@ export async function runAdminAction(
           : sub.timedOut
             ? "Smoke timed out."
             : `Smoke failed with exit ${sub.exitCode}.`,
+        detail: truncateForUi(sub.stdout, sub.stderr) +
+          (persistenceNotes.length > 0
+            ? `\n--- persistence ---\n${persistenceNotes.join("\n")}`
+            : ""),
+        data: {
+          creditsUsed: parsed.creditsUsed,
+          creditsRemaining: parsed.creditsRemaining,
+          persistedToDb: dbRun.ok,
+        },
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      };
+      recordActionResult({
+        action: "paid-smoke",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "odds-week1-subset-paid": {
+      const gate = checkPaidGates({
+        confirmText: args.confirmText,
+        expectedConfirm: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+        requirePriorSmoke: true,
+        repoRoot,
+      });
+      if (gate)
+        return recordSkip("odds-week1-subset-paid", gate, repoRoot);
+      const startedAt = new Date().toISOString();
+      const sub = await spawner(buildPaidWeek1SubsetSpec(repoRoot));
+      const finishedAt = new Date().toISOString();
+      const parsed = parseIngestionOutput(sub.stdout);
+      const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      const canonical = inspectStoredWeek1OddsOnDisk(repoRoot).canonical.present;
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: WEEK1_SUBSET_RESULT_FILE,
+        action: "odds-week1-subset-paid",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: canonical,
+        errorMessage: ok ? undefined : sub.timedOut ? "timed out" : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+        confirmText: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+      });
+      const result: AdminActionResult = {
+        action: "odds-week1-subset-paid",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Week 1 subset OK. Credits used=${parsed.creditsUsed ?? "?"} remaining=${parsed.creditsRemaining ?? "?"}.`
+          : sub.timedOut
+            ? "Week 1 subset timed out."
+            : `Week 1 subset failed with exit ${sub.exitCode}.`,
         detail: truncateForUi(sub.stdout, sub.stderr),
         data: {
           creditsUsed: parsed.creditsUsed,
           creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          canonicalWeek1MarketsFileUpdated: canonical,
+          maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
         },
         creditsUsed: parsed.creditsUsed,
         creditsRemaining: parsed.creditsRemaining,
       };
       if (ok) {
-        recordSmokeSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+        recordWeek1SubsetSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+        await persistence.saveAdminIngestionStateToDb({
+          week1SubsetSucceededAt: finishedAt,
+          week1SubsetCreditsUsed: parsed.creditsUsed,
+        });
       }
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-week1-subset",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+        gamesRequested: ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS,
+      });
       recordActionResult({
-        action: "paid-smoke",
+        action: "odds-week1-subset-paid",
         result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,
@@ -527,9 +834,27 @@ export async function runAdminAction(
         repoRoot,
       });
       if (gate) return recordSkip("paid-week1", gate, repoRoot);
+      const startedAt = new Date().toISOString();
       const sub = await spawner(buildPaidWeek1Spec(repoRoot));
+      const finishedAt = new Date().toISOString();
       const parsed = parseIngestionOutput(sub.stdout);
       const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      const canonical = inspectStoredWeek1OddsOnDisk(repoRoot).canonical.present;
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: WEEK1_FULL_RESULT_FILE,
+        action: "paid-week1",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: canonical,
+        errorMessage: ok ? undefined : sub.timedOut ? "timed out" : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
+        confirmText: PAID_WEEK1_CONFIRM_TEXT,
+      });
       const result: AdminActionResult = {
         action: "paid-week1",
         ok,
@@ -543,11 +868,31 @@ export async function runAdminAction(
         data: {
           creditsUsed: parsed.creditsUsed,
           creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          canonicalWeek1MarketsFileUpdated: canonical,
+          maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
         },
         creditsUsed: parsed.creditsUsed,
         creditsRemaining: parsed.creditsRemaining,
       };
-      if (ok) recordWeek1Success(repoRoot);
+      if (ok) {
+        recordWeek1Success(repoRoot);
+        await persistence.saveAdminIngestionStateToDb({
+          week1IngestionSucceededAt: finishedAt,
+        });
+      }
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-week1-full",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+      });
       recordActionResult({
         action: "paid-week1",
         result: ok ? "success" : "failure",
@@ -557,26 +902,504 @@ export async function runAdminAction(
       return result;
     }
 
+    case "migrate-odds-to-canonical": {
+      // Pure file-IO. No paid call. Requires only the admin
+      // token; no Odds API gates and no confirmText — this
+      // action just copies bytes between paths.
+      const r = migrateLegacyToCanonical({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      const ok = r.status === "READY";
+      const target = canonicalMarketsPath({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      // Mirror canonical rows to Postgres so a redeploy doesn't
+      // erase the migration result. First delete every stored
+      // row for (2025, 1) so stale rows from a pre-fix migration
+      // (e.g., LA-era gameIds) cannot survive — the upsert key
+      // doesn't catch every shape of stale data. Then write the
+      // newly-normalized rows.
+      let dbUpserted = 0;
+      let dbDeleted = 0;
+      let dbRowCountAfter = 0;
+      let dbError: string | undefined;
+      if (ok && r.target) {
+        try {
+          const cleared = await persistence.deleteCanonicalOddsRowsForWeek({
+            season: 2025,
+            week: 1,
+          });
+          if (cleared.ok) dbDeleted = cleared.deleted ?? 0;
+          else dbError = cleared.error ?? undefined;
+          const parsed = parseWrittenCanonicalCsv(r.target);
+          const saved = await persistence.saveCanonicalOddsRowsToDb({
+            season: 2025,
+            week: 1,
+            rows: parsed,
+          });
+          if (saved.ok) dbUpserted = saved.upserted ?? parsed.length;
+          else dbError = saved.error ?? dbError ?? "unknown DB error";
+          // Verify: count what landed. Catches half-failures
+          // (delete OK, save half-failed) the upsert response
+          // alone wouldn't surface.
+          if (persistence.isAvailable()) {
+            const post = await persistence.countPersistence({
+              season: 2025,
+              week: 1,
+            });
+            if (post.ok) {
+              dbRowCountAfter = post.counts?.storedPropMarketRows ?? 0;
+            } else if (!dbError) {
+              dbError = post.error ?? "count verification failed";
+            }
+          }
+        } catch (err) {
+          dbError = (err as Error).message;
+        }
+      }
+      const persistenceWarning =
+        ok && persistence.isAvailable() && dbRowCountAfter === 0
+          ? "Data is only in ephemeral file cache and will be lost on redeploy."
+          : !persistence.isAvailable() && ok
+            ? "DATABASE_URL not configured — file cache is the only source; data will be lost on redeploy."
+            : undefined;
+      const resultFile = path.join(
+        repoRoot,
+        "data",
+        "admin-ingestion",
+        "latest-odds-migration.json",
+      );
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(
+        resultFile,
+        JSON.stringify(
+          {
+            action: "migrate-odds-to-canonical",
+            ranAt: new Date().toISOString(),
+            status: r.status,
+            target: r.target ?? target,
+            rowsWritten: r.rowsWritten ?? 0,
+            diagnostics: r.diagnostics ?? null,
+            sourcesInspected: r.sourcesInspected,
+            paidApiCallAttempted: false,
+            persistence: {
+              dbAvailable: persistence.isAvailable(),
+              dbDeleted,
+              dbUpserted,
+              dbError: dbError ?? null,
+            },
+            guardrails: {
+              noOddsApiCall: true,
+              noTouchdownProps: true,
+              noAutomatedBetting: true,
+              noKalshiIntegration: true,
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      const result: AdminActionResult = {
+        action: "migrate-odds-to-canonical",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}${
+              dbUpserted > 0
+                ? `; deleted ${dbDeleted} stale + upserted ${dbUpserted} in Postgres (rowCountAfter=${dbRowCountAfter}).`
+                : "."
+            }${persistenceWarning ? ` ⚠ ${persistenceWarning}` : ""}`
+          : `Migration ${r.status}. No canonical file written.`,
+        detail:
+          `sourcesInspected:\n  ${r.sourcesInspected.join("\n  ")}` +
+          (r.diagnostics
+            ? `\ndiagnostics: ${JSON.stringify(r.diagnostics)}`
+            : "") +
+          (dbError ? `\npersistence: ${dbError}` : ""),
+        data: {
+          status: r.status,
+          target: r.target,
+          rowsWritten: r.rowsWritten,
+          diagnostics: r.diagnostics,
+          dbDeleted,
+          dbUpserted,
+          dbRowCountAfter,
+          dbAvailable: persistence.isAvailable(),
+          persistenceWarning: persistenceWarning ?? null,
+        },
+      };
+      recordActionResult({
+        action: "migrate-odds-to-canonical",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
     case "stored-backtest": {
+      // First: if the canonical odds file is missing on disk but
+      // we have rows in Postgres, rehydrate the file from DB.
+      // This handles the redeploy case where the container's
+      // ephemeral filesystem lost the file but the DB row
+      // survives.
+      const rehydration = await rehydrateCanonicalOddsFromDbIfMissing({
+        season: 2025,
+        week: 1,
+        client: persistence,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
       const r = buildRealWeek1CandidatesFromStoredData({
         season: 2025,
         week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
+      // Determine the canonical-odds source for the admin
+      // result. "postgres-rehydrated" when we just wrote the
+      // file from DB, "file" when the file was already there,
+      // "missing" when neither DB nor file had it.
+      const storedBacktestSource: "postgres-rehydrated" | "file" | "missing" =
+        rehydration.rehydrated
+          ? "postgres-rehydrated"
+          : rehydration.source === "file"
+            ? "file"
+            : "missing";
+      // Mirror the data-mode-status file that
+      // run-week-1-starter-test.ts writes, so /backtest/week-1
+      // and /monitor (which read this file) reflect the latest
+      // admin-triggered run. File mirrors the DB save below —
+      // either source survives a Railway redeploy.
+      const statusFile = path.join(
+        repoRoot,
+        "data",
+        "backtests",
+        "2025",
+        "week-1-data-mode-status.fixture.json",
+      );
+      fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+      fs.writeFileSync(
+        statusFile,
+        JSON.stringify(
+          {
+            generatedAt: new Date().toISOString(),
+            season: 2025,
+            week: 1,
+            dataMode: "stored",
+            status: r.status,
+            candidateCount: r.candidates.length,
+            syntheticFixture: false,
+            realWeek1BacktestReady: ok,
+            missingStoredOdds: r.status === "MISSING_STORED_ODDS",
+            missingProcessedNfl: r.status === "MISSING_PROCESSED_NFL",
+            scheduleReport: r.scheduleReport ?? null,
+            notes: r.notes,
+            nextSteps: r.nextSteps,
+            source: "admin-stored-backtest",
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      // When validation fails, attach a structured diagnostic
+      // so the admin UI surfaces the exact mismatch instead of
+      // an opaque "0 candidates" message. The diagnostic is a
+      // pure file-read (canonical CSV + fixture + games.csv) —
+      // no network, no DB call.
+      const debug =
+        r.status === "SCHEDULE_VALIDATION_FAILED"
+          ? buildScheduleValidationDebug({
+              repoRoot,
+              season: 2025,
+              week: 1,
+            })
+          : null;
+      // Mirror the run output to Postgres so the page can read
+      // it back after a redeploy.
+      const dbSave = await persistence.saveStoredBacktestRunToDb({
+        season: 2025,
+        week: 1,
+        dataMode: "stored",
+        status: r.status,
+        realWeek1BacktestReady: ok,
+        scheduleValidationStatus: r.scheduleReport?.status ?? null,
+        syntheticFixture: false,
+        candidatesJson: { candidates: r.candidates.slice(0, 500) },
+      });
       const result: AdminActionResult = {
         action: "stored-backtest",
         ok,
         status: ok ? "success" : "failure",
-        summary: `${r.status} — ${r.candidates.length} candidates`,
-        detail: r.notes.join("\n"),
+        summary: `${r.status} — ${r.candidates.length} candidates${
+          rehydration.rehydrated
+            ? ` (rehydrated ${rehydration.rowsRestored} odds rows from Postgres)`
+            : ""
+        }${
+          debug
+            ? ` · ${debug.invalidGameIds.length} invalid gameIds, ${debug.teamPairIssues.length} pair mismatches`
+            : ""
+        }`,
+        detail:
+          r.notes.join("\n") +
+          `\n--- persistence ---\ncanonical odds source: ${rehydration.source}` +
+          (rehydration.error ? `\nrehydration error: ${rehydration.error}` : "") +
+          `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}` +
+          (debug
+            ? `\n--- schedule-validation debug ---\n` +
+              `canonical rows: ${debug.canonicalRowCount}\n` +
+              `distinct gameIds: ${debug.distinctCanonicalGameIds.join(", ")}\n` +
+              `gameIds in odds but NOT in fixture: ${debug.invalidGameIds.join(", ") || "(none)"}\n` +
+              `gameIds in fixture but NOT in odds: ${debug.missingFromOdds.join(", ") || "(none)"}\n` +
+              `team-pair mismatches:\n` +
+              (debug.teamPairIssues.length === 0
+                ? "  (none)\n"
+                : debug.teamPairIssues
+                    .map(
+                      (i) =>
+                        `  · ${i.gameId} expects ${i.expectedTeams.join("/")}; bad: ${i.badPairs.join(" · ")}`,
+                    )
+                    .join("\n") + "\n") +
+              `first ${debug.firstProblematicRows.length} problematic rows:\n` +
+              debug.firstProblematicRows
+                .map(
+                  (r2) =>
+                    `  · gameId=${r2.gameId} team=${r2.team} opp=${r2.opponent} player=${r2.playerName} book=${r2.sportsbook}`,
+                )
+                .join("\n") +
+              "\nRecommended: re-run the migration so the writer rewrites every row through normalizeTeamAbbreviation. The migration now also deletes stale DB rows for (season, week) before saving."
+            : ""),
         data: {
           status: r.status,
           candidateCount: r.candidates.length,
           scheduleReportStatus: r.scheduleReport?.status,
+          canonicalOddsSource: rehydration.source,
+          storedBacktestSource,
+          storedBacktestDbSave: dbSave.ok ? "ok" : "fail",
+          storedBacktestDbError: dbSave.ok ? null : dbSave.error ?? null,
+          dbAvailable: persistence.isAvailable(),
+          dbRunSaved: dbSave.ok,
+          persistenceWarning:
+            ok && persistence.isAvailable() && !dbSave.ok
+              ? "Backtest output is only in ephemeral file cache and will be lost on redeploy."
+              : !persistence.isAvailable() && ok
+                ? "DATABASE_URL not configured — backtest output is only in the ephemeral file cache."
+                : null,
+          scheduleValidationDebug: debug,
         },
       };
       recordActionResult({
         action: "stored-backtest",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "grade-week1-stored": {
+      // Re-run the candidate builder to get the SAME pregame
+      // candidate set the stored-backtest action persisted, then
+      // grade each candidate against processed nflverse stats.
+      // We rebuild rather than reading candidatesJson from DB so
+      // the grader never depends on the previous row's shape
+      // surviving — same code path, same output.
+      const built = buildRealWeek1CandidatesFromStoredData({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      if (built.status !== "READY") {
+        const result: AdminActionResult = {
+          action: "grade-week1-stored",
+          ok: false,
+          status: "failure",
+          summary: `Cannot grade: candidate builder returned ${built.status}. Run the migration + stored backtest first.`,
+          detail: built.notes.join("\n"),
+          data: { candidateBuilderStatus: built.status },
+        };
+        recordActionResult({
+          action: "grade-week1-stored",
+          result: "failure",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+      const stats = loadProcessedPlayerWeekStatsStrict(
+        path.join(repoRoot, "data", "processed", "nfl"),
+      );
+      if (stats.status !== "READY") {
+        const result: AdminActionResult = {
+          action: "grade-week1-stored",
+          ok: false,
+          status: "failure",
+          summary: `Cannot grade: processed player_week_stats.csv missing at ${stats.source}.`,
+          detail: "Run nflverse ingestion to produce data/processed/nfl/player_week_stats.csv.",
+          data: { playerStatsStatus: stats.status, source: stats.source },
+        };
+        recordActionResult({
+          action: "grade-week1-stored",
+          result: "failure",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+      const grade = gradeStoredWeek1Backtest({
+        candidates: built.candidates,
+        season: 2025,
+        week: 1,
+        playerWeekStats: stats.rows,
+      });
+      // Persist to DB. New row carries both candidatesJson +
+      // resultsJson so the pregame snapshot isn't overwritten;
+      // the latest row wins.
+      const dbSave = await persistence.saveStoredBacktestRunToDb({
+        season: 2025,
+        week: 1,
+        dataMode: "stored",
+        status: built.status,
+        realWeek1BacktestReady: true,
+        scheduleValidationStatus: built.scheduleReport?.status ?? "PASS",
+        syntheticFixture: false,
+        candidatesJson: {
+          candidates: built.candidates.slice(0, 500),
+        },
+        resultsJson: {
+          summary: grade.summary,
+          gradedSampleSize: grade.graded.length,
+          // Persist up to 100 per-candidate graded rows so the
+          // /backtest/week-1 page can render the actual plays
+          // + outcomes without re-running the grader. Cap keeps
+          // the row JSON modest in size.
+          gradedSample: grade.graded.slice(0, 100),
+        },
+      });
+      // File mirror — small, secret-free.
+      const gradedFile = path.join(
+        repoRoot,
+        "data",
+        "backtests",
+        "2025",
+        "week-1-graded-summary.fixture.json",
+      );
+      fs.mkdirSync(path.dirname(gradedFile), { recursive: true });
+      fs.writeFileSync(
+        gradedFile,
+        JSON.stringify(
+          {
+            gradedAt: grade.summary.gradedAt,
+            season: 2025,
+            week: 1,
+            summary: grade.summary,
+            // Persist a few example rows so the page can show a
+            // breakdown without the full 290.
+            samples: grade.graded.slice(0, 20),
+            paidApiCallAttempted: false,
+            guardrails: {
+              noOddsApiCall: true,
+              noTouchdownProps: true,
+              noAutomatedBetting: true,
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      const result: AdminActionResult = {
+        action: "grade-week1-stored",
+        ok: true,
+        status: "success",
+        summary: `Graded ${grade.summary.qualifiedPlays}/${grade.summary.totalCandidates} qualified — OVER hit ${(grade.summary.overSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.overSide.roiPct.toFixed(1)}%, UNDER hit ${(grade.summary.underSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.underSide.roiPct.toFixed(1)}% (better: ${grade.summary.betterSide}).`,
+        detail:
+          `total=${grade.summary.totalCandidates} withActual=${grade.summary.candidatesWithActual} missing=${grade.summary.candidatesMissingActual} pushed=${grade.summary.candidatesPushed}\n` +
+          `OVER:  wins=${grade.summary.overSide.wins} losses=${grade.summary.overSide.losses} units=${grade.summary.overSide.unitsProfit.toFixed(2)}\n` +
+          `UNDER: wins=${grade.summary.underSide.wins} losses=${grade.summary.underSide.losses} units=${grade.summary.underSide.unitsProfit.toFixed(2)}\n` +
+          `DB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
+        data: {
+          summary: grade.summary,
+          dbSaved: dbSave.ok,
+          gradedFile,
+        },
+      };
+      recordActionResult({
+        action: "grade-week1-stored",
+        result: "success",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "verify-persistence": {
+      // Pure read: ping the DB, count rows, peek at the legacy
+      // files, report rehydration availability. No external API.
+      const ping = await persistence.ping();
+      const countsResult = ping.tablesReady
+        ? await persistence.countPersistence({ season: 2025, week: 1 })
+        : { ok: false, counts: undefined };
+      const stored = inspectStoredWeek1OddsOnDisk(repoRoot);
+      const canonicalFilePresent = stored.canonical.present;
+      const dbOddsRows = countsResult.counts?.storedPropMarketRows ?? 0;
+      const dbBacktestRuns = countsResult.counts?.storedBacktestRuns ?? 0;
+      const dbIngestionRuns = countsResult.counts?.oddsIngestionRuns ?? 0;
+      const adminStateExists = countsResult.counts?.adminStateExists ?? false;
+      const canRehydrateOdds = !canonicalFilePresent && dbOddsRows > 0;
+      const canLoadStoredBacktest = dbBacktestRuns > 0;
+      const ok = persistence.isAvailable() && ping.tablesReady;
+      const summary = ok
+        ? `DB ok · ${dbOddsRows} odds rows · ${dbBacktestRuns} backtest runs · ${dbIngestionRuns} ingestion runs · admin state ${adminStateExists ? "present" : "missing"}.`
+        : persistence.isAvailable()
+          ? `DB reachable but tables not ready: ${ping.error ?? "unknown"}.`
+          : `DATABASE_URL not configured — persistence disabled, file cache is the only source.`;
+      const result: AdminActionResult = {
+        action: "verify-persistence",
+        ok,
+        status: ok ? "success" : "failure",
+        summary,
+        detail: [
+          `dbConfigured: ${typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.length > 0}`,
+          `dbAvailable: ${persistence.isAvailable()}`,
+          `prismaTablesReady: ${ping.tablesReady}`,
+          ping.error ? `pingError: ${ping.error}` : null,
+          `StoredPropMarket(2025, w1): ${dbOddsRows} rows`,
+          `StoredBacktestRun(2025, w1): ${dbBacktestRuns} rows`,
+          `OddsIngestionRun(2025, w1): ${dbIngestionRuns} rows`,
+          `AdminIngestionState: ${adminStateExists ? "present" : "missing"}`,
+          `canonical file present: ${canonicalFilePresent}`,
+          `legacy file present: ${stored.legacy.present}`,
+          `canRehydrateCanonicalFromDb: ${canRehydrateOdds}`,
+          `canLoadStoredBacktestFromDb: ${canLoadStoredBacktest}`,
+        ]
+          .filter((line): line is string => line !== null)
+          .join("\n"),
+        data: {
+          dbConfigured:
+            typeof process.env.DATABASE_URL === "string" &&
+            process.env.DATABASE_URL.length > 0,
+          dbAvailable: persistence.isAvailable(),
+          prismaTablesReady: ping.tablesReady,
+          pingError: ping.tablesReady ? null : ping.error ?? null,
+          counts: {
+            storedPropMarketRows: dbOddsRows,
+            storedBacktestRuns: dbBacktestRuns,
+            oddsIngestionRuns: dbIngestionRuns,
+            adminStateExists,
+          },
+          files: {
+            canonicalPresent: canonicalFilePresent,
+            legacyPresent: stored.legacy.present,
+          },
+          canRehydrateCanonicalFromDb: canRehydrateOdds,
+          canLoadStoredBacktestFromDb: canLoadStoredBacktest,
+        },
+      };
+      recordActionResult({
+        action: "verify-persistence",
         result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,
@@ -589,6 +1412,175 @@ export async function runAdminAction(
       throw new Error(`Unknown admin action: ${String(unknown)}`);
     }
   }
+}
+
+interface ScheduleValidationDebug {
+  canonicalRowCount: number;
+  distinctCanonicalGameIds: string[];
+  expectedFixtureGameIds: string[];
+  invalidGameIds: string[];
+  missingFromOdds: string[];
+  teamPairIssues: {
+    gameId: string;
+    expectedTeams: string[];
+    badPairs: string[];
+  }[];
+  firstProblematicRows: {
+    gameId: string;
+    team: string;
+    opponent: string;
+    playerName: string;
+    sportsbook: string;
+  }[];
+}
+
+/**
+ * Build a structured diagnostic explaining why stored-mode
+ * schedule validation failed. Pure file IO: reads the canonical
+ * odds CSV + the static Week 1 fixture + (optionally) the
+ * processed games.csv. Surfaces every mismatch so the admin
+ * page can show the actual broken rows instead of "0
+ * candidates".
+ */
+function buildScheduleValidationDebug(args: {
+  repoRoot: string;
+  season: number;
+  week: number;
+}): ScheduleValidationDebug {
+  const canonicalPath = path.join(
+    args.repoRoot,
+    "data",
+    "processed",
+    "odds",
+    String(args.season),
+    `week-${args.week}-prop-markets.csv`,
+  );
+  let canonical: Array<{
+    season: number;
+    week: number;
+    gameId: string;
+    team: string;
+    opponent: string;
+    playerName: string;
+    sportsbook: string;
+  }> = [];
+  if (fs.existsSync(canonicalPath)) {
+    canonical = parseCsvRows(fs.readFileSync(canonicalPath, "utf8")).map(
+      (r) => ({
+        season: Number(r.season),
+        week: Number(r.week),
+        gameId: r.gameId ?? "",
+        team: r.team ?? "",
+        opponent: r.opponent ?? "",
+        playerName: r.playerName ?? "",
+        sportsbook: r.sportsbook ?? "",
+      }),
+    );
+  }
+  const fixture = getExpectedWeek1Schedule();
+  const fixtureIds = new Set(fixture.games.map((g) => g.gameId));
+  const canonicalIds = [...new Set(canonical.map((r) => r.gameId))].sort();
+
+  const idValidation = validateCanonicalOddsGameIds({
+    rows: canonical,
+    schedule: fixture.games,
+  });
+
+  const fixtureByGameId = new Map(
+    fixture.games.map((g) => [g.gameId, g] as const),
+  );
+  const teamPairIssues: ScheduleValidationDebug["teamPairIssues"] = [];
+  for (const gameId of canonicalIds) {
+    const fx = fixtureByGameId.get(gameId);
+    if (!fx) continue;
+    const expected = [
+      normalizeTeamAbbreviation(fx.awayTeam),
+      normalizeTeamAbbreviation(fx.homeTeam),
+    ];
+    const rowsForGame = canonical.filter((r) => r.gameId === gameId);
+    const pairs = new Map<string, number>();
+    for (const r of rowsForGame)
+      pairs.set(`${r.team}/${r.opponent}`, (pairs.get(`${r.team}/${r.opponent}`) ?? 0) + 1);
+    const badPairs: string[] = [];
+    for (const [pair, count] of pairs) {
+      const [team, opponent] = pair.split("/");
+      const teamN = normalizeTeamAbbreviation(team);
+      const oppN = normalizeTeamAbbreviation(opponent);
+      const teamOk = teamN === expected[0] || teamN === expected[1];
+      const oppOk = oppN === expected[0] || oppN === expected[1];
+      if (!teamOk || !oppOk || teamN === oppN) {
+        badPairs.push(`${pair} × ${count}`);
+      }
+    }
+    if (badPairs.length > 0) {
+      teamPairIssues.push({ gameId, expectedTeams: expected, badPairs });
+    }
+  }
+
+  const invalidIdsSet = new Set(idValidation.invalidGameIds);
+  const teamPairBadIds = new Set(teamPairIssues.map((i) => i.gameId));
+  const firstProblematicRows = canonical
+    .filter(
+      (r) => invalidIdsSet.has(r.gameId) || teamPairBadIds.has(r.gameId),
+    )
+    .slice(0, 20)
+    .map((r) => ({
+      gameId: r.gameId,
+      team: r.team,
+      opponent: r.opponent,
+      playerName: r.playerName,
+      sportsbook: r.sportsbook,
+    }));
+
+  return {
+    canonicalRowCount: canonical.length,
+    distinctCanonicalGameIds: canonicalIds,
+    expectedFixtureGameIds: [...fixtureIds].sort(),
+    invalidGameIds: idValidation.invalidGameIds,
+    missingFromOdds: [...fixtureIds].filter(
+      (g) => !canonicalIds.includes(g),
+    ),
+    teamPairIssues,
+    firstProblematicRows,
+  };
+}
+
+/**
+ * Parse a canonical Week-N CSV back into rows for persistence.
+ * Used by the migrate-odds-to-canonical action — the migration
+ * already wrote the file, so we re-parse it to avoid re-joining
+ * the legacy CSVs in memory. Tolerant of column reordering: the
+ * column index map is built from the header row.
+ */
+function parseWrittenCanonicalCsv(
+  filePath: string,
+): import("../ingestion/canonical-odds-writer").CanonicalPropRow[] {
+  const text = fs.readFileSync(filePath, "utf8");
+  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+  if (lines.length <= 1) return [];
+  const header = lines[0].split(",");
+  const idx = (name: string): number => header.indexOf(name);
+  const out: import("../ingestion/canonical-odds-writer").CanonicalPropRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(",");
+    out.push({
+      season: Number(cells[idx("season")]),
+      week: Number(cells[idx("week")]),
+      gameId: cells[idx("gameId")] ?? "",
+      kickoffTime: cells[idx("kickoffTime")] ?? "",
+      sportsbook: cells[idx("sportsbook")] ?? "",
+      playerName: cells[idx("playerName")] ?? "",
+      team: cells[idx("team")] ?? "",
+      opponent: cells[idx("opponent")] ?? "",
+      marketKey: cells[idx("marketKey")] ?? "",
+      propType: cells[idx("propType")] ?? "",
+      line: Number(cells[idx("line")]),
+      overOdds: Number(cells[idx("overOdds")]),
+      underOdds: Number(cells[idx("underOdds")]),
+      snapshotTime: cells[idx("snapshotTime")] ?? "",
+    });
+  }
+  return out;
 }
 
 // ---- gates + helpers --------------------------------------------------

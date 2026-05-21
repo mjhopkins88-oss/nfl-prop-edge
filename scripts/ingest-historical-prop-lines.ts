@@ -50,6 +50,8 @@ import {
   CREDIT_OVERAGE_ABORT_RATIO,
   MAX_ODDS_API_CREDITS_PER_RUN,
   MIN_ODDS_API_CREDITS_REMAINING,
+  SMOKE_CALIBRATION_MAX_CREDITS,
+  SMOKE_CALIBRATION_MAX_ODDS_REQUESTS,
   V1_INGESTION_MARKETS,
   type V1IngestionMarket,
 } from "../src/config/api-budget";
@@ -73,6 +75,24 @@ import {
   type OddsApiUsage,
 } from "../src/lib/ingestion/odds-api";
 import { validateCreditBudget } from "../src/lib/ingestion/credit-estimator";
+import {
+  buildCanonicalOddsRows,
+  writeCanonicalOddsCsv,
+} from "../src/lib/ingestion/canonical-odds-writer";
+import { parseCsvRows } from "../src/lib/ingestion/nflverse";
+
+function parseCanonRosters(
+  text: string,
+): { playerName: string; team: string; season: number }[] {
+  return parseCsvRows(text)
+    .filter((r) => r.playerName && r.team && r.season)
+    .map((r) => ({
+      playerName: r.playerName,
+      team: r.team,
+      season: Number(r.season),
+    }))
+    .filter((r) => Number.isFinite(r.season));
+}
 import {
   buildCacheKey,
   getCachedResponse,
@@ -121,6 +141,16 @@ interface CliArgs {
   budget: number;
   hoursBefore: number;
   dryRun: boolean;
+  /** When true, run the smallest paid sample: 1 events-list + 1
+   *  event-odds call, then stop. Caps budget at
+   *  SMOKE_CALIBRATION_MAX_CREDITS unless --budget overrides. */
+  calibration: boolean;
+  /** Hard cap on event-odds requests this run will make. */
+  maxOddsRequests?: number;
+  /** Hard cap on credits (defaults to budget). Pre-call guard:
+   *  the run refuses to fire a request whose projected cumulative
+   *  cost would push past this number. */
+  maxCredits?: number;
 }
 
 // --- tiny utilities ---------------------------------------------------
@@ -250,6 +280,7 @@ function parseArgs(argv: string[]): CliArgs {
     budget: MAX_ODDS_API_CREDITS_PER_RUN,
     hoursBefore: 3.5,
     dryRun: true,
+    calibration: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -308,6 +339,15 @@ function parseArgs(argv: string[]): CliArgs {
       case "--execute":
         args.dryRun = false;
         break;
+      case "--calibration":
+        args.calibration = true;
+        break;
+      case "--max-odds-requests":
+        args.maxOddsRequests = Number(eatValue());
+        break;
+      case "--max-credits":
+        args.maxCredits = Number(eatValue());
+        break;
       case "--help":
       case "-h":
         printHelp();
@@ -318,6 +358,24 @@ function parseArgs(argv: string[]): CliArgs {
   }
   if (args.season === undefined) {
     throw new Error("--season is required");
+  }
+  // Calibration mode is the smallest paid sample we'll ever run.
+  // It pins scope=smoke-test, caps odds requests to 1, and lowers
+  // the credit ceiling unless the caller asked for a different
+  // explicit budget/cap. The 50-credit cap exists so a wrong
+  // estimate can never overspend.
+  if (args.calibration) {
+    if (args.scope === undefined) args.scope = "smoke-test";
+    if (args.maxOddsRequests === undefined) {
+      args.maxOddsRequests = SMOKE_CALIBRATION_MAX_ODDS_REQUESTS;
+    }
+    if (args.maxCredits === undefined) {
+      args.maxCredits = SMOKE_CALIBRATION_MAX_CREDITS;
+    }
+    if (args.budget === MAX_ODDS_API_CREDITS_PER_RUN) {
+      // Caller didn't override --budget; align it to the cap.
+      args.budget = SMOKE_CALIBRATION_MAX_CREDITS;
+    }
   }
   const weeks = resolveWeeks({
     weeksSpec: args.weeksSpec,
@@ -941,10 +999,23 @@ async function main(argv: string[]): Promise<number> {
 
   // --- group by snapshot, build the plan
   const snapshots = groupBySnapshot(games, args.hoursBefore);
+  // When `--max-odds-requests` (or `--calibration`) caps the run,
+  // the plan estimate must reflect that ceiling — otherwise the
+  // up-front budget guard refuses the run even though we'd only
+  // actually fire a handful of requests.
+  const cappedTotalEvents =
+    args.maxOddsRequests !== undefined
+      ? Math.min(games.length, args.maxOddsRequests)
+      : games.length;
+  const cappedSnapshots =
+    args.maxOddsRequests !== undefined
+      ? Math.min(snapshots.length, args.maxOddsRequests)
+      : snapshots.length;
   const plan = estimateCredits({
-    uniqueSnapshots: snapshots.length,
-    totalEvents: games.length,
+    uniqueSnapshots: cappedSnapshots,
+    totalEvents: cappedTotalEvents,
     marketsPerEvent: INGESTION_MARKETS.length,
+    marketKeys: INGESTION_MARKETS,
   });
 
   // Planned request count = one /events per unique snapshot + one
@@ -958,11 +1029,18 @@ async function main(argv: string[]): Promise<number> {
     games,
     INGESTION_MARKETS,
   );
-  const newApiCalls =
-    cacheReport.eventsMisses + cacheReport.oddsMisses;
+  const cappedEventsMisses =
+    args.maxOddsRequests !== undefined
+      ? Math.min(cacheReport.eventsMisses, args.maxOddsRequests)
+      : cacheReport.eventsMisses;
+  const cappedOddsMisses =
+    args.maxOddsRequests !== undefined
+      ? Math.min(cacheReport.oddsMisses, args.maxOddsRequests)
+      : cacheReport.oddsMisses;
+  const newApiCalls = cappedEventsMisses + cappedOddsMisses;
   const creditsForUncachedCalls =
-    cacheReport.eventsMisses * 1 +
-    cacheReport.oddsMisses * INGESTION_MARKETS.length;
+    cappedEventsMisses * 1 +
+    cappedOddsMisses * plan.perEventOddsCallCredits;
 
   printPlanSummary({
     scope: args.scope,
@@ -978,11 +1056,16 @@ async function main(argv: string[]): Promise<number> {
     maxAllowedCredits: args.budget,
   });
 
-  // Hard policy check from src/config/api-budget.ts.
+  // Hard policy check from src/config/api-budget.ts. When the
+  // caller explicitly raised the cap via --max-credits (only the
+  // admin runner does this, with hard-coded values per action),
+  // the validator honours that override instead of the global
+  // constant.
   const validation = validateCreditBudget({
     markets: INGESTION_MARKETS.length,
     regions: [...ALLOWED_ODDS_REGIONS],
     estimatedCredits: plan.estimatedCredits,
+    maxCreditsOverride: args.maxCredits,
   });
   if (!validation.ok) {
     log(
@@ -1051,9 +1134,22 @@ async function main(argv: string[]): Promise<number> {
   const allQuotes: NormalizedPropQuote[] = [];
   let creditsUsedActual = 0;
   let creditsUsedEstimated = 0;
+  let oddsRequestsMade = 0;
+  let firstOddsCallCost: number | null = null;
   let lastRemaining: number | null = null;
+  const runStartedAt = new Date().toISOString();
 
   for (const group of snapshots) {
+    if (
+      args.maxOddsRequests !== undefined &&
+      oddsRequestsMade >= args.maxOddsRequests
+    ) {
+      log(
+        "info",
+        `Hit --max-odds-requests=${args.maxOddsRequests} before next snapshot. Stopping.`,
+      );
+      break;
+    }
     log("info", `Snapshot ${group.snapshotISO}: fetching events list (${group.games.length} games target)`);
     const eventsRes = await fetchEventsCached({
       apiKey: apiKey!,
@@ -1097,9 +1193,35 @@ async function main(argv: string[]): Promise<number> {
         );
         continue;
       }
+      // Per-call estimate under the corrected model: each market in
+      // the V1 set is player_* → 10 credits × 1 region.
+      const estCost = plan.perEventOddsCallCredits;
+      // Pre-call budget guard: refuse if projected cumulative actual
+      // would exceed maxCredits. Catches an overspend BEFORE we send
+      // the request, instead of only after the response comes back.
+      const maxCredits = args.maxCredits ?? args.budget;
+      const projected = creditsUsedActual + estCost;
+      if (projected > maxCredits) {
+        log(
+          "error",
+          `ABORT before request: projected cumulative actual ${projected} would exceed --max-credits ${maxCredits} (per-call estimate ${estCost} for ${INGESTION_MARKETS.length} player-prop markets).`,
+        );
+        await usageLog.close();
+        return 4;
+      }
+      if (
+        args.maxOddsRequests !== undefined &&
+        oddsRequestsMade >= args.maxOddsRequests
+      ) {
+        log(
+          "info",
+          `Hit --max-odds-requests=${args.maxOddsRequests}. Stopping after ${oddsRequestsMade} odds call(s).`,
+        );
+        break;
+      }
       log(
         "info",
-        `  ${game.awayTeamAbbr}@${game.homeTeamAbbr}  event=${event.id}  fetching odds for ${INGESTION_MARKETS.length} markets`,
+        `  ${game.awayTeamAbbr}@${game.homeTeamAbbr}  event=${event.id}  fetching odds for ${INGESTION_MARKETS.length} markets (est ${estCost} credits)`,
       );
       const oddsRes = await fetchOddsCached({
         apiKey: apiKey!,
@@ -1107,7 +1229,7 @@ async function main(argv: string[]): Promise<number> {
         snapshotISO: group.snapshotISO,
         markets: INGESTION_MARKETS,
       });
-      const estCost = INGESTION_MARKETS.length;
+      oddsRequestsMade += 1;
       const actCost = oddsRes.fromCache
         ? 0
         : oddsRes.usage?.last ?? estCost;
@@ -1115,6 +1237,9 @@ async function main(argv: string[]): Promise<number> {
       creditsUsedActual += actCost;
       if (oddsRes.usage?.remaining != null)
         lastRemaining = oddsRes.usage.remaining;
+      if (firstOddsCallCost === null && !oddsRes.fromCache) {
+        firstOddsCallCost = actCost;
+      }
       await usageLog.record({
         endpoint: "historical-event-odds",
         url: oddsRes.url,
@@ -1168,13 +1293,150 @@ async function main(argv: string[]): Promise<number> {
 
   log("info", `Wrote ${marketsPath} (${nMarkets} rows)`);
   log("info", `Wrote ${quotesPath} (${nQuotes} rows)`);
+
+  // Also write the canonical per-week file the stored backtest
+  // expects. Joins allMarkets + allQuotes against the same games
+  // we already loaded, plus rosters (if present) to resolve
+  // player → team. Skipped when --weeks spans more than one
+  // week (the per-week schema is single-week).
+  try {
+    const seasons = new Set(games.map((g) => g.season));
+    const weeks = new Set(games.map((g) => g.week));
+    if (seasons.size === 1 && weeks.size === 1) {
+      const onlySeason = [...seasons][0]!;
+      const onlyWeek = [...weeks][0]!;
+      const rostersCsv = path.join(process.cwd(), "data", "processed", "nfl", "rosters.csv");
+      const rosters = fs.existsSync(rostersCsv)
+        ? parseCanonRosters(fs.readFileSync(rostersCsv, "utf8"))
+        : undefined;
+      const playerWeekStatsCsv = path.join(
+        process.cwd(),
+        "data",
+        "processed",
+        "nfl",
+        "player_week_stats.csv",
+      );
+      const playerWeekStats = fs.existsSync(playerWeekStatsCsv)
+        ? parseCsvRows(fs.readFileSync(playerWeekStatsCsv, "utf8"))
+            .map((r) => ({
+              playerName: r.playerName,
+              team: r.team,
+              season: Number(r.season),
+              week: Number(r.week),
+            }))
+            .filter(
+              (r) =>
+                r.season === onlySeason &&
+                r.week === onlyWeek &&
+                r.playerName &&
+                r.team,
+            )
+        : undefined;
+      const built = buildCanonicalOddsRows({
+        markets: allMarkets.map((m) => ({
+          market_key: m.market_key,
+          game_id: m.game_id,
+          player_name: m.player_name,
+          prop_type: m.prop_type,
+          line: m.line,
+          snapshot_time: m.snapshot_time,
+        })),
+        quotes: allQuotes.map((q) => ({
+          market_key: q.market_key,
+          book_name: q.book_name,
+          over_price: q.over_price,
+          under_price: q.under_price,
+          quote_time: q.quote_time,
+        })),
+        games: games.map((g) => ({
+          gameId: g.gameId,
+          season: g.season,
+          week: g.week,
+          startTimeUtc: g.kickoffISO,
+          homeTeam: g.homeTeamAbbr,
+          awayTeam: g.awayTeamAbbr,
+        })),
+        rosters,
+        playerWeekStats,
+      });
+      const wrote = writeCanonicalOddsCsv({
+        rows: built.rows,
+        season: onlySeason,
+        week: onlyWeek,
+      });
+      log(
+        "info",
+        `Wrote ${wrote.target} (${wrote.rowsWritten} canonical rows; quotes=${built.diagnostics.quotesProcessed} dropMissingTeam=${built.diagnostics.droppedMissingTeam} dropInvalidTeam=${built.diagnostics.droppedInvalidTeamForGame} dropAmbiguousTeam=${built.diagnostics.droppedAmbiguousTeam} dropMissingGame=${built.diagnostics.droppedMissingGame})`,
+      );
+    }
+  } catch (err) {
+    log("warn", `Canonical writer failed (continuing): ${(err as Error).message}`);
+  }
+
   log(
     "info",
     `Done. Credits estimated=${creditsUsedEstimated} actual=${creditsUsedActual} remaining=${lastRemaining ?? "?"} budget=${args.budget}. ` +
       `Usage log: ${usageLogPath}`,
   );
+  if (args.calibration) {
+    writeCalibrationResult({
+      mode: "calibration",
+      startedAt: runStartedAt,
+      finishedAt: new Date().toISOString(),
+      status: "success",
+      markets: INGESTION_MARKETS,
+      perMarketEstimatedRate: plan.perEventOddsCallCredits / INGESTION_MARKETS.length,
+      firstOddsCallActualCost: firstOddsCallCost,
+      perMarketObservedRate:
+        firstOddsCallCost !== null
+          ? firstOddsCallCost / INGESTION_MARKETS.length
+          : null,
+      creditsUsedActual,
+      creditsRemaining: lastRemaining,
+      oddsRequestsMade,
+      maxCredits: args.maxCredits ?? args.budget,
+    });
+  }
   await usageLog.close();
   return 0;
+}
+
+interface CalibrationResult {
+  mode: "calibration";
+  startedAt: string;
+  finishedAt: string;
+  status: "success" | "failure";
+  markets: readonly string[];
+  perMarketEstimatedRate: number;
+  firstOddsCallActualCost: number | null;
+  perMarketObservedRate: number | null;
+  creditsUsedActual: number;
+  creditsRemaining: number | null;
+  oddsRequestsMade: number;
+  maxCredits: number;
+  errorMessage?: string;
+}
+
+function writeCalibrationResult(args: CalibrationResult): string {
+  const target = path.join(
+    process.cwd(),
+    "data",
+    "admin-ingestion",
+    "latest-odds-calibration.json",
+  );
+  ensureDir(path.dirname(target));
+  const payload = {
+    ...args,
+    paidApiCallAttempted: true,
+    guardrails: {
+      noTouchdownProps: true,
+      noAutomatedBetting: true,
+      noKalshiIntegration: true,
+    },
+  };
+  fs.writeFileSync(target, JSON.stringify(payload, null, 2) + "\n");
+  log("info", `Wrote calibration result: ${target}`);
+  return target;
 }
 
 function safeName(iso: string): string {
