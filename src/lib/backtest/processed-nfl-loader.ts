@@ -35,6 +35,7 @@ import {
   getExpectedWeek1Schedule,
   type ExpectedWeek1Game,
 } from "./week-1-schedule-validation";
+import { normalizeTeamAbbreviation } from "./week-1-game-id-mapper";
 
 const DEFAULT_PROCESSED_DIR = path.join(
   process.cwd(),
@@ -193,20 +194,31 @@ export function getRealWeekScheduleFromProcessedData(args: {
         games: [],
       };
     }
+    // Apply team-abbrev normalization (LA → LAR, etc.) and
+    // recompute the canonical gameId so this schedule view
+    // matches the fixture and the canonical odds file. Without
+    // this, games.csv's "2025-w1-hou-at-la" would diverge from
+    // the fixture's "2025-w1-hou-at-lar" and break the
+    // in-schedule filter for that game.
     return {
       status: "READY",
       source: processedGames.source,
-      games: weekGames.map((g) => ({
-        season: g.season,
-        week: g.week,
-        gameId: g.gameId,
-        awayTeam: g.awayTeam,
-        homeTeam: g.homeTeam,
-        kickoffTime: g.startTimeUtc ?? "",
-        venue: g.stadium ?? "",
-        neutralSite: false,
-        sourceNote: "processed data/processed/nfl/games.csv",
-      })),
+      games: weekGames.map((g) => {
+        const awayTeam = normalizeTeamAbbreviation(g.awayTeam);
+        const homeTeam = normalizeTeamAbbreviation(g.homeTeam);
+        const canonicalId = `${g.season}-w${g.week}-${awayTeam.toLowerCase()}-at-${homeTeam.toLowerCase()}`;
+        return {
+          season: g.season,
+          week: g.week,
+          gameId: canonicalId,
+          awayTeam,
+          homeTeam,
+          kickoffTime: g.startTimeUtc ?? "",
+          venue: g.stadium ?? "",
+          neutralSite: false,
+          sourceNote: "processed data/processed/nfl/games.csv (team-normalized)",
+        };
+      }),
     };
   }
   // Fall back to the schedule fixture — Week 1 2025 only today.

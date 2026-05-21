@@ -24,6 +24,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseCsvRows } from "./nflverse";
+import { normalizeTeamAbbreviation } from "../backtest/week-1-game-id-mapper";
 import type { PropType } from "../types";
 
 export interface CanonicalPropRow {
@@ -120,14 +121,48 @@ export function buildCanonicalOddsRows(
   const marketsByKey = new Map<string, CanonicalWriterInputs["markets"][number]>();
   for (const m of inputs.markets) marketsByKey.set(m.market_key, m);
 
-  const gamesById = new Map<string, CanonicalWriterInputs["games"][number]>();
-  for (const g of inputs.games) gamesById.set(g.gameId, g);
+  // Normalize home/away team abbreviations at lookup-build time
+  // (LA → LAR, etc.) and re-derive the canonical gameId from the
+  // normalized pair. The schedule fixture is the source of truth
+  // for team naming, so every downstream row will match it.
+  const normalizedGameById = new Map<
+    string,
+    {
+      gameId: string;
+      season: number;
+      week: number;
+      startTimeUtc?: string;
+      homeTeam: string;
+      awayTeam: string;
+    }
+  >();
+  for (const g of inputs.games) {
+    const homeTeam = normalizeTeamAbbreviation(g.homeTeam);
+    const awayTeam = normalizeTeamAbbreviation(g.awayTeam);
+    const canonicalId = `${g.season}-w${g.week}-${awayTeam.toLowerCase()}-at-${homeTeam.toLowerCase()}`;
+    const normalized = {
+      gameId: canonicalId,
+      season: g.season,
+      week: g.week,
+      startTimeUtc: g.startTimeUtc,
+      homeTeam,
+      awayTeam,
+    };
+    // Index by both the source gameId (so legacy markets that
+    // carry the un-normalized id still join) AND the canonical
+    // id (for forward-compatible callers).
+    normalizedGameById.set(g.gameId, normalized);
+    normalizedGameById.set(canonicalId, normalized);
+  }
 
   // Player → team lookup, partitioned by season for stability.
   // Within a season, multiple rosters rows for the same player +
-  // team (different weeks) collapse to one entry.
+  // team (different weeks) collapse to one entry. Team values are
+  // normalized as they're indexed so the resolver can match
+  // against the normalized game.
   const playerTeamBySeason = new Map<number, Map<string, Set<string>>>();
   for (const r of inputs.rosters ?? []) {
+    const team = normalizeTeamAbbreviation(r.team);
     const seasonMap =
       playerTeamBySeason.get(r.season) ??
       (() => {
@@ -136,7 +171,7 @@ export function buildCanonicalOddsRows(
         return m;
       })();
     const set = seasonMap.get(r.playerName) ?? new Set<string>();
-    set.add(r.team);
+    set.add(team);
     seasonMap.set(r.playerName, set);
   }
 
@@ -175,7 +210,7 @@ export function buildCanonicalOddsRows(
       diag.droppedMissingMarket += 1;
       continue;
     }
-    const g = gamesById.get(m.game_id);
+    const g = normalizedGameById.get(m.game_id);
     if (!g) {
       diag.droppedMissingGame += 1;
       continue;
