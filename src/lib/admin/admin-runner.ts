@@ -31,6 +31,10 @@ import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-ca
 import { gradeStoredWeek1Backtest } from "../backtest/week-1-grading";
 import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
 import {
+  applyScorecardToCandidates,
+  buildPlayerHistoryByName,
+} from "../backtest/stored-candidate-scorecard";
+import {
   buildCanonicalOddsRows,
   canonicalMarketsPath,
   migrateLegacyToCanonical,
@@ -1249,8 +1253,25 @@ export async function runAdminAction(
         });
         return result;
       }
-      const grade = gradeStoredWeek1Backtest({
+      // Apply the V1 scorecard to each candidate using the
+      // same projection engine + decision authority the live
+      // Player Props page uses. Strict-before player history
+      // is built from the processed nflverse rows we just
+      // loaded. The output candidates carry a `.scorecard`
+      // field that the grader uses to compute recommended-
+      // plays performance.
+      const playerHistoryByName = buildPlayerHistoryByName({
         candidates: built.candidates,
+        season: 2025,
+        week: 1,
+        playerWeekStats: stats.rows,
+      });
+      const evaluatedCandidates = applyScorecardToCandidates({
+        candidates: built.candidates,
+        playerHistoryByName,
+      });
+      const grade = gradeStoredWeek1Backtest({
+        candidates: evaluatedCandidates,
         season: 2025,
         week: 1,
         playerWeekStats: stats.rows,
@@ -1267,7 +1288,11 @@ export async function runAdminAction(
         scheduleValidationStatus: built.scheduleReport?.status ?? "PASS",
         syntheticFixture: false,
         candidatesJson: {
-          candidates: built.candidates.slice(0, 500),
+          // Evaluated candidates carry scorecard fields; downstream
+          // monitor + backtest pages read them straight from this
+          // row so the page can render recommended plays without
+          // re-running the scorecard pass.
+          candidates: evaluatedCandidates.slice(0, 500),
         },
         resultsJson: {
           summary: grade.summary,

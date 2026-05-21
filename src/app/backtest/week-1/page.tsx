@@ -1071,26 +1071,40 @@ function StoredGradedSection({
           </span>
         </div>
         {graded.recommendedPlays.enabled ? (
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-            <Cell
-              label="Plays"
-              value={`${graded.recommendedPlays.count}`}
-              sub={`${graded.recommendedPlays.wins}W · ${graded.recommendedPlays.losses}L · ${graded.recommendedPlays.pushes}P`}
+          <>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <Cell
+                label="Plays"
+                value={`${graded.recommendedPlays.count}`}
+                sub={`${graded.recommendedPlays.wins}W · ${graded.recommendedPlays.losses}L · ${graded.recommendedPlays.pushes}P`}
+              />
+              <Cell
+                label="Hit rate"
+                value={`${graded.recommendedPlays.hitRatePct.toFixed(1)}%`}
+              />
+              <Cell
+                label="ROI"
+                value={`${graded.recommendedPlays.roiPct.toFixed(1)}%`}
+                sub={`${graded.recommendedPlays.unitsProfit.toFixed(2)} units`}
+              />
+              <Cell
+                label="Avg edge / confidence"
+                value={`${graded.recommendedPlays.averageEdgePct.toFixed(1)}% / ${graded.recommendedPlays.averageConfidence.toFixed(2)}`}
+              />
+            </div>
+            <RecommendedBreakdownTable
+              title="By prop type"
+              rows={graded.recommendedPlays.byPropType}
             />
-            <Cell
-              label="Hit rate"
-              value={`${graded.recommendedPlays.hitRatePct.toFixed(1)}%`}
+            <RecommendedBreakdownTable
+              title="By confidence tier"
+              rows={graded.recommendedPlays.byConfidenceTier}
             />
-            <Cell
-              label="ROI"
-              value={`${graded.recommendedPlays.roiPct.toFixed(1)}%`}
-              sub={`${graded.recommendedPlays.unitsProfit.toFixed(2)} units`}
+            <RecommendedBreakdownTable
+              title="By edge bucket"
+              rows={graded.recommendedPlays.byEdgeBucket}
             />
-            <Cell
-              label="Avg edge / confidence"
-              value={`${graded.recommendedPlays.averageEdgePct.toFixed(1)}% / ${graded.recommendedPlays.averageConfidence.toFixed(2)}`}
-            />
-          </div>
+          </>
         ) : (
           <p className="mt-2 rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
             {graded.recommendedPlays.note}
@@ -1235,6 +1249,69 @@ function StoredGradedSection({
         </div>
       )}
     </section>
+  );
+}
+
+function RecommendedBreakdownTable({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{
+    label: string;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+  }>;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg bg-white/65 p-3 ring-1 ring-white/40">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {title}
+      </div>
+      <table className="mt-2 min-w-full text-xs">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            <th className="pb-1 pr-2">Label</th>
+            <th className="pb-1 pr-2 text-right">Plays</th>
+            <th className="pb-1 pr-2 text-right">W · L · P</th>
+            <th className="pb-1 pr-2 text-right">Hit</th>
+            <th className="pb-1 pr-2 text-right">ROI</th>
+            <th className="pb-1 text-right">Units</th>
+          </tr>
+        </thead>
+        <tbody className="text-ink-800">
+          {rows.map((r) => (
+            <tr key={r.label} className="border-t border-white/40">
+              <td className="py-1 pr-2">{r.label.replace(/_/g, " ")}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{r.count}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {r.wins} · {r.losses} · {r.pushes}
+              </td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {r.hitRatePct.toFixed(1)}%
+              </td>
+              <td
+                className={
+                  "py-1 pr-2 text-right tabular-nums " +
+                  (r.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                }
+              >
+                {r.roiPct.toFixed(1)}%
+              </td>
+              <td className="py-1 text-right tabular-nums">
+                {r.unitsProfit.toFixed(2)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

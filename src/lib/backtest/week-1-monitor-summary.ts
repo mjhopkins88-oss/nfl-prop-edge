@@ -50,6 +50,17 @@ export interface GradedLineBucket {
   underSide: GradedSideSnapshot;
 }
 
+export interface RecommendedPlayRow {
+  label: string;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
 export interface GradedSampleRow {
   candidateId: string;
   gameId: string;
@@ -107,6 +118,9 @@ export interface GradedSnapshot {
     unitsProfit: number;
     averageEdgePct: number;
     averageConfidence: number;
+    byPropType: RecommendedPlayRow[];
+    byConfidenceTier: RecommendedPlayRow[];
+    byEdgeBucket: RecommendedPlayRow[];
   };
   /** Parlay-builder integration — same gating as recommended
    *  plays. Stays disabled until per-leg model fields land. */
@@ -270,6 +284,38 @@ interface GradedFileShape {
       unitsProfit: number;
       averageEdgePct: number;
       averageConfidence: number;
+      byPropType?: Array<{
+        propType: string;
+        count: number;
+        wins: number;
+        losses: number;
+        pushes: number;
+        hitRatePct: number;
+        roiPct: number;
+        unitsProfit: number;
+      }>;
+      byConfidenceTier?: Array<{
+        tier: "High" | "Medium" | "Low";
+        count: number;
+        wins: number;
+        losses: number;
+        pushes: number;
+        hitRatePct: number;
+        roiPct: number;
+        unitsProfit: number;
+      }>;
+      byEdgeBucket?: Array<{
+        label: string;
+        edgeLow: number;
+        edgeHigh: number;
+        count: number;
+        wins: number;
+        losses: number;
+        pushes: number;
+        hitRatePct: number;
+        roiPct: number;
+        unitsProfit: number;
+      }>;
     };
     parlayPerformance?: {
       enabled: boolean;
@@ -395,19 +441,68 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
           byLineBucket,
         },
     gradedSample: g.gradedSample ?? g.samples ?? [],
-    recommendedPlays: s.recommendedPlays ?? {
-      enabled: false,
-      note: "Recommended-plays section not present in this graded payload.",
-      count: 0,
-      wins: 0,
-      losses: 0,
-      pushes: 0,
-      hitRatePct: 0,
-      roiPct: 0,
-      unitsProfit: 0,
-      averageEdgePct: 0,
-      averageConfidence: 0,
-    },
+    recommendedPlays: s.recommendedPlays
+      ? {
+          enabled: s.recommendedPlays.enabled,
+          note: s.recommendedPlays.note,
+          count: s.recommendedPlays.count,
+          wins: s.recommendedPlays.wins,
+          losses: s.recommendedPlays.losses,
+          pushes: s.recommendedPlays.pushes,
+          hitRatePct: s.recommendedPlays.hitRatePct,
+          roiPct: s.recommendedPlays.roiPct,
+          unitsProfit: s.recommendedPlays.unitsProfit,
+          averageEdgePct: s.recommendedPlays.averageEdgePct,
+          averageConfidence: s.recommendedPlays.averageConfidence,
+          byPropType: (s.recommendedPlays.byPropType ?? []).map((r) => ({
+            label: r.propType,
+            count: r.count,
+            wins: r.wins,
+            losses: r.losses,
+            pushes: r.pushes,
+            hitRatePct: r.hitRatePct,
+            roiPct: r.roiPct,
+            unitsProfit: r.unitsProfit,
+          })),
+          byConfidenceTier: (s.recommendedPlays.byConfidenceTier ?? []).map(
+            (r) => ({
+              label: r.tier,
+              count: r.count,
+              wins: r.wins,
+              losses: r.losses,
+              pushes: r.pushes,
+              hitRatePct: r.hitRatePct,
+              roiPct: r.roiPct,
+              unitsProfit: r.unitsProfit,
+            }),
+          ),
+          byEdgeBucket: (s.recommendedPlays.byEdgeBucket ?? []).map((r) => ({
+            label: r.label,
+            count: r.count,
+            wins: r.wins,
+            losses: r.losses,
+            pushes: r.pushes,
+            hitRatePct: r.hitRatePct,
+            roiPct: r.roiPct,
+            unitsProfit: r.unitsProfit,
+          })),
+        }
+      : {
+          enabled: false,
+          note: "Recommended-plays section not present in this graded payload.",
+          count: 0,
+          wins: 0,
+          losses: 0,
+          pushes: 0,
+          hitRatePct: 0,
+          roiPct: 0,
+          unitsProfit: 0,
+          averageEdgePct: 0,
+          averageConfidence: 0,
+          byPropType: [],
+          byConfidenceTier: [],
+          byEdgeBucket: [],
+        },
     parlayPerformance: s.parlayPerformance ?? {
       enabled: false,
       note: "Parlay section not present in this graded payload.",

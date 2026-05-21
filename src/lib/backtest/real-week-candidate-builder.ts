@@ -45,6 +45,7 @@ import type {
   NflRosterPlayer,
   NflTeamWeekStat,
 } from "../ingestion/nflverse-types";
+import type { StoredCandidateScorecard } from "./stored-candidate-scorecard";
 
 export type RealWeekCandidateStatus =
   | "READY"
@@ -72,6 +73,9 @@ export interface RealWeekCandidate {
   /** STORED_2025 to make it obvious in any debug payload. */
   dataMode: "STORED_2025";
   syntheticFixture: false;
+  /** Populated by `applyScorecardToCandidates`. Absent on raw
+   *  pregame candidates straight from the builder. */
+  scorecard?: StoredCandidateScorecard;
 }
 
 export interface RealWeekCandidateContext {

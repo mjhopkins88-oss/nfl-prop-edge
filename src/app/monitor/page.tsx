@@ -323,6 +323,22 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
                 {stored.graded.recommendedPlays.note}
               </p>
             )}
+            {stored.graded.recommendedPlays.enabled ? (
+              <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                <RecommendedBreakdownPanel
+                  title="By prop type"
+                  rows={stored.graded.recommendedPlays.byPropType}
+                />
+                <RecommendedBreakdownPanel
+                  title="By confidence tier"
+                  rows={stored.graded.recommendedPlays.byConfidenceTier}
+                />
+                <RecommendedBreakdownPanel
+                  title="By edge bucket"
+                  rows={stored.graded.recommendedPlays.byEdgeBucket}
+                />
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 space-y-2">
@@ -476,6 +492,11 @@ interface StoredWeeksRollup {
   byLineBucket: GradedLineBucket[];
   bestPropType: { propType: string; side: "OVER" | "UNDER"; hitRatePct: number } | null;
   worstPropType: { propType: string; side: "OVER" | "UNDER"; hitRatePct: number } | null;
+  /** Best/worst prop type from recommended-plays performance.
+   *  Populated only when the scorecard pass has produced
+   *  qualified plays; falls back to null until then. */
+  bestRecommendedPropType: { propType: string; roiPct: number; hitRatePct: number; count: number } | null;
+  worstRecommendedPropType: { propType: string; roiPct: number; hitRatePct: number; count: number } | null;
 }
 
 function aggregateStoredWeeks(
@@ -682,6 +703,51 @@ function aggregateStoredWeeks(
     }
   }
 
+  // Best/worst prop type from recommended-plays performance.
+  // Aggregates per-prop-type rows across weeks the same way the
+  // diagnostic universe does, then picks the highest/lowest ROI
+  // among markets with at least 5 graded plays.
+  const recByPropType = new Map<
+    string,
+    { count: number; wins: number; losses: number; pushes: number; unitsProfit: number }
+  >();
+  for (const w of storedWeeks) {
+    if (!w.graded?.recommendedPlays.enabled) continue;
+    for (const row of w.graded.recommendedPlays.byPropType) {
+      const prev = recByPropType.get(row.label);
+      if (!prev) {
+        recByPropType.set(row.label, {
+          count: row.count,
+          wins: row.wins,
+          losses: row.losses,
+          pushes: row.pushes,
+          unitsProfit: row.unitsProfit,
+        });
+      } else {
+        prev.count += row.count;
+        prev.wins += row.wins;
+        prev.losses += row.losses;
+        prev.pushes += row.pushes;
+        prev.unitsProfit += row.unitsProfit;
+      }
+    }
+  }
+  let bestRecommendedPropType: StoredWeeksRollup["bestRecommendedPropType"] = null;
+  let worstRecommendedPropType: StoredWeeksRollup["worstRecommendedPropType"] = null;
+  for (const [propType, agg] of recByPropType.entries()) {
+    if (agg.count < 5) continue;
+    const decisive = agg.wins + agg.losses;
+    const hitRatePct = decisive > 0 ? (agg.wins / decisive) * 100 : 0;
+    const roiPct = agg.count > 0 ? (agg.unitsProfit / agg.count) * 100 : 0;
+    const cand = { propType, roiPct, hitRatePct, count: agg.count };
+    if (!bestRecommendedPropType || cand.roiPct > bestRecommendedPropType.roiPct) {
+      bestRecommendedPropType = cand;
+    }
+    if (!worstRecommendedPropType || cand.roiPct < worstRecommendedPropType.roiPct) {
+      worstRecommendedPropType = cand;
+    }
+  }
+
   const overDecisive = over.wins + over.losses;
   const underDecisive = under.wins + under.losses;
   return {
@@ -730,6 +796,8 @@ function aggregateStoredWeeks(
     byLineBucket,
     bestPropType,
     worstPropType,
+    bestRecommendedPropType,
+    worstRecommendedPropType,
   };
 }
 
@@ -777,25 +845,53 @@ function StoredWeeksAggregated({
           </span>
         </div>
         {rollup.recommendedPlaysEnabled ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat
-              label="Recommended plays"
-              value={`${rollup.recommendedPlays.count}`}
-              sub={`${rollup.recommendedPlays.wins}W · ${rollup.recommendedPlays.losses}L · ${rollup.recommendedPlays.pushes}P`}
-            />
-            <Stat
-              label="Hit rate"
-              value={`${rollup.recommendedPlays.hitRatePct.toFixed(1)}%`}
-            />
-            <Stat
-              label="ROI"
-              value={`${rollup.recommendedPlays.roiPct.toFixed(1)}%`}
-            />
-            <Stat
-              label="Units profit"
-              value={`${rollup.recommendedPlays.unitsProfit.toFixed(2)}`}
-            />
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat
+                label="Recommended plays"
+                value={`${rollup.recommendedPlays.count}`}
+                sub={`${rollup.recommendedPlays.wins}W · ${rollup.recommendedPlays.losses}L · ${rollup.recommendedPlays.pushes}P`}
+              />
+              <Stat
+                label="Hit rate"
+                value={`${rollup.recommendedPlays.hitRatePct.toFixed(1)}%`}
+              />
+              <Stat
+                label="ROI"
+                value={`${rollup.recommendedPlays.roiPct.toFixed(1)}%`}
+              />
+              <Stat
+                label="Units profit"
+                value={`${rollup.recommendedPlays.unitsProfit.toFixed(2)}`}
+              />
+              <Stat
+                label="Best prop · recommended"
+                value={
+                  rollup.bestRecommendedPropType
+                    ? rollup.bestRecommendedPropType.propType.replace(/_/g, " ")
+                    : "—"
+                }
+                sub={
+                  rollup.bestRecommendedPropType
+                    ? `${rollup.bestRecommendedPropType.roiPct.toFixed(1)}% ROI · ${rollup.bestRecommendedPropType.count} plays`
+                    : "needs ≥5 plays"
+                }
+              />
+              <Stat
+                label="Worst prop · recommended"
+                value={
+                  rollup.worstRecommendedPropType
+                    ? rollup.worstRecommendedPropType.propType.replace(/_/g, " ")
+                    : "—"
+                }
+                sub={
+                  rollup.worstRecommendedPropType
+                    ? `${rollup.worstRecommendedPropType.roiPct.toFixed(1)}% ROI · ${rollup.worstRecommendedPropType.count} plays`
+                    : "needs ≥5 plays"
+                }
+              />
+            </div>
+          </>
         ) : (
           <p className="rounded-lg bg-ink-100/50 p-3 text-[11px] text-ink-700">
             Model has not yet emitted recommended plays for the stored
@@ -981,6 +1077,61 @@ function StoredBreakdowns({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+function RecommendedBreakdownPanel({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{
+    label: string;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+  }>;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-500">
+        {title}
+      </div>
+      <table className="mt-2 min-w-full text-xs">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            <th className="pb-1 pr-2">Label</th>
+            <th className="pb-1 pr-2 text-right">Plays</th>
+            <th className="pb-1 pr-2 text-right">Hit</th>
+            <th className="pb-1 text-right">ROI</th>
+          </tr>
+        </thead>
+        <tbody className="text-ink-800">
+          {rows.map((r) => (
+            <tr key={r.label} className="border-t border-white/40">
+              <td className="py-1 pr-2">{r.label.replace(/_/g, " ")}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{r.count}</td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {r.hitRatePct.toFixed(1)}%
+              </td>
+              <td
+                className={
+                  "py-1 text-right tabular-nums " +
+                  (r.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                }
+              >
+                {r.roiPct.toFixed(1)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

@@ -601,12 +601,21 @@ async function main(): Promise<void> {
         typeof snap?.graded?.universeDiagnostics.overSide.roiPct === "number",
         "graded.universeDiagnostics.overSide.roiPct must be a number",
       );
-      // Recommended plays + parlay perf are not enabled today
-      // (stored candidates carry no scorecard recommendation).
+      // Admin runner now applies the V1 scorecard to stored
+      // candidates before grading. recommendedPlays.enabled
+      // depends on whether the synthetic candidate qualifies
+      // through the scorecard pipeline — but the field MUST be
+      // a boolean and the structure MUST be intact whether or
+      // not the synthetic prop happens to qualify.
       check(
         r,
-        snap?.graded?.recommendedPlays.enabled === false,
-        `recommendedPlays.enabled=${snap?.graded?.recommendedPlays.enabled}`,
+        typeof snap?.graded?.recommendedPlays.enabled === "boolean",
+        `recommendedPlays.enabled must be boolean, got ${typeof snap?.graded?.recommendedPlays.enabled}`,
+      );
+      check(
+        r,
+        Array.isArray(snap?.graded?.recommendedPlays.byPropType),
+        "recommendedPlays.byPropType must be an array",
       );
       check(
         r,

@@ -734,6 +734,9 @@ async function main(): Promise<void> {
               unitsProfit: 0,
               averageEdgePct: 0,
               averageConfidence: 0,
+              byPropType: [],
+              byConfidenceTier: [],
+              byEdgeBucket: [],
             },
             parlayPerformance: {
               enabled: false,
