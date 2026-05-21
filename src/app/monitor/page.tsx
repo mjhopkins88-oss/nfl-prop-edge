@@ -98,8 +98,11 @@ export default async function MonitorPage(props: MonitorPageProps) {
 
       {selectedWeek === undefined ? (
         <>
-          {/* Season view — default. */}
-          {stored ? <StoredWeek1Panel stored={stored} /> : null}
+          {/* Season view — default. The featured panel shows
+              Week 1's detail (the longest-running stored week).
+              The SeasonStoredWeeksTable below it lists every
+              other graded week. */}
+          {stored ? <StoredWeek1Panel stored={stored} week={1} /> : null}
           {allStoredWeeks.length > 0 ? (
             <SeasonStoredWeeksTable
               weeks={allStoredWeeks}
@@ -117,7 +120,7 @@ export default async function MonitorPage(props: MonitorPageProps) {
       ) : selectedSnapshot ? (
         <>
           {/* Selected-week detail view. */}
-          <StoredWeek1Panel stored={selectedSnapshot} />
+          <StoredWeek1Panel stored={selectedSnapshot} week={selectedWeek} />
           {selectedSnapshot.graded ? (
             <StoredBreakdowns stored={selectedSnapshot} />
           ) : null}
@@ -273,18 +276,32 @@ function Hero({
   );
 }
 
-function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
+function StoredWeek1Panel({
+  stored,
+  week,
+}: {
+  stored: StoredWeek1MonitorSnapshot;
+  /** When supplied, the heading reads "Real Stored Backtest ·
+   *  Week N". When omitted, falls back to the generic "Real
+   *  Stored Backtest" label so the All-view doesn't anchor on
+   *  Week 1 specifically. */
+  week?: number;
+}) {
   const readyTone = stored.realWeek1BacktestReady
     ? "text-sea-700"
     : "text-amber-800";
+  const heading =
+    week !== undefined
+      ? `Real Stored Backtest · Week ${week}`
+      : "Real Stored Backtest";
   return (
     <section
       className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6"
-      data-testid="monitor-stored-week-1"
+      data-testid="monitor-stored-week"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
-          Real Week 1 Stored Backtest
+          {heading}
         </h2>
         <span className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
           Source · {stored.source}
@@ -589,8 +606,8 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
       ) : (
         <p className={`mt-3 text-[11px] ${readyTone}`}>
           {stored.realWeek1BacktestReady
-            ? "Stored Week 1 pregame candidates loaded. Click \"Grade Week 1 stored backtest\" on /admin/ingestion to compute hit rate / ROI from processed nflverse stats. No API call."
-            : `Stored run not ready: ${stored.status}. Run /admin/ingestion → Migrate → Run Week 1 stored backtest.`}
+            ? `Stored ${week !== undefined ? `Week ${week}` : "weekly"} pregame candidates loaded. Click "Grade Stored Backtest" on /admin/ingestion for this week to compute hit rate / ROI from processed nflverse stats. No API call.`
+            : `Stored run not ready: ${stored.status}. Run /admin/ingestion → Migrate → Run Stored Backtest for the selected week.`}
         </p>
       )}
       {stored.generatedAt ? (

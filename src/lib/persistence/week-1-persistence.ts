@@ -146,6 +146,16 @@ export interface PersistenceClient {
     season: number;
     week: number;
   }): Promise<PersistenceCallResult & { run?: StoredBacktestRecord }>;
+
+  /** Load the latest StoredBacktestRun for EVERY (season, week)
+   *  in `season`. Returns one entry per distinct week — the row
+   *  with the most recent createdAt wins, so callers see the
+   *  same snapshot the per-week loader would return. Used by
+   *  the monitor's "All stored weeks" view to avoid 18 separate
+   *  DB roundtrips. */
+  loadAllStoredBacktestRunsFromDb(args: {
+    season: number;
+  }): Promise<PersistenceCallResult & { runs?: StoredBacktestRecord[] }>;
 }
 
 // ---- "no DB configured" client ---------------------------------------
@@ -189,6 +199,9 @@ export function nullPersistenceClient(): PersistenceClient {
       return { ...NOT_AVAILABLE };
     },
     async loadLatestStoredBacktestRunFromDb() {
+      return { ...NOT_AVAILABLE };
+    },
+    async loadAllStoredBacktestRunsFromDb() {
       return { ...NOT_AVAILABLE };
     },
   };
@@ -303,6 +316,20 @@ export function inMemoryPersistenceClient(): PersistenceClient & {
       );
       return { ...ok(), run: hits[hits.length - 1] };
     },
+    async loadAllStoredBacktestRunsFromDb(args) {
+      // For every distinct week present in season, return the
+      // LATEST row — matches the Prisma adapter's behaviour.
+      const inSeason = store.backtestRuns.filter(
+        (r) => r.season === args.season,
+      );
+      const latestByWeek = new Map<number, StoredBacktestRecord>();
+      for (const r of inSeason) {
+        // Iteration order is insertion order; later writes win.
+        latestByWeek.set(r.week, r);
+      }
+      const runs = [...latestByWeek.values()].sort((a, b) => a.week - b.week);
+      return { ...ok(), runs };
+    },
   };
 }
 
@@ -348,6 +375,10 @@ interface PrismaLike {
       where: Record<string, unknown>;
       orderBy?: unknown;
     }) => Promise<Record<string, unknown> | null>;
+    findMany: (args: {
+      where: Record<string, unknown>;
+      orderBy?: unknown;
+    }) => Promise<Record<string, unknown>[]>;
     count: (args: { where: Record<string, unknown> }) => Promise<number>;
   };
   $disconnect: () => Promise<void>;
@@ -703,6 +734,47 @@ export function prismaPersistenceClient(prisma: PrismaLike): PersistenceClient {
             (row.gameEdgeJson as Record<string, unknown> | null) ?? null,
         };
         return { ...okPg(), run };
+      } catch (err) {
+        return fail(err);
+      }
+    },
+    async loadAllStoredBacktestRunsFromDb(args) {
+      // One ordered fetch; pick the latest createdAt per
+      // distinct week. Avoids 18 separate findFirst() calls
+      // when the monitor refreshes its season view.
+      try {
+        const rows = await prisma.storedBacktestRun.findMany({
+          where: { season: args.season },
+          orderBy: { createdAt: "desc" },
+        });
+        const latestByWeek = new Map<number, StoredBacktestRecord>();
+        for (const row of rows) {
+          const week = row.week as number;
+          // First insert per week wins because rows are sorted
+          // by createdAt desc.
+          if (latestByWeek.has(week)) continue;
+          latestByWeek.set(week, {
+            season: row.season as number,
+            week,
+            dataMode: String(row.dataMode),
+            status: String(row.status),
+            realWeek1BacktestReady: Boolean(row.realWeek1BacktestReady),
+            scheduleValidationStatus:
+              (row.scheduleValidationStatus as string | null) ?? null,
+            syntheticFixture: Boolean(row.syntheticFixture),
+            candidatesJson:
+              (row.candidatesJson as Record<string, unknown> | null) ?? null,
+            resultsJson:
+              (row.resultsJson as Record<string, unknown> | null) ?? null,
+            v1v2Json: (row.v1v2Json as Record<string, unknown> | null) ?? null,
+            parlayJson:
+              (row.parlayJson as Record<string, unknown> | null) ?? null,
+            gameEdgeJson:
+              (row.gameEdgeJson as Record<string, unknown> | null) ?? null,
+          });
+        }
+        const runs = [...latestByWeek.values()].sort((a, b) => a.week - b.week);
+        return { ...okPg(), runs };
       } catch (err) {
         return fail(err);
       }
