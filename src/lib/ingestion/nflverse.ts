@@ -26,6 +26,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeNflKickoffTime } from "./nfl-schedule-time";
 import type {
   NflGame,
   NflGameType,
@@ -302,7 +303,7 @@ export function normalizeGameRow(
     season,
     week,
     gameType: asGameType(row.game_type),
-    startTimeUtc: row.gametime || row.start_time || undefined,
+    startTimeUtc: normalizeNflKickoffTime(row),
     homeTeam,
     awayTeam,
     homeScore: asInt(row.home_score),
