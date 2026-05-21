@@ -1457,6 +1457,189 @@ function ScorecardAuditSection({
           </table>
         </div>
       ) : null}
+
+      {audit.marketContext ? (
+        <div className="mt-4">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Market context audit · gate {audit.marketContext.gateThreshold.toFixed(2)} · clamp floor {audit.marketContext.clampFloor.toFixed(2)}
+          </div>
+          <p className="mt-1 text-[11px] text-ink-600">
+            marketContextScore = clamp(1 − (overround − 1) / 0.10, 0.40, 0.95).
+            Overround is the sum of OVER and UNDER implied
+            probabilities. Typical −110 / −110 props give
+            overround ≈ 1.048 → score 0.52 (passes 0.45 gate);
+            −115 / −115 gives ≈ 1.070 → 0.30 → clamped to 0.40
+            (fails). Score 0.40 means &ldquo;score was ≤0.40
+            before clamp,&rdquo; not &ldquo;exactly 0.40&rdquo;.
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
+            <Cell
+              label="Raw score min · mean · max"
+              value={`${audit.marketContext.rawMin.toFixed(2)} · ${audit.marketContext.rawMean.toFixed(2)} · ${audit.marketContext.rawMax.toFixed(2)}`}
+              sub="rejected candidates only"
+            />
+            <Cell
+              label="At current gate 0.45"
+              value={`${audit.marketContext.simulation.qualifyingAtGate045} would qualify`}
+              sub="end-to-end"
+            />
+            <Cell
+              label="If gate were 0.40"
+              value={`${audit.marketContext.simulation.qualifyingAtGate040} would qualify`}
+              sub="diagnostic only"
+            />
+            <Cell
+              label="If gate were 0.35"
+              value={`${audit.marketContext.simulation.qualifyingAtGate035} would qualify`}
+              sub="diagnostic only"
+            />
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
+            <Cell label="raw ≥ 0.45" value={`${audit.marketContext.rawDistribution.gte045}`} />
+            <Cell label="0.40 ≤ raw < 0.45" value={`${audit.marketContext.rawDistribution.band040To045}`} />
+            <Cell label="0.35 ≤ raw < 0.40" value={`${audit.marketContext.rawDistribution.band035To040}`} />
+            <Cell label="0.20 ≤ raw < 0.35" value={`${audit.marketContext.rawDistribution.band020To035}`} />
+            <Cell label="0.00 ≤ raw < 0.20" value={`${audit.marketContext.rawDistribution.band000To020}`} />
+            <Cell label="raw < 0" value={`${audit.marketContext.rawDistribution.lt000}`} sub="extremely wide juice" />
+          </div>
+        </div>
+      ) : null}
+
+      {audit.missingHistory && audit.missingHistory.totalMissing > 0 ? (
+        <div className="mt-4">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Missing-history audit · {audit.missingHistory.totalMissing} candidates
+          </div>
+          <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
+            <Cell
+              label="Team-switched"
+              value={`${audit.missingHistory.teamSwitched}`}
+              sub="history exists under a different team"
+            />
+            <Cell
+              label="Rookie / unknown"
+              value={`${audit.missingHistory.rookieOrUnknown}`}
+              sub="no rows in player_week_stats"
+            />
+            <Cell
+              label="Name mismatch"
+              value={`${audit.missingHistory.possibleNameMismatch}`}
+              sub="fuzzy match found a different name"
+            />
+          </div>
+          {audit.missingHistory.examples.length > 0 ? (
+            <div className="mt-2 overflow-x-auto">
+              <table className="min-w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                    <th className="pb-1 pr-2">Player</th>
+                    <th className="pb-1 pr-2">Stored team</th>
+                    <th className="pb-1 pr-2">Prop</th>
+                    <th className="pb-1 pr-2">Cause</th>
+                    <th className="pb-1">Matched (team / name)</th>
+                  </tr>
+                </thead>
+                <tbody className="text-ink-800">
+                  {audit.missingHistory.examples.map((ex) => (
+                    <tr key={ex.candidateId} className="border-t border-white/40">
+                      <td className="py-1 pr-2">{ex.playerName}</td>
+                      <td className="py-1 pr-2">{ex.team}</td>
+                      <td className="py-1 pr-2">{ex.propType.replace(/_/g, " ")}</td>
+                      <td className="py-1 pr-2">{ex.cause}</td>
+                      <td className="py-1 text-ink-600">
+                        {ex.matchedTeam ?? "—"}
+                        {ex.matchedName ? ` · ${ex.matchedName}` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {audit.closestToQualifying && audit.closestToQualifying.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Closest to qualifying (smallest gap first · top{" "}
+            {Math.min(audit.closestToQualifying.length, 50)})
+          </div>
+          <table className="mt-1 min-w-full text-[11px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Player</th>
+                <th className="pb-1 pr-2">Prop</th>
+                <th className="pb-1 pr-2 text-right">Line</th>
+                <th className="pb-1 pr-2 text-right">Side</th>
+                <th className="pb-1 pr-2 text-right">Model p</th>
+                <th className="pb-1 pr-2 text-right">Mkt p</th>
+                <th className="pb-1 pr-2 text-right">Edge</th>
+                <th className="pb-1 pr-2 text-right">Conf</th>
+                <th className="pb-1 pr-2 text-right">Risk</th>
+                <th className="pb-1 pr-2 text-right">Mkt ctx</th>
+                <th className="pb-1 pr-2 text-right">Hist</th>
+                <th className="pb-1 pr-2 text-right">Gap</th>
+                <th className="pb-1">Disqualifiers</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {audit.closestToQualifying.slice(0, 50).map((row) => (
+                <tr key={row.candidateId} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{row.playerName}</td>
+                  <td className="py-1 pr-2">{row.propType.replace(/_/g, " ")}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.line}
+                  </td>
+                  <td className="py-1 pr-2 text-right">{row.side}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.modelProbability !== null
+                      ? `${(row.modelProbability * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.marketProbability !== null
+                      ? `${(row.marketProbability * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.edge !== null ? `${(row.edge * 100).toFixed(1)}%` : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.confidence !== null
+                      ? row.confidence.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.riskScore !== null
+                      ? row.riskScore.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.marketContextScore !== null
+                      ? row.marketContextScore.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.historyRows ?? "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums font-semibold">
+                    {row.qualificationGap.toFixed(2)}
+                  </td>
+                  <td className="py-1 truncate text-ink-600">
+                    {row.disqualifiers.join("; ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-2 text-[10px] text-ink-500">
+            Gap = how far below threshold the largest failing
+            gate landed. Smaller is closer. Diagnostic only —
+            no thresholds change.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

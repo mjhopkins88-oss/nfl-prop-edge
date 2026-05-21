@@ -205,8 +205,21 @@ function roleStabilityScore(history: readonly NflPlayerWeekStat[]): number {
 
 /** marketContext 0..1 from the recorded over/under odds overround. */
 function marketContextScore(c: RealWeekCandidate): number {
+  return clamp(rawMarketContextScore(c), 0.4, 0.95);
+}
+
+/** Un-clamped marketContext score — useful for the audit to
+ *  see how negative the score WOULD have been without the
+ *  floor. The live model never sees this; it consumes the
+ *  clamped value via `marketContextScore` above. */
+export function rawMarketContextScore(c: RealWeekCandidate): number {
   const overround = americanImpliedProb(c.overOdds) + americanImpliedProb(c.underOdds);
-  return clamp(1 - (overround - 1) / 0.1, 0.4, 0.95);
+  return 1 - (overround - 1) / 0.1;
+}
+
+/** Overround of a candidate's recorded over/under odds. */
+export function marketOverround(c: RealWeekCandidate): number {
+  return americanImpliedProb(c.overOdds) + americanImpliedProb(c.underOdds);
 }
 
 /** correlationExposure 0..1 from same-player props in the same game. */
