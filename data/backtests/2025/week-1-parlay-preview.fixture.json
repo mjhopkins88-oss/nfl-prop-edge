@@ -1,0 +1,872 @@
+{
+  "generatedAt": "2026-05-20T23:59:46.968Z",
+  "portfolioSummary": {
+    "selectedCount": 4,
+    "filteredCount": 10,
+    "averagePayoutMultiplier": 3.4923023945751224,
+    "averageProjectedHitRate": 0.40843335294117644,
+    "averageRequiredHitRate": 0.31571609320056526,
+    "averageConfidenceAdjustedEV": 0.31328551039562236,
+    "highRiskFilteredOut": 1,
+    "mostCommonPassReason": "Leg Tee Higgins RECEIVING_YARDS confidence 48% below 55% floor",
+    "strongestParlayType": "RB_GAME_SCRIPT_STACK",
+    "weakestParlayType": "QB_COMPLETIONS_RECEIVER_RECEPTIONS",
+    "riskProfileCounts": {
+      "LOW_VARIANCE_CORRELATED": 2,
+      "MEDIUM_VARIANCE_CORRELATED": 2,
+      "HIGH_VARIANCE_YARDAGE": 0,
+      "HIGH_PAYOUT_LONGSHOT": 0,
+      "UNKNOWN_CORRELATION": 0,
+      "OVERSTACKED": 0,
+      "FRAGILE_LINES": 0
+    }
+  },
+  "batchSimulation": {
+    "batchSize": 100,
+    "projectedHitRate": 0.40843335294117644,
+    "averagePayoutMultiplier": 3.4923023945751224,
+    "expectedHits": 40.843335294117644,
+    "expectedReturnUnits": 142.63727765008167,
+    "expectedProfitUnits": 42.63727765008167,
+    "expectedROI": 0.42637277650081673,
+    "breakEvenHitRate": 0.286344046710669
+  },
+  "candidates": [
+    {
+      "id": "parlay-leg-sf-mccaffrey-rushatt-over+leg-sf-mccaffrey-rushyds-over",
+      "parlayType": "RB_GAME_SCRIPT_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-sf-nyg"
+      ],
+      "teams": [
+        "SF"
+      ],
+      "combinedOddsAmerican": 244,
+      "combinedOddsDecimal": 3.4363636363636365,
+      "independentJointProbability": 0.396,
+      "correlationAdjustedJointProbability": 0.42828564705882355,
+      "marketJointProbability": 0.29100529100529104,
+      "expectedValue": 0.47174522352941195,
+      "confidenceAdjustedExpectedValue": 0.3585263698823531,
+      "payoutMultiplier": 3.4363636363636365,
+      "requiredHitRate": 0.3201058201058201,
+      "projectedHitRate": 0.42828564705882355,
+      "correlationScore": 0.6,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 47.2% clears 4% comfort floor",
+        "Confidence-adjusted EV 35.9% clears 2% floor",
+        "Same player rushing attempts + yards (Christian McCaffrey) — strong direct correlation"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-sf-mccaffrey-rushatt-over",
+          "playerName": "Christian McCaffrey",
+          "team": "SF",
+          "opponent": "NYG",
+          "gameId": "game-sf-nyg",
+          "propType": "RUSHING_ATTEMPTS",
+          "side": "OVER",
+          "line": 18.5,
+          "odds": -125
+        },
+        {
+          "id": "leg-sf-mccaffrey-rushyds-over",
+          "playerName": "Christian McCaffrey",
+          "team": "SF",
+          "opponent": "NYG",
+          "gameId": "game-sf-nyg",
+          "propType": "RUSHING_YARDS",
+          "side": "OVER",
+          "line": 88.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-sf-mccaffrey-rushatt-over+leg-sf-mccaffrey-rushyds-over",
+      "parlayType": "RB_GAME_SCRIPT_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-sf-nyg"
+      ],
+      "teams": [
+        "SF"
+      ],
+      "combinedOddsAmerican": 244,
+      "combinedOddsDecimal": 3.4363636363636365,
+      "independentJointProbability": 0.396,
+      "correlationAdjustedJointProbability": 0.42828564705882355,
+      "marketJointProbability": 0.29100529100529104,
+      "expectedValue": 0.47174522352941195,
+      "confidenceAdjustedExpectedValue": 0.3585263698823531,
+      "payoutMultiplier": 3.4363636363636365,
+      "requiredHitRate": 0.3201058201058201,
+      "projectedHitRate": 0.42828564705882355,
+      "correlationScore": 0.6,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 47.2% clears 4% comfort floor",
+        "Confidence-adjusted EV 35.9% clears 2% floor",
+        "Same player rushing attempts + yards (Christian McCaffrey) — strong direct correlation"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-sf-mccaffrey-rushatt-over",
+          "playerName": "Christian McCaffrey",
+          "team": "SF",
+          "opponent": "NYG",
+          "gameId": "game-sf-nyg",
+          "propType": "RUSHING_ATTEMPTS",
+          "side": "OVER",
+          "line": 18.5,
+          "odds": -125
+        },
+        {
+          "id": "leg-sf-mccaffrey-rushyds-over",
+          "playerName": "Christian McCaffrey",
+          "team": "SF",
+          "opponent": "NYG",
+          "gameId": "game-sf-nyg",
+          "propType": "RUSHING_YARDS",
+          "side": "OVER",
+          "line": 88.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-buf-allen-passyds-over+leg-buf-diggs-recyds-over",
+      "parlayType": "QB_RECEIVER_YARDS",
+      "legCount": 2,
+      "gameIds": [
+        "game-buf-mia"
+      ],
+      "teams": [
+        "BUF"
+      ],
+      "combinedOddsAmerican": 264,
+      "combinedOddsDecimal": 3.6446280991735542,
+      "independentJointProbability": 0.372,
+      "correlationAdjustedJointProbability": 0.39799623529411765,
+      "marketJointProbability": 0.2743764172335601,
+      "expectedValue": 0.45054826251823066,
+      "confidenceAdjustedExpectedValue": 0.3424166795138553,
+      "payoutMultiplier": 3.6446280991735542,
+      "requiredHitRate": 0.3018140589569161,
+      "projectedHitRate": 0.39799623529411765,
+      "correlationScore": 0.55,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 45.1% clears 4% comfort floor",
+        "Confidence-adjusted EV 34.2% clears 2% floor",
+        "QB passing yards OVER + Stefon Diggs receiving yards OVER — same-team yardage stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-buf-allen-passyds-over",
+          "playerName": "Josh Allen",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 268.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-buf-diggs-recyds-over",
+          "playerName": "Stefon Diggs",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "RECEIVING_YARDS",
+          "side": "OVER",
+          "line": 72.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-nyj-rodgers-passyds-under+leg-nyj-wilson-recyds-under",
+      "parlayType": "WEATHER_UNDER_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-nyj-ne"
+      ],
+      "teams": [
+        "NYJ"
+      ],
+      "combinedOddsAmerican": 264,
+      "combinedOddsDecimal": 3.6446280991735542,
+      "independentJointProbability": 0.372,
+      "correlationAdjustedJointProbability": 0.3972741176470588,
+      "marketJointProbability": 0.2743764172335601,
+      "expectedValue": 0.44791641225085077,
+      "confidenceAdjustedExpectedValue": 0.291145667963053,
+      "payoutMultiplier": 3.6446280991735542,
+      "requiredHitRate": 0.3018140589569161,
+      "projectedHitRate": 0.3972741176470588,
+      "correlationScore": 0.55,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 44.8% clears 4% comfort floor",
+        "Confidence-adjusted EV 29.1% clears 2% floor",
+        "QB passing yards UNDER + Garrett Wilson receiving yards UNDER — same-team yardage stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-nyj-rodgers-passyds-under",
+          "playerName": "Aaron Rodgers",
+          "team": "NYJ",
+          "opponent": "NE",
+          "gameId": "game-nyj-ne",
+          "propType": "PASSING_YARDS",
+          "side": "UNDER",
+          "line": 242.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-nyj-wilson-recyds-under",
+          "playerName": "Garrett Wilson",
+          "team": "NYJ",
+          "opponent": "NE",
+          "gameId": "game-nyj-ne",
+          "propType": "RECEIVING_YARDS",
+          "side": "UNDER",
+          "line": 64.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-kc-mahomes-completions-over+leg-kc-rice-receptions-over",
+      "parlayType": "QB_COMPLETIONS_RECEIVER_RECEPTIONS",
+      "legCount": 2,
+      "gameIds": [
+        "game-kc-den"
+      ],
+      "teams": [
+        "KC"
+      ],
+      "combinedOddsAmerican": 224,
+      "combinedOddsDecimal": 3.2435897435897436,
+      "independentJointProbability": 0.3844,
+      "correlationAdjustedJointProbability": 0.41017741176470596,
+      "marketJointProbability": 0.30830039525691694,
+      "expectedValue": 0.3304472458521872,
+      "confidenceAdjustedExpectedValue": 0.2610533242232279,
+      "payoutMultiplier": 3.2435897435897436,
+      "requiredHitRate": 0.33913043478260874,
+      "projectedHitRate": 0.41017741176470596,
+      "correlationScore": 0.5,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 33.0% clears 4% comfort floor",
+        "Confidence-adjusted EV 26.1% clears 2% floor",
+        "QB completions OVER + Rashee Rice receptions OVER — completion / target stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-kc-mahomes-completions-over",
+          "playerName": "Patrick Mahomes",
+          "team": "KC",
+          "opponent": "DEN",
+          "gameId": "game-kc-den",
+          "propType": "PASSING_COMPLETIONS",
+          "side": "OVER",
+          "line": 22.5,
+          "odds": -120
+        },
+        {
+          "id": "leg-kc-rice-receptions-over",
+          "playerName": "Rashee Rice",
+          "team": "KC",
+          "opponent": "DEN",
+          "gameId": "game-kc-den",
+          "propType": "RECEPTIONS",
+          "side": "OVER",
+          "line": 4.5,
+          "odds": -130
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-cin-burrow-passyds-over+leg-cin-higgins-recyds-over-lowconf",
+      "parlayType": "QB_RECEIVER_YARDS",
+      "legCount": 2,
+      "gameIds": [
+        "game-cin-bal"
+      ],
+      "teams": [
+        "CIN"
+      ],
+      "combinedOddsAmerican": 257,
+      "combinedOddsDecimal": 3.569169960474308,
+      "independentJointProbability": 0.3782,
+      "correlationAdjustedJointProbability": 0.4005916647058823,
+      "marketJointProbability": 0.2801771871539313,
+      "expectedValue": 0.42977973608463116,
+      "confidenceAdjustedExpectedValue": 0.25602079745234235,
+      "payoutMultiplier": 3.569169960474308,
+      "requiredHitRate": 0.3081949058693245,
+      "projectedHitRate": 0.4005916647058823,
+      "correlationScore": 0.55,
+      "correlationType": "POSITIVE",
+      "recommendation": "PASS_LEG_NOT_QUALIFIED",
+      "qualified": false,
+      "primaryDisqualifier": "Leg Tee Higgins RECEIVING_YARDS confidence 48% below 55% floor",
+      "reasons": [
+        "Raw EV 43.0% clears 4% comfort floor",
+        "Confidence-adjusted EV 25.6% clears 2% floor",
+        "QB passing yards OVER + Tee Higgins receiving yards OVER — same-team yardage stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-cin-burrow-passyds-over",
+          "playerName": "Joe Burrow",
+          "team": "CIN",
+          "opponent": "BAL",
+          "gameId": "game-cin-bal",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 252.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-cin-higgins-recyds-over-lowconf",
+          "playerName": "Tee Higgins",
+          "team": "CIN",
+          "opponent": "BAL",
+          "gameId": "game-cin-bal",
+          "propType": "RECEIVING_YARDS",
+          "side": "OVER",
+          "line": 56.5,
+          "odds": -115
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-kc-mahomes-attempts-over+leg-kc-rice-receptions-over",
+      "parlayType": "PASS_VOLUME_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-kc-den"
+      ],
+      "teams": [
+        "KC"
+      ],
+      "combinedOddsAmerican": 231,
+      "combinedOddsDecimal": 3.3076923076923075,
+      "independentJointProbability": 0.372,
+      "correlationAdjustedJointProbability": 0.3935650588235294,
+      "marketJointProbability": 0.30232558139534876,
+      "expectedValue": 0.3017921176470586,
+      "confidenceAdjustedExpectedValue": 0.2384157729411763,
+      "payoutMultiplier": 3.3076923076923075,
+      "requiredHitRate": 0.3325581395348838,
+      "projectedHitRate": 0.3935650588235294,
+      "correlationScore": 0.45,
+      "correlationType": "POSITIVE",
+      "recommendation": "STRONG_PARLAY_VALUE",
+      "qualified": true,
+      "reasons": [
+        "Raw EV 30.2% clears 4% comfort floor",
+        "Confidence-adjusted EV 23.8% clears 2% floor",
+        "QB attempts OVER + Rashee Rice receptions OVER — pass-volume stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-kc-mahomes-attempts-over",
+          "playerName": "Patrick Mahomes",
+          "team": "KC",
+          "opponent": "DEN",
+          "gameId": "game-kc-den",
+          "propType": "PASSING_ATTEMPTS",
+          "side": "OVER",
+          "line": 33.5,
+          "odds": -115
+        },
+        {
+          "id": "leg-kc-rice-receptions-over",
+          "playerName": "Rashee Rice",
+          "team": "KC",
+          "opponent": "DEN",
+          "gameId": "game-kc-den",
+          "propType": "RECEPTIONS",
+          "side": "OVER",
+          "line": 4.5,
+          "odds": -130
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-nyj-rodgers-passyds-under+leg-nyj-cook-receptions-over",
+      "parlayType": "PRESSURE_QUICK_GAME_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-nyj-ne"
+      ],
+      "teams": [
+        "NYJ"
+      ],
+      "combinedOddsAmerican": 244,
+      "combinedOddsDecimal": 3.4363636363636365,
+      "independentJointProbability": 0.3844,
+      "correlationAdjustedJointProbability": 0.39844190588235295,
+      "marketJointProbability": 0.29100529100529104,
+      "expectedValue": 0.36919127657754025,
+      "confidenceAdjustedExpectedValue": 0.21379354425709687,
+      "payoutMultiplier": 3.4363636363636365,
+      "requiredHitRate": 0.3201058201058201,
+      "projectedHitRate": 0.39844190588235295,
+      "correlationScore": 0.3,
+      "correlationType": "WEAK",
+      "recommendation": "CORRELATED_WATCH",
+      "qualified": false,
+      "reasons": [
+        "Raw EV 36.9% clears 4% comfort floor",
+        "Confidence-adjusted EV 21.4% clears 2% floor",
+        "Pressure / quick-game setup — Dalvin Cook checkdown receptions while QB passing UNDER"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-nyj-rodgers-passyds-under",
+          "playerName": "Aaron Rodgers",
+          "team": "NYJ",
+          "opponent": "NE",
+          "gameId": "game-nyj-ne",
+          "propType": "PASSING_YARDS",
+          "side": "UNDER",
+          "line": 242.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-nyj-cook-receptions-over",
+          "playerName": "Dalvin Cook",
+          "team": "NYJ",
+          "opponent": "NE",
+          "gameId": "game-nyj-ne",
+          "propType": "RECEPTIONS",
+          "side": "OVER",
+          "line": 3.5,
+          "odds": -125
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-buf-allen-passyds-over+leg-lv-meyers-receptions-over",
+      "parlayType": "CUSTOM",
+      "legCount": 2,
+      "gameIds": [
+        "game-buf-mia",
+        "game-lv-lac"
+      ],
+      "teams": [
+        "BUF",
+        "LV"
+      ],
+      "combinedOddsAmerican": 250,
+      "combinedOddsDecimal": 3.5000000000000004,
+      "independentJointProbability": 0.372,
+      "correlationAdjustedJointProbability": 0.372,
+      "marketJointProbability": 0.2857142857142857,
+      "expectedValue": 0.30200000000000005,
+      "confidenceAdjustedExpectedValue": 0.20656800000000006,
+      "payoutMultiplier": 3.5000000000000004,
+      "requiredHitRate": 0.3142857142857143,
+      "projectedHitRate": 0.372,
+      "correlationScore": 0,
+      "correlationType": "WEAK",
+      "recommendation": "CORRELATED_WATCH",
+      "qualified": false,
+      "reasons": [
+        "Raw EV 30.2% clears 4% comfort floor",
+        "Confidence-adjusted EV 20.7% clears 2% floor",
+        "Different games — leg outcomes treated as independent (weak correlation)."
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-buf-allen-passyds-over",
+          "playerName": "Josh Allen",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 268.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-lv-meyers-receptions-over",
+          "playerName": "Jakobi Meyers",
+          "team": "LV",
+          "opponent": "LAC",
+          "gameId": "game-lv-lac",
+          "propType": "RECEPTIONS",
+          "side": "OVER",
+          "line": 4.5,
+          "odds": -120
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-phi-hurts-passyds-over+leg-phi-smith-recyds-over-lowdq",
+      "parlayType": "QB_RECEIVER_YARDS",
+      "legCount": 2,
+      "gameIds": [
+        "game-phi-was"
+      ],
+      "teams": [
+        "PHI"
+      ],
+      "combinedOddsAmerican": 257,
+      "combinedOddsDecimal": 3.569169960474308,
+      "independentJointProbability": 0.348,
+      "correlationAdjustedJointProbability": 0.3702924705882353,
+      "marketJointProbability": 0.2801771871539313,
+      "expectedValue": 0.3216367626133456,
+      "confidenceAdjustedExpectedValue": 0.1808070839920973,
+      "payoutMultiplier": 3.569169960474308,
+      "requiredHitRate": 0.3081949058693245,
+      "projectedHitRate": 0.3702924705882353,
+      "correlationScore": 0.55,
+      "correlationType": "POSITIVE",
+      "recommendation": "PASS_LEG_NOT_QUALIFIED",
+      "qualified": false,
+      "primaryDisqualifier": "Leg DeVonta Smith data quality 0.42 below 0.55 floor",
+      "reasons": [
+        "Raw EV 32.2% clears 4% comfort floor",
+        "Confidence-adjusted EV 18.1% clears 2% floor",
+        "QB passing yards OVER + DeVonta Smith receiving yards OVER — same-team yardage stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-phi-hurts-passyds-over",
+          "playerName": "Jalen Hurts",
+          "team": "PHI",
+          "opponent": "WAS",
+          "gameId": "game-phi-was",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 226.5,
+          "odds": -115
+        },
+        {
+          "id": "leg-phi-smith-recyds-over-lowdq",
+          "playerName": "DeVonta Smith",
+          "team": "PHI",
+          "opponent": "WAS",
+          "gameId": "game-phi-was",
+          "propType": "RECEIVING_YARDS",
+          "side": "OVER",
+          "line": 64.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-cin-burrow-passyds-over+leg-cin-chase-recyds-over-fragile",
+      "parlayType": "QB_RECEIVER_YARDS",
+      "legCount": 2,
+      "gameIds": [
+        "game-cin-bal"
+      ],
+      "teams": [
+        "CIN"
+      ],
+      "combinedOddsAmerican": 264,
+      "combinedOddsDecimal": 3.6446280991735542,
+      "independentJointProbability": 0.35379999999999995,
+      "correlationAdjustedJointProbability": 0.3785243764705882,
+      "marketJointProbability": 0.2743764172335601,
+      "expectedValue": 0.3795805787068547,
+      "confidenceAdjustedExpectedValue": 0.1791620331496354,
+      "payoutMultiplier": 3.6446280991735542,
+      "requiredHitRate": 0.3018140589569161,
+      "projectedHitRate": 0.3785243764705882,
+      "correlationScore": 0.55,
+      "correlationType": "POSITIVE",
+      "recommendation": "PASS_TOO_FRAGILE",
+      "qualified": false,
+      "primaryDisqualifier": "Leg Ja'Marr Chase RECEIVING_YARDS line fragility 0.88 above 0.85",
+      "reasons": [
+        "Raw EV 38.0% clears 4% comfort floor",
+        "Confidence-adjusted EV 17.9% clears 2% floor",
+        "QB passing yards OVER + Ja'Marr Chase receiving yards OVER — same-team yardage stack"
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-cin-burrow-passyds-over",
+          "playerName": "Joe Burrow",
+          "team": "CIN",
+          "opponent": "BAL",
+          "gameId": "game-cin-bal",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 252.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-cin-chase-recyds-over-fragile",
+          "playerName": "Ja'Marr Chase",
+          "team": "CIN",
+          "opponent": "BAL",
+          "gameId": "game-cin-bal",
+          "propType": "RECEIVING_YARDS",
+          "side": "OVER",
+          "line": 78.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-kc-mahomes-completions-over+leg-lv-meyers-receptions-over",
+      "parlayType": "QB_COMPLETIONS_RECEIVER_RECEPTIONS",
+      "legCount": 2,
+      "gameIds": [
+        "game-kc-den",
+        "game-lv-lac"
+      ],
+      "teams": [
+        "KC",
+        "LV"
+      ],
+      "combinedOddsAmerican": 236,
+      "combinedOddsDecimal": 3.3611111111111116,
+      "independentJointProbability": 0.372,
+      "correlationAdjustedJointProbability": 0.372,
+      "marketJointProbability": 0.29752066115702475,
+      "expectedValue": 0.2503333333333335,
+      "confidenceAdjustedExpectedValue": 0.17122800000000013,
+      "payoutMultiplier": 3.3611111111111116,
+      "requiredHitRate": 0.32727272727272727,
+      "projectedHitRate": 0.372,
+      "correlationScore": 0,
+      "correlationType": "WEAK",
+      "recommendation": "CORRELATED_WATCH",
+      "qualified": false,
+      "reasons": [
+        "Raw EV 25.0% clears 4% comfort floor",
+        "Confidence-adjusted EV 17.1% clears 2% floor",
+        "Different games — leg outcomes treated as independent (weak correlation)."
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-kc-mahomes-completions-over",
+          "playerName": "Patrick Mahomes",
+          "team": "KC",
+          "opponent": "DEN",
+          "gameId": "game-kc-den",
+          "propType": "PASSING_COMPLETIONS",
+          "side": "OVER",
+          "line": 22.5,
+          "odds": -120
+        },
+        {
+          "id": "leg-lv-meyers-receptions-over",
+          "playerName": "Jakobi Meyers",
+          "team": "LV",
+          "opponent": "LAC",
+          "gameId": "game-lv-lac",
+          "propType": "RECEPTIONS",
+          "side": "OVER",
+          "line": 4.5,
+          "odds": -120
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-buf-allen-passyds-over+leg-chi-johnson-rushatt-over",
+      "parlayType": "CUSTOM",
+      "legCount": 2,
+      "gameIds": [
+        "game-buf-mia",
+        "game-chi-det"
+      ],
+      "teams": [
+        "BUF",
+        "CHI"
+      ],
+      "combinedOddsAmerican": 273,
+      "combinedOddsDecimal": 3.7272727272727275,
+      "independentJointProbability": 0.341,
+      "correlationAdjustedJointProbability": 0.341,
+      "marketJointProbability": 0.2682926829268293,
+      "expectedValue": 0.27100000000000013,
+      "confidenceAdjustedExpectedValue": 0.15417516306122453,
+      "payoutMultiplier": 3.7272727272727275,
+      "requiredHitRate": 0.2951219512195122,
+      "projectedHitRate": 0.341,
+      "correlationScore": 0,
+      "correlationType": "WEAK",
+      "recommendation": "CORRELATED_WATCH",
+      "qualified": false,
+      "reasons": [
+        "Raw EV 27.1% clears 4% comfort floor",
+        "Confidence-adjusted EV 15.4% clears 2% floor",
+        "Different games — leg outcomes treated as independent (weak correlation)."
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-buf-allen-passyds-over",
+          "playerName": "Josh Allen",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 268.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-chi-johnson-rushatt-over",
+          "playerName": "Roschon Johnson",
+          "team": "CHI",
+          "opponent": "DET",
+          "gameId": "game-chi-det",
+          "propType": "RUSHING_ATTEMPTS",
+          "side": "OVER",
+          "line": 11.5,
+          "odds": -105
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-chi-johnson-rushatt-over+leg-chi-johnson-rushyds-over",
+      "parlayType": "RB_GAME_SCRIPT_STACK",
+      "legCount": 2,
+      "gameIds": [
+        "game-chi-det"
+      ],
+      "teams": [
+        "CHI"
+      ],
+      "combinedOddsAmerican": 273,
+      "combinedOddsDecimal": 3.7272727272727275,
+      "independentJointProbability": 0.29150000000000004,
+      "correlationAdjustedJointProbability": 0.30971017647058824,
+      "marketJointProbability": 0.2682926829268293,
+      "expectedValue": 0.15437429411764714,
+      "confidenceAdjustedExpectedValue": 0.060161147651380587,
+      "payoutMultiplier": 3.7272727272727275,
+      "requiredHitRate": 0.2951219512195122,
+      "projectedHitRate": 0.30971017647058824,
+      "correlationScore": 0.6,
+      "correlationType": "POSITIVE",
+      "recommendation": "PASS_TOO_MUCH_RISK",
+      "qualified": false,
+      "primaryDisqualifier": "Leg Roschon Johnson RUSHING_YARDS confidence-adjusted edge 0.5pp below 2.5pp floor",
+      "reasons": [
+        "Raw EV 15.4% clears 4% comfort floor",
+        "Confidence-adjusted EV 6.0% clears 2% floor",
+        "Same player rushing attempts + yards (Roschon Johnson) — strong direct correlation"
+      ],
+      "risks": [
+        "Leg Roschon Johnson line sensitivity 0.60 — edge could move"
+      ],
+      "legs": [
+        {
+          "id": "leg-chi-johnson-rushatt-over",
+          "playerName": "Roschon Johnson",
+          "team": "CHI",
+          "opponent": "DET",
+          "gameId": "game-chi-det",
+          "propType": "RUSHING_ATTEMPTS",
+          "side": "OVER",
+          "line": 11.5,
+          "odds": -105
+        },
+        {
+          "id": "leg-chi-johnson-rushyds-over",
+          "playerName": "Roschon Johnson",
+          "team": "CHI",
+          "opponent": "DET",
+          "gameId": "game-chi-det",
+          "propType": "RUSHING_YARDS",
+          "side": "OVER",
+          "line": 45.5,
+          "odds": -110
+        }
+      ]
+    },
+    {
+      "id": "parlay-leg-buf-allen-passyds-over+leg-buf-cook-rushyds-over-longshot",
+      "parlayType": "CUSTOM",
+      "legCount": 2,
+      "gameIds": [
+        "game-buf-mia"
+      ],
+      "teams": [
+        "BUF"
+      ],
+      "combinedOddsAmerican": 587,
+      "combinedOddsDecimal": 6.872727272727273,
+      "independentJointProbability": 0.11159999999999999,
+      "correlationAdjustedJointProbability": 0.1107203294117647,
+      "marketJointProbability": 0.14550264550264552,
+      "expectedValue": -0.2390493724064171,
+      "confidenceAdjustedExpectedValue": -0.14208753196733992,
+      "payoutMultiplier": 6.872727272727273,
+      "requiredHitRate": 0.16005291005291006,
+      "projectedHitRate": 0.1107203294117647,
+      "correlationScore": -0.05,
+      "correlationType": "WEAK",
+      "recommendation": "PASS_LEG_NOT_QUALIFIED",
+      "qualified": false,
+      "primaryDisqualifier": "Leg James Cook not qualified standalone: Model probability 0.18 trails market — long-shot price not justified by projection",
+      "reasons": [
+        "Same-game legs with no clear correlation hook — treated as weak / unknown."
+      ],
+      "risks": [],
+      "legs": [
+        {
+          "id": "leg-buf-allen-passyds-over",
+          "playerName": "Josh Allen",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "PASSING_YARDS",
+          "side": "OVER",
+          "line": 268.5,
+          "odds": -110
+        },
+        {
+          "id": "leg-buf-cook-rushyds-over-longshot",
+          "playerName": "James Cook",
+          "team": "BUF",
+          "opponent": "MIA",
+          "gameId": "game-buf-mia",
+          "propType": "RUSHING_YARDS",
+          "side": "OVER",
+          "line": 88.5,
+          "odds": 260
+        }
+      ]
+    }
+  ]
+}

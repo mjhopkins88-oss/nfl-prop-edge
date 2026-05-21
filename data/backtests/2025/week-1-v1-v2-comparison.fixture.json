@@ -1,0 +1,425 @@
+{
+  "generatedAt": "2026-05-20T23:59:46.968Z",
+  "v1": {
+    "evaluated": 8,
+    "qualifiedBets": 2,
+    "hitRate": 1,
+    "roiPct": 88.93280632411067,
+    "profitUnits": 1.7786561264822134
+  },
+  "v2": {
+    "evaluated": 8,
+    "qualifiedBets": 0,
+    "hitRate": 0,
+    "roiPct": 0,
+    "profitUnits": 0
+  },
+  "delta": {
+    "evaluatedDelta": 0,
+    "qualifiedBetsDelta": -2,
+    "passesDelta": 2,
+    "hitRateDelta": -1,
+    "roiPctDelta": -88.93280632411067,
+    "averageEdgeDelta": -0.34016099885317963,
+    "v2AverageConfidenceAdjustedEdge": 0,
+    "winsDelta": -2,
+    "lossesDelta": 0,
+    "pushesDelta": 0,
+    "profitUnitsDelta": -1.7786561264822134,
+    "brierScoreDelta": -0.02400070893368027,
+    "byPropType": [
+      {
+        "propType": "RECEPTIONS",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      },
+      {
+        "propType": "RUSHING_ATTEMPTS",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      },
+      {
+        "propType": "PASSING_COMPLETIONS",
+        "v1Roi": 86.95652173913044,
+        "v2Roi": 0,
+        "delta": -86.95652173913044
+      },
+      {
+        "propType": "PASSING_ATTEMPTS",
+        "v1Roi": 90.9090909090909,
+        "v2Roi": 0,
+        "delta": -90.9090909090909
+      }
+    ],
+    "byLineBucket": [
+      {
+        "bucket": "PASSING_ATTEMPTS · 29.5 – 32.5",
+        "v1Roi": 90.9090909090909,
+        "v2Roi": 0,
+        "delta": -90.9090909090909
+      },
+      {
+        "bucket": "PASSING_COMPLETIONS · 19.5 – 22.5",
+        "v1Roi": 86.95652173913044,
+        "v2Roi": 0,
+        "delta": -86.95652173913044
+      },
+      {
+        "bucket": "RECEPTIONS · 5.5",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      },
+      {
+        "bucket": "RUSHING_ATTEMPTS · 10.5 – 14.5",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      }
+    ],
+    "byConfidenceBucket": [
+      {
+        "bucket": "High",
+        "v1Roi": 88.93280632411067,
+        "v2Roi": 0,
+        "delta": -88.93280632411067
+      },
+      {
+        "bucket": "Medium",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      },
+      {
+        "bucket": "Low",
+        "v1Roi": 0,
+        "v2Roi": 0,
+        "delta": 0
+      }
+    ],
+    "byEdgeBucket": [
+      {
+        "bucket": "≥ 10%",
+        "v1Roi": 88.93280632411067,
+        "v2Roi": 0,
+        "delta": -88.93280632411067
+      }
+    ],
+    "byDisqualifier": [
+      {
+        "disqualifier": "Role stability gate",
+        "v1Count": 6,
+        "v2Count": 0,
+        "delta": -6
+      },
+      {
+        "disqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+        "v1Count": 0,
+        "v2Count": 2,
+        "delta": 2
+      },
+      {
+        "disqualifier": "Confidence 55% below 55% floor",
+        "v1Count": 0,
+        "v2Count": 2,
+        "delta": 2
+      },
+      {
+        "disqualifier": "Edge quality classified SUSPICIOUS_EDGE",
+        "v1Count": 0,
+        "v2Count": 2,
+        "delta": 2
+      },
+      {
+        "disqualifier": "Confidence 52% below 55% floor",
+        "v1Count": 0,
+        "v2Count": 1,
+        "delta": 1
+      },
+      {
+        "disqualifier": "Confidence 53% below 55% floor",
+        "v1Count": 0,
+        "v2Count": 1,
+        "delta": 1
+      }
+    ]
+  },
+  "recommendationChanges": [
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-mahomes-passatt",
+      "playerName": "Patrick Mahomes",
+      "propType": "PASSING_ATTEMPTS",
+      "line": 32.5,
+      "v1Recommendation": "OVER",
+      "v2Recommendation": "PASS",
+      "v1Qualified": true,
+      "v2Qualified": false,
+      "v2PrimaryDisqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "V1_BET_V2_PASS"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-mahomes-passcomp",
+      "playerName": "Patrick Mahomes",
+      "propType": "PASSING_COMPLETIONS",
+      "line": 22.5,
+      "v1Recommendation": "OVER",
+      "v2Recommendation": "PASS",
+      "v1Qualified": true,
+      "v2Qualified": false,
+      "v2PrimaryDisqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "V1_BET_V2_PASS"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-kelce-receptions",
+      "playerName": "Travis Kelce",
+      "propType": "RECEPTIONS",
+      "line": 5.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Confidence 52% below 55% floor",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-pacheco-rushatt",
+      "playerName": "Isiah Pacheco",
+      "propType": "RUSHING_ATTEMPTS",
+      "line": 13.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Confidence 53% below 55% floor",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-allen-passatt",
+      "playerName": "Josh Allen",
+      "propType": "PASSING_ATTEMPTS",
+      "line": 31.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Confidence 55% below 55% floor",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-allen-passcomp",
+      "playerName": "Josh Allen",
+      "propType": "PASSING_COMPLETIONS",
+      "line": 20.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Confidence 55% below 55% floor",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-diggs-receptions",
+      "playerName": "Stefon Diggs",
+      "propType": "RECEPTIONS",
+      "line": 5.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Edge quality classified SUSPICIOUS_EDGE",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    },
+    {
+      "propMarketId": "2025-w1-fixture-w1-pm-cook-rushatt",
+      "playerName": "James Cook",
+      "propType": "RUSHING_ATTEMPTS",
+      "line": 14.5,
+      "v1Recommendation": "PASS",
+      "v2Recommendation": "PASS",
+      "v1Qualified": false,
+      "v2Qualified": false,
+      "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+      "v2PrimaryDisqualifier": "Edge quality classified SUSPICIOUS_EDGE",
+      "v2ConfidenceAdjustedEdge": 0,
+      "kind": "SAME_PASS_DIFFERENT_REASON"
+    }
+  ],
+  "recommendationChangeSummary": {
+    "totalEvaluated": 8,
+    "counts": {
+      "SAME_BET": 0,
+      "V1_BET_V2_PASS": 2,
+      "V1_PASS_V2_BET": 0,
+      "OPPOSITE_SIDE": 0,
+      "SAME_PASS_DIFFERENT_REASON": 6,
+      "SAME_RECOMMENDATION_DIFFERENT_CONFIDENCE": 0
+    },
+    "v1OnlyBets": 2,
+    "v2OnlyBets": 0,
+    "oppositeSides": 0,
+    "changes": [
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-mahomes-passatt",
+        "playerName": "Patrick Mahomes",
+        "propType": "PASSING_ATTEMPTS",
+        "marketLine": 32.5,
+        "kind": "V1_BET_V2_PASS",
+        "v1Recommendation": "OVER",
+        "v2Recommendation": "PASS",
+        "v1Qualified": true,
+        "v2Qualified": false,
+        "v2PrimaryDisqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+        "v1Edge": 0.358011578565966,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.8924568452380952,
+        "v2Confidence": 0.5957291666666666
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-mahomes-passcomp",
+        "playerName": "Patrick Mahomes",
+        "propType": "PASSING_COMPLETIONS",
+        "marketLine": 22.5,
+        "kind": "V1_BET_V2_PASS",
+        "v1Recommendation": "OVER",
+        "v2Recommendation": "PASS",
+        "v1Qualified": true,
+        "v2Qualified": false,
+        "v2PrimaryDisqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+        "v1Edge": 0.32231041914039327,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.8925918964224941,
+        "v2Confidence": 0.5957291666666666
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-kelce-receptions",
+        "playerName": "Travis Kelce",
+        "propType": "RECEPTIONS",
+        "marketLine": 5.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Confidence 52% below 55% floor",
+        "v1Edge": 0.19146246272399403,
+        "v2Edge": 0.08615810822579728,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.4351693079620893,
+        "v2Confidence": 0.5207291666666667
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-pacheco-rushatt",
+        "playerName": "Isiah Pacheco",
+        "propType": "RUSHING_ATTEMPTS",
+        "marketLine": 13.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Confidence 53% below 55% floor",
+        "v1Edge": 0.23667329165007,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.4471231464224941,
+        "v2Confidence": 0.5316666666666666
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-allen-passatt",
+        "playerName": "Josh Allen",
+        "propType": "PASSING_ATTEMPTS",
+        "marketLine": 31.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Confidence 55% below 55% floor",
+        "v1Edge": 0.2340145270237729,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.3901934523809524,
+        "v2Confidence": 0.549375
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-allen-passcomp",
+        "playerName": "Josh Allen",
+        "propType": "PASSING_COMPLETIONS",
+        "marketLine": 20.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Confidence 55% below 55% floor",
+        "v1Edge": 0.2580364167128033,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.3901934523809524,
+        "v2Confidence": 0.549375
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-diggs-receptions",
+        "playerName": "Stefon Diggs",
+        "propType": "RECEPTIONS",
+        "marketLine": 5.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Edge quality classified SUSPICIOUS_EDGE",
+        "v1Edge": 0.22576839740163623,
+        "v2Edge": 0.08999999999999997,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.39323457792207794,
+        "v2Confidence": 0.47437500000000005
+      },
+      {
+        "propMarketId": "2025-w1-fixture-w1-pm-cook-rushatt",
+        "playerName": "James Cook",
+        "propType": "RUSHING_ATTEMPTS",
+        "marketLine": 14.5,
+        "kind": "SAME_PASS_DIFFERENT_REASON",
+        "v1Recommendation": "PASS",
+        "v2Recommendation": "PASS",
+        "v1Qualified": false,
+        "v2Qualified": false,
+        "v1PrimaryDisqualifier": "Role stability score 0.50 below 0.55 gate",
+        "v2PrimaryDisqualifier": "Edge quality classified SUSPICIOUS_EDGE",
+        "v1Edge": 0.2868374343920198,
+        "v2Edge": 0.07999999999999996,
+        "v2ConfidenceAdjustedEdge": 0,
+        "v1Confidence": 0.39793267023201795,
+        "v2Confidence": 0.49138888888888893
+      }
+    ],
+    "topNewV2Disqualifiers": [
+      {
+        "disqualifier": "Role stability 0.50 below 0.55 — role unreliable",
+        "count": 2
+      }
+    ]
+  }
+}

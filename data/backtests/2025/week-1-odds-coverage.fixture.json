@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-05-20T23:59:46.948Z",
+  "season": 2025,
+  "week": 1,
+  "totalProps": 8,
+  "byPropType": {
+    "PASSING_ATTEMPTS": 2,
+    "PASSING_COMPLETIONS": 2,
+    "RECEPTIONS": 2,
+    "RUSHING_ATTEMPTS": 2
+  },
+  "byGame": {
+    "fixture-kc-at-bal-w1": 4,
+    "fixture-buf-at-mia-w1": 4
+  },
+  "source": "stored fixture (data/fixtures/backtest/week-1/prop-quotes.fixture.json)",
+  "paidApiCalls": 0,
+  "note": "Fixture / Stored Data — not a real Odds API pull."
+}
