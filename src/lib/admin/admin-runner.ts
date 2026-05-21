@@ -85,6 +85,46 @@ export const ADMIN_WEEK1_SUBSET_MAX_CREDITS = 175;
 export const ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS = 4;
 export const ADMIN_WEEK1_FULL_MAX_CREDITS = 700;
 
+/** Dynamic subset confirmation text per week. Week 1 returns
+ *  the legacy string so existing callers keep working. */
+export function paidSubsetConfirmText(week: number): string {
+  return `RUN WEEK ${week} SUBSET INGESTION`;
+}
+
+/** Dynamic full-ingestion confirmation text per week. The
+ *  credit estimate is included in the string so the operator
+ *  has to type the number, not just a label. Week 1 reuses
+ *  the audited 647-credit estimate to keep legacy strings
+ *  identical. */
+export function paidFullConfirmText(week: number, estimatedCredits: number): string {
+  return `RUN FULL WEEK ${week} INGESTION ${estimatedCredits} CREDITS`;
+}
+
+/** Per-week estimated credit cost for the FULL ingestion.
+ *  Week 1 = 647 (audited). Other weeks use the same default
+ *  pending audit. Operators see this number in the
+ *  confirmation text and must type it exactly. */
+export const FULL_INGESTION_ESTIMATED_CREDITS_BY_WEEK: Record<number, number> = {
+  1: 647,
+  2: 647,
+  3: 647,
+  4: 647,
+  5: 647,
+  6: 647,
+};
+
+export function estimatedFullCreditsForWeek(week: number): number {
+  return FULL_INGESTION_ESTIMATED_CREDITS_BY_WEEK[week] ?? 647;
+}
+
+/** Allow-list for the generic any-week paid actions. Adding
+ *  new weeks to this list is the only required step to extend
+ *  past Week 6 — every action handler reads `args.week` and
+ *  pipes it through to the existing ingestion script. */
+export const SUPPORTED_PAID_INGESTION_WEEKS: readonly number[] = [
+  1, 2, 3, 4, 5, 6,
+];
+
 export interface AdminActionResult {
   action: AdminAction;
   ok: boolean;
@@ -108,6 +148,11 @@ export interface AdminRunArgs {
   action: AdminAction;
   /** Required for paid actions; ignored otherwise. */
   confirmText?: string;
+  /** Target week (1-18). Required for the generic
+   *  `paid-week-subset`, `paid-week-full`, and
+   *  `grade-week-stored` actions. Defaults to 1 elsewhere so
+   *  legacy Week 1 callers keep working unchanged. */
+  week?: number;
   /** Repo root override for tests. */
   repoRoot?: string;
   /** Injected for tests; defaults to a real spawn-based runner. */
@@ -502,27 +547,33 @@ function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
 }
 
 /**
- * Smaller Week 1 ingestion — capped to 4 event-odds calls + a
- * 175-credit ceiling. Fits under the 200-credit
- * MAX_ODDS_API_CREDITS_PER_RUN policy. Lets us land a partial
- * Week 1 set + verify the canonical price model without the
- * full ~647 spend.
+ * Subset ingestion for any week — capped to 4 event-odds calls
+ * + a 175-credit ceiling. Fits under the 200-credit per-run
+ * policy. Lets us land a partial week set + verify the canonical
+ * price model without the full ~647 spend.
+ *
+ * Week 1 callers go through `buildPaidWeek1SubsetSpec(repoRoot)`
+ * (a thin wrapper around this function with week=1) so their
+ * subprocess argv is byte-identical to the legacy version.
  */
-function buildPaidWeek1SubsetSpec(repoRoot: string): SubprocessSpec {
+function buildPaidSubsetSpec(args: {
+  repoRoot: string;
+  week: number;
+}): SubprocessSpec {
   return {
-    command: defaultTsxBin(repoRoot),
+    command: defaultTsxBin(args.repoRoot),
     args: [
-      ingestScriptPath(repoRoot),
+      ingestScriptPath(args.repoRoot),
       "--season",
       "2025",
       "--scope",
       "week",
       "--week",
-      "1",
+      String(args.week),
       "--source",
       "csv",
       "--input",
-      gamesCsvPath(repoRoot),
+      gamesCsvPath(args.repoRoot),
       "--max-odds-requests",
       String(ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS),
       "--max-credits",
@@ -533,32 +584,41 @@ function buildPaidWeek1SubsetSpec(repoRoot: string): SubprocessSpec {
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
     timeoutMs: 300_000,
-    cwd: repoRoot,
+    cwd: args.repoRoot,
   };
 }
 
+function buildPaidWeek1SubsetSpec(repoRoot: string): SubprocessSpec {
+  return buildPaidSubsetSpec({ repoRoot, week: 1 });
+}
+
 /**
- * Full Week 1 ingestion. Pins --budget AND --max-credits to the
- * hard-coded 700 ceiling (validateCreditBudget honours the
- * override via maxCreditsOverride; the per-call guard reads
+ * Full ingestion for any week. Pins --budget AND --max-credits
+ * to the hard-coded 700 ceiling (validateCreditBudget honours
+ * the override via maxCreditsOverride; the per-call guard reads
  * --max-credits). 700 covers the audited 647-credit estimate
  * with ~8% slack. Never accepts a user-supplied cap.
+ *
+ * Week 1 callers go through `buildPaidWeek1Spec(repoRoot)`.
  */
-function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
+function buildPaidFullSpec(args: {
+  repoRoot: string;
+  week: number;
+}): SubprocessSpec {
   return {
-    command: defaultTsxBin(repoRoot),
+    command: defaultTsxBin(args.repoRoot),
     args: [
-      ingestScriptPath(repoRoot),
+      ingestScriptPath(args.repoRoot),
       "--season",
       "2025",
       "--scope",
       "week",
       "--week",
-      "1",
+      String(args.week),
       "--source",
       "csv",
       "--input",
-      gamesCsvPath(repoRoot),
+      gamesCsvPath(args.repoRoot),
       "--max-credits",
       String(ADMIN_WEEK1_FULL_MAX_CREDITS),
       "--budget",
@@ -567,8 +627,33 @@ function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
     timeoutMs: 900_000,
-    cwd: repoRoot,
+    cwd: args.repoRoot,
   };
+}
+
+function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
+  return buildPaidFullSpec({ repoRoot, week: 1 });
+}
+
+/** Per-week result-file paths so each week's last paid run is
+ *  recorded separately. Week 1 keeps its existing path for
+ *  back-compat. */
+function paidSubsetResultFile(week: number): string {
+  if (week === 1) return WEEK1_SUBSET_RESULT_FILE;
+  return path.join(
+    "data",
+    "admin-ingestion",
+    `latest-odds-week${week}-subset-paid.json`,
+  );
+}
+
+function paidFullResultFile(week: number): string {
+  if (week === 1) return WEEK1_FULL_RESULT_FILE;
+  return path.join(
+    "data",
+    "admin-ingestion",
+    `latest-odds-week${week}-full-paid.json`,
+  );
 }
 
 // ---- the dispatcher ---------------------------------------------------
@@ -914,19 +999,188 @@ export async function runAdminAction(
       return result;
     }
 
+    case "paid-week-subset": {
+      const week = args.week ?? 1;
+      if (!SUPPORTED_PAID_INGESTION_WEEKS.includes(week)) {
+        return {
+          action: "paid-week-subset",
+          ok: false,
+          status: "failure",
+          summary: `Unsupported week ${week} (allowed: ${SUPPORTED_PAID_INGESTION_WEEKS.join(", ")})`,
+        };
+      }
+      const expectedConfirm = paidSubsetConfirmText(week);
+      const gate = checkPaidGates({
+        confirmText: args.confirmText,
+        expectedConfirm,
+        requirePriorSmoke: true,
+        repoRoot,
+      });
+      if (gate) return recordSkip("paid-week-subset", gate, repoRoot);
+      const startedAt = new Date().toISOString();
+      const sub = await spawner(buildPaidSubsetSpec({ repoRoot, week }));
+      const finishedAt = new Date().toISOString();
+      const parsed = parseIngestionOutput(sub.stdout);
+      const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: paidSubsetResultFile(week),
+        action: "paid-week-subset",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: false,
+        errorMessage: ok
+          ? undefined
+          : sub.timedOut
+            ? "timed out"
+            : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+        confirmText: expectedConfirm,
+      });
+      const result: AdminActionResult = {
+        action: "paid-week-subset",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Week ${week} subset OK. Credits used=${parsed.creditsUsed ?? "?"} remaining=${parsed.creditsRemaining ?? "?"}.`
+          : sub.timedOut
+            ? `Week ${week} subset timed out.`
+            : `Week ${week} subset failed with exit ${sub.exitCode}.`,
+        detail: truncateForUi(sub.stdout, sub.stderr),
+        data: {
+          week,
+          creditsUsed: parsed.creditsUsed,
+          creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+        },
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      };
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week,
+        scope: "paid-week-subset",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+        gamesRequested: ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS,
+      });
+      recordActionResult({
+        action: "paid-week-subset",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "paid-week-full": {
+      const week = args.week ?? 1;
+      if (!SUPPORTED_PAID_INGESTION_WEEKS.includes(week)) {
+        return {
+          action: "paid-week-full",
+          ok: false,
+          status: "failure",
+          summary: `Unsupported week ${week} (allowed: ${SUPPORTED_PAID_INGESTION_WEEKS.join(", ")})`,
+        };
+      }
+      const credits = estimatedFullCreditsForWeek(week);
+      const expectedConfirm = paidFullConfirmText(week, credits);
+      const gate = checkPaidGates({
+        confirmText: args.confirmText,
+        expectedConfirm,
+        requirePriorSmoke: true,
+        repoRoot,
+      });
+      if (gate) return recordSkip("paid-week-full", gate, repoRoot);
+      const startedAt = new Date().toISOString();
+      const sub = await spawner(buildPaidFullSpec({ repoRoot, week }));
+      const finishedAt = new Date().toISOString();
+      const parsed = parseIngestionOutput(sub.stdout);
+      const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: paidFullResultFile(week),
+        action: "paid-week-full",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: false,
+        errorMessage: ok
+          ? undefined
+          : sub.timedOut
+            ? "timed out"
+            : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
+        confirmText: expectedConfirm,
+      });
+      const result: AdminActionResult = {
+        action: "paid-week-full",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Week ${week} full ingestion OK. Credits used=${parsed.creditsUsed ?? "?"} remaining=${parsed.creditsRemaining ?? "?"}.`
+          : sub.timedOut
+            ? `Week ${week} full ingestion timed out.`
+            : `Week ${week} full ingestion failed with exit ${sub.exitCode}.`,
+        detail: truncateForUi(sub.stdout, sub.stderr),
+        data: {
+          week,
+          creditsUsed: parsed.creditsUsed,
+          creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
+        },
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      };
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week,
+        scope: "paid-week-full",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+      });
+      recordActionResult({
+        action: "paid-week-full",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
     case "migrate-odds-to-canonical": {
       // Pure file-IO. No paid call. Requires only the admin
       // token; no Odds API gates and no confirmText — this
       // action just copies bytes between paths.
+      const migrateWeek = args.week ?? 1;
       const r = migrateLegacyToCanonical({
         season: 2025,
-        week: 1,
+        week: migrateWeek,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
       const target = canonicalMarketsPath({
         season: 2025,
-        week: 1,
+        week: migrateWeek,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       // Mirror canonical rows to Postgres so a redeploy doesn't
@@ -943,14 +1197,14 @@ export async function runAdminAction(
         try {
           const cleared = await persistence.deleteCanonicalOddsRowsForWeek({
             season: 2025,
-            week: 1,
+            week: migrateWeek,
           });
           if (cleared.ok) dbDeleted = cleared.deleted ?? 0;
           else dbError = cleared.error ?? undefined;
           const parsed = parseWrittenCanonicalCsv(r.target);
           const saved = await persistence.saveCanonicalOddsRowsToDb({
             season: 2025,
-            week: 1,
+            week: migrateWeek,
             rows: parsed,
           });
           if (saved.ok) dbUpserted = saved.upserted ?? parsed.length;
@@ -961,7 +1215,7 @@ export async function runAdminAction(
           if (persistence.isAvailable()) {
             const post = await persistence.countPersistence({
               season: 2025,
-              week: 1,
+              week: migrateWeek,
             });
             if (post.ok) {
               dbRowCountAfter = post.counts?.storedPropMarketRows ?? 0;
@@ -1054,6 +1308,7 @@ export async function runAdminAction(
     }
 
     case "stored-backtest": {
+      const backtestWeek = args.week ?? 1;
       // First: if the canonical odds file is missing on disk but
       // we have rows in Postgres, rehydrate the file from DB.
       // This handles the redeploy case where the container's
@@ -1061,13 +1316,13 @@ export async function runAdminAction(
       // survives.
       const rehydration = await rehydrateCanonicalOddsFromDbIfMissing({
         season: 2025,
-        week: 1,
+        week: backtestWeek,
         client: persistence,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const r = buildRealWeek1CandidatesFromStoredData({
         season: 2025,
-        week: 1,
+        week: backtestWeek,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
@@ -1091,7 +1346,7 @@ export async function runAdminAction(
         "data",
         "backtests",
         "2025",
-        "week-1-data-mode-status.fixture.json",
+        `week-${backtestWeek}-data-mode-status.fixture.json`,
       );
       fs.mkdirSync(path.dirname(statusFile), { recursive: true });
       fs.writeFileSync(
@@ -1100,7 +1355,7 @@ export async function runAdminAction(
           {
             generatedAt: new Date().toISOString(),
             season: 2025,
-            week: 1,
+            week: backtestWeek,
             dataMode: "stored",
             status: r.status,
             candidateCount: r.candidates.length,
@@ -1127,14 +1382,14 @@ export async function runAdminAction(
           ? buildScheduleValidationDebug({
               repoRoot,
               season: 2025,
-              week: 1,
+              week: backtestWeek,
             })
           : null;
       // Mirror the run output to Postgres so the page can read
       // it back after a redeploy.
       const dbSave = await persistence.saveStoredBacktestRunToDb({
         season: 2025,
-        week: 1,
+        week: backtestWeek,
         dataMode: "stored",
         status: r.status,
         realWeek1BacktestReady: ok,
@@ -1212,7 +1467,19 @@ export async function runAdminAction(
       return result;
     }
 
+    case "grade-week-stored":
     case "grade-week1-stored": {
+      const week =
+        args.action === "grade-week1-stored" ? 1 : (args.week ?? 1);
+      const actionName = args.action;
+      if (!Number.isFinite(week) || week < 1 || week > 22) {
+        return {
+          action: actionName,
+          ok: false,
+          status: "failure",
+          summary: `Invalid week ${week}`,
+        };
+      }
       // Re-run the candidate builder to get the SAME pregame
       // candidate set the stored-backtest action persisted, then
       // grade each candidate against processed nflverse stats.
@@ -1221,20 +1488,20 @@ export async function runAdminAction(
       // surviving — same code path, same output.
       const built = buildRealWeek1CandidatesFromStoredData({
         season: 2025,
-        week: 1,
+        week,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       if (built.status !== "READY") {
         const result: AdminActionResult = {
-          action: "grade-week1-stored",
+          action: actionName,
           ok: false,
           status: "failure",
-          summary: `Cannot grade: candidate builder returned ${built.status}. Run the migration + stored backtest first.`,
+          summary: `Cannot grade week ${week}: candidate builder returned ${built.status}. Run the migration + stored backtest for this week first.`,
           detail: built.notes.join("\n"),
-          data: { candidateBuilderStatus: built.status },
+          data: { week, candidateBuilderStatus: built.status },
         };
         recordActionResult({
-          action: "grade-week1-stored",
+          action: actionName,
           result: "failure",
           summary: result.summary,
           repoRoot,
@@ -1246,15 +1513,15 @@ export async function runAdminAction(
       );
       if (stats.status !== "READY") {
         const result: AdminActionResult = {
-          action: "grade-week1-stored",
+          action: actionName,
           ok: false,
           status: "failure",
-          summary: `Cannot grade: processed player_week_stats.csv missing at ${stats.source}.`,
+          summary: `Cannot grade week ${week}: processed player_week_stats.csv missing at ${stats.source}.`,
           detail: "Run nflverse ingestion to produce data/processed/nfl/player_week_stats.csv.",
-          data: { playerStatsStatus: stats.status, source: stats.source },
+          data: { week, playerStatsStatus: stats.status, source: stats.source },
         };
         recordActionResult({
-          action: "grade-week1-stored",
+          action: actionName,
           result: "failure",
           summary: result.summary,
           repoRoot,
@@ -1271,7 +1538,7 @@ export async function runAdminAction(
       const playerHistoryByName = buildPlayerHistoryByName({
         candidates: built.candidates,
         season: 2025,
-        week: 1,
+        week,
         playerWeekStats: stats.rows,
       });
       const evaluatedCandidates = applyScorecardToCandidates({
@@ -1286,20 +1553,20 @@ export async function runAdminAction(
       const asOfReport = validateAsOfFairness({
         candidates: evaluatedCandidates,
         season: 2025,
-        week: 1,
+        week,
         playerHistoryByName,
       });
       if (!asOfReport.ok) {
         const result: AdminActionResult = {
-          action: "grade-week1-stored",
+          action: actionName,
           ok: false,
           status: "failure",
-          summary: `Aborting grade: as-of fairness check failed — ${asOfReport.candidatesInvalid}/${asOfReport.candidatesChecked} candidates invalid. No grading performed.`,
+          summary: `Aborting grade week ${week}: as-of fairness check failed — ${asOfReport.candidatesInvalid}/${asOfReport.candidatesChecked} candidates invalid. No grading performed.`,
           detail: formatAsOfReport(asOfReport),
-          data: { asOfReport },
+          data: { week, asOfReport },
         };
         recordActionResult({
-          action: "grade-week1-stored",
+          action: actionName,
           result: "failure",
           summary: result.summary,
           repoRoot,
@@ -1309,7 +1576,7 @@ export async function runAdminAction(
       const grade = gradeStoredWeek1Backtest({
         candidates: evaluatedCandidates,
         season: 2025,
-        week: 1,
+        week,
         playerWeekStats: stats.rows,
       });
       const scorecardAudit = buildScorecardAudit({
@@ -1334,7 +1601,7 @@ export async function runAdminAction(
       // the latest row wins.
       const dbSave = await persistence.saveStoredBacktestRunToDb({
         season: 2025,
-        week: 1,
+        week,
         dataMode: "stored",
         status: built.status,
         realWeek1BacktestReady: true,
@@ -1373,13 +1640,14 @@ export async function runAdminAction(
           marketContextCalibration,
         },
       });
-      // File mirror — small, secret-free.
+      // File mirror — small, secret-free. Per-week filename so
+      // a later week never overwrites Week 1's mirror.
       const gradedFile = path.join(
         repoRoot,
         "data",
         "backtests",
         "2025",
-        "week-1-graded-summary.fixture.json",
+        `week-${week}-graded-summary.fixture.json`,
       );
       fs.mkdirSync(path.dirname(gradedFile), { recursive: true });
       fs.writeFileSync(
@@ -1388,7 +1656,7 @@ export async function runAdminAction(
           {
             gradedAt: grade.summary.gradedAt,
             season: 2025,
-            week: 1,
+            week,
             summary: grade.summary,
             // Persist a few example rows so the page can show a
             // breakdown without the full 290.
@@ -1427,10 +1695,10 @@ export async function runAdminAction(
         )
         .join("\n");
       const result: AdminActionResult = {
-        action: "grade-week1-stored",
+        action: actionName,
         ok: true,
         status: "success",
-        summary: `${headlineRecCopy} · ${universeCopy} · ${asOfHeadline}`,
+        summary: `Week ${week} · ${headlineRecCopy} · ${universeCopy} · ${asOfHeadline}`,
         detail:
           `${formatAsOfReport(asOfReport)}\n` +
           `Sample kickoff / snapshot times:\n${sampleSnapshotKickoffLines}\n\n` +
@@ -1506,7 +1774,7 @@ export async function runAdminAction(
         },
       };
       recordActionResult({
-        action: "grade-week1-stored",
+        action: actionName,
         result: "success",
         summary: result.summary,
         repoRoot,

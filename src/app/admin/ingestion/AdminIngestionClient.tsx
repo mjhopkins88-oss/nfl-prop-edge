@@ -16,9 +16,12 @@ type ActionName =
   | "paid-smoke"
   | "odds-week1-subset-paid"
   | "paid-week1"
+  | "paid-week-subset"
+  | "paid-week-full"
   | "migrate-odds-to-canonical"
   | "stored-backtest"
   | "grade-week1-stored"
+  | "grade-week-stored"
   | "verify-persistence";
 
 interface StatusResponse {
@@ -80,6 +83,26 @@ interface StatusResponse {
     creditsRemaining?: number | null;
     finishedAt?: string;
   } | null;
+  /** Per-week status block (populated when the GET was made
+   *  with ?week=N). Drives the multi-week section's status
+   *  display. */
+  selectedWeek?: {
+    week: number;
+    present: boolean;
+    source?: string;
+    storedOddsPresent: boolean;
+    processedNflPresent?: boolean;
+    status?: string;
+    candidateCount: number;
+    scheduleValidationStatus?: string | null;
+    backtestReady: boolean;
+    gradingStatus: "graded" | "ungraded" | "unavailable";
+    asOfOk: boolean | null;
+    asOfValid: number;
+    asOfChecked: number;
+    recommendedPlaysCount: number;
+    note: string | null;
+  } | null;
   nextRecommendedAction?: string;
   guardrails?: {
     starterMarketsOnly: string[];
@@ -115,39 +138,49 @@ export function AdminIngestionClient() {
   const [paidWeek1Confirm, setPaidWeek1Confirm] = useState("");
   const [busy, setBusy] = useState<ActionName | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
+  // Multi-week section state. The selected week drives both
+  // sub-sections (Paid Ingestion by Week + Week Processing
+  // Pipeline) and the per-week status block.
+  const [selectedWeek, setSelectedWeek] = useState<number>(1);
+  const [multiWeekSubsetConfirm, setMultiWeekSubsetConfirm] = useState("");
+  const [multiWeekFullConfirm, setMultiWeekFullConfirm] = useState("");
 
-  const refreshStatus = useCallback(async () => {
-    if (!token) {
-      setStatus(null);
-      setStatusErr("Enter the admin token to load status.");
-      return;
-    }
-    setStatusErr(null);
-    try {
-      const res = await fetch("/api/admin/ingestion/status", {
-        method: "GET",
-        headers: { "x-admin-ingest-token": token },
-        cache: "no-store",
-      });
-      const json = (await res.json()) as StatusResponse;
-      if (!res.ok || !json.ok) {
+  const refreshStatus = useCallback(
+    async (week?: number) => {
+      if (!token) {
         setStatus(null);
-        setStatusErr(json.error ?? `HTTP ${res.status}`);
+        setStatusErr("Enter the admin token to load status.");
         return;
       }
-      setStatus(json);
-    } catch (err) {
-      setStatus(null);
-      setStatusErr((err as Error).message);
-    }
-  }, [token]);
+      setStatusErr(null);
+      try {
+        const qs = week ? `?week=${week}` : "";
+        const res = await fetch(`/api/admin/ingestion/status${qs}`, {
+          method: "GET",
+          headers: { "x-admin-ingest-token": token },
+          cache: "no-store",
+        });
+        const json = (await res.json()) as StatusResponse;
+        if (!res.ok || !json.ok) {
+          setStatus(null);
+          setStatusErr(json.error ?? `HTTP ${res.status}`);
+          return;
+        }
+        setStatus(json);
+      } catch (err) {
+        setStatus(null);
+        setStatusErr((err as Error).message);
+      }
+    },
+    [token],
+  );
 
   useEffect(() => {
-    if (token) void refreshStatus();
-  }, [token, refreshStatus]);
+    if (token) void refreshStatus(selectedWeek);
+  }, [token, refreshStatus, selectedWeek]);
 
   const runAction = useCallback(
-    async (action: ActionName, confirmText?: string) => {
+    async (action: ActionName, confirmText?: string, week?: number) => {
       if (!token) {
         setStatusErr("Enter the admin token first.");
         return;
@@ -161,11 +194,11 @@ export function AdminIngestionClient() {
             "content-type": "application/json",
             "x-admin-ingest-token": token,
           },
-          body: JSON.stringify({ action, confirmText }),
+          body: JSON.stringify({ action, confirmText, week }),
         });
         const json = (await res.json()) as ActionResponse;
         setLastResult(json);
-        await refreshStatus();
+        await refreshStatus(selectedWeek);
       } catch (err) {
         setLastResult({
           action,
@@ -177,7 +210,7 @@ export function AdminIngestionClient() {
         setBusy(null);
       }
     },
-    [token, refreshStatus],
+    [token, refreshStatus, selectedWeek],
   );
 
   return (
@@ -353,7 +386,331 @@ export function AdminIngestionClient() {
         </div>
       </section>
 
+      {/* Multi-week ingestion + processing. */}
+      <MultiWeekSection
+        token={token}
+        busy={busy}
+        selectedWeek={selectedWeek}
+        onSelectWeek={(w) => setSelectedWeek(w)}
+        statusForWeek={status?.selectedWeek ?? null}
+        smokeSucceededAt={status?.state?.smokeSucceededAt ?? null}
+        allowRealOddsApiCalls={Boolean(status?.configuration?.allowRealOddsApiCalls)}
+        oddsApiKeyConfigured={Boolean(status?.configuration?.oddsApiKeyConfigured)}
+        subsetConfirm={multiWeekSubsetConfirm}
+        fullConfirm={multiWeekFullConfirm}
+        onSubsetConfirmChange={setMultiWeekSubsetConfirm}
+        onFullConfirmChange={setMultiWeekFullConfirm}
+        onRun={runAction}
+      />
+
       {lastResult ? <ResultPanel result={lastResult} /> : null}
+    </div>
+  );
+}
+
+const SUPPORTED_WEEKS = [1, 2, 3, 4, 5, 6] as const;
+const PER_WEEK_FULL_CREDITS: Record<number, number> = {
+  1: 647,
+  2: 647,
+  3: 647,
+  4: 647,
+  5: 647,
+  6: 647,
+};
+
+function subsetConfirmTextFor(week: number): string {
+  return `RUN WEEK ${week} SUBSET INGESTION`;
+}
+function fullConfirmTextFor(week: number): string {
+  return `RUN FULL WEEK ${week} INGESTION ${PER_WEEK_FULL_CREDITS[week] ?? 647} CREDITS`;
+}
+
+function MultiWeekSection({
+  token,
+  busy,
+  selectedWeek,
+  onSelectWeek,
+  statusForWeek,
+  smokeSucceededAt,
+  allowRealOddsApiCalls,
+  oddsApiKeyConfigured,
+  subsetConfirm,
+  fullConfirm,
+  onSubsetConfirmChange,
+  onFullConfirmChange,
+  onRun,
+}: {
+  token: string;
+  busy: ActionName | null;
+  selectedWeek: number;
+  onSelectWeek: (week: number) => void;
+  statusForWeek: StatusResponse["selectedWeek"] | null;
+  smokeSucceededAt: string | null;
+  allowRealOddsApiCalls: boolean;
+  oddsApiKeyConfigured: boolean;
+  subsetConfirm: string;
+  fullConfirm: string;
+  onSubsetConfirmChange: (s: string) => void;
+  onFullConfirmChange: (s: string) => void;
+  onRun: (action: ActionName, confirmText?: string, week?: number) => Promise<void>;
+}) {
+  const expectedSubset = subsetConfirmTextFor(selectedWeek);
+  const expectedFull = fullConfirmTextFor(selectedWeek);
+  const fullCredits = PER_WEEK_FULL_CREDITS[selectedWeek] ?? 647;
+  const paidDisabled =
+    !token ||
+    busy !== null ||
+    !allowRealOddsApiCalls ||
+    !oddsApiKeyConfigured ||
+    !smokeSucceededAt;
+
+  return (
+    <section
+      className="rounded-lg border border-zinc-700 bg-zinc-900 p-4"
+      data-testid="admin-multi-week-section"
+    >
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">
+        Paid Ingestion by Week
+      </h2>
+      <p className="mt-1 text-xs text-zinc-500">
+        Generic per-week ingestion + processing. Each action runs
+        for the selected week only. Week 1 is unchanged — the
+        legacy Week 1 buttons above use the same code path.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-baseline gap-3">
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="multi-week-select"
+        >
+          Select week
+        </label>
+        <select
+          id="multi-week-select"
+          value={selectedWeek}
+          onChange={(e) => onSelectWeek(Number(e.target.value))}
+          disabled={!token || busy !== null}
+          className="rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100"
+          data-testid="admin-multi-week-select"
+        >
+          {SUPPORTED_WEEKS.map((w) => (
+            <option key={w} value={w}>
+              Week {w}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <WeekStatusPanel statusForWeek={statusForWeek} />
+
+      <div className="mt-4 grid gap-3">
+        <PaidWeekRow
+          label={`Run Paid Subset Ingestion (Week ${selectedWeek})`}
+          description={`Capped subset · ~175 credits. Confirmation: "${expectedSubset}"`}
+          buttonLabel="Run Subset"
+          confirmText={subsetConfirm}
+          expectedConfirm={expectedSubset}
+          onConfirmTextChange={onSubsetConfirmChange}
+          disabled={paidDisabled || subsetConfirm !== expectedSubset}
+          busy={busy === "paid-week-subset"}
+          onRun={() =>
+            void onRun("paid-week-subset", subsetConfirm, selectedWeek)
+          }
+        />
+        <PaidWeekRow
+          label={`Run Paid Full Ingestion (Week ${selectedWeek})`}
+          description={`Full ingestion · ~${fullCredits} credits. Confirmation: "${expectedFull}"`}
+          buttonLabel="Run Full"
+          confirmText={fullConfirm}
+          expectedConfirm={expectedFull}
+          onConfirmTextChange={onFullConfirmChange}
+          disabled={paidDisabled || fullConfirm !== expectedFull}
+          busy={busy === "paid-week-full"}
+          onRun={() => void onRun("paid-week-full", fullConfirm, selectedWeek)}
+        />
+      </div>
+      <p className="mt-3 text-[10px] text-zinc-500">
+        Both buttons require ALLOW_REAL_ODDS_API_CALLS=true,
+        ODDS_API_KEY, ADMIN_INGEST_TOKEN, a prior recorded paid-smoke
+        success, and the exact confirmation text above. No paid
+        action will run if any of those is missing.
+      </p>
+
+      <h2 className="mt-6 text-sm font-semibold uppercase tracking-wide text-zinc-300">
+        Week Processing Pipeline
+      </h2>
+      <p className="mt-1 text-xs text-zinc-500">
+        File-IO + Postgres only — no paid API. Runs against the
+        Week {selectedWeek} stored data.
+      </p>
+      <div className="mt-3 grid gap-3">
+        <ActionRow
+          label={`Migrate Odds → Canonical (Week ${selectedWeek})`}
+          description="Convert legacy prop_markets.csv into the canonical per-week file + mirror to Postgres."
+          buttonLabel="Migrate"
+          disabled={!token || busy !== null}
+          busy={busy === "migrate-odds-to-canonical"}
+          onRun={() =>
+            void onRun("migrate-odds-to-canonical", undefined, selectedWeek)
+          }
+        />
+        <ActionRow
+          label={`Run Stored Backtest (Week ${selectedWeek})`}
+          description="Build candidates + run schedule validation + persist a StoredBacktestRun row for this week."
+          buttonLabel="Run Backtest"
+          disabled={!token || busy !== null}
+          busy={busy === "stored-backtest"}
+          onRun={() =>
+            void onRun("stored-backtest", undefined, selectedWeek)
+          }
+        />
+        <ActionRow
+          label={`Grade Stored Backtest (Week ${selectedWeek})`}
+          description="Apply scorecard + run as-of fairness + grade + audit + calibration. Aborts on any as-of violation."
+          buttonLabel="Grade"
+          disabled={!token || busy !== null}
+          busy={busy === "grade-week-stored"}
+          onRun={() =>
+            void onRun("grade-week-stored", undefined, selectedWeek)
+          }
+        />
+        <ActionRow
+          label={`Verify Persistence (Week ${selectedWeek})`}
+          description="Ping Postgres, count StoredPropMarket + StoredBacktestRun rows for this week."
+          buttonLabel="Verify"
+          disabled={!token || busy !== null}
+          busy={busy === "verify-persistence"}
+          onRun={() =>
+            void onRun("verify-persistence", undefined, selectedWeek)
+          }
+        />
+      </div>
+    </section>
+  );
+}
+
+function WeekStatusPanel({
+  statusForWeek,
+}: {
+  statusForWeek: StatusResponse["selectedWeek"] | null;
+}) {
+  if (!statusForWeek) {
+    return (
+      <p
+        className="mt-3 rounded bg-zinc-800/70 p-3 text-xs text-zinc-400"
+        data-testid="admin-multi-week-status"
+      >
+        Loading status for selected week…
+      </p>
+    );
+  }
+  if (!statusForWeek.present) {
+    return (
+      <div
+        className="mt-3 rounded bg-amber-900/30 p-3 text-xs text-amber-200"
+        data-testid="admin-multi-week-status-empty"
+      >
+        <p className="font-semibold">
+          No stored odds for Week {statusForWeek.week} yet.
+        </p>
+        <p className="mt-1 text-[11px] text-amber-300">
+          Run the paid subset/full ingestion below (or the
+          pipeline if odds already arrived via DB rehydration).
+        </p>
+      </div>
+    );
+  }
+  return (
+    <dl
+      className="mt-3 grid grid-cols-2 gap-2 rounded bg-zinc-800/70 p-3 text-xs text-zinc-300 sm:grid-cols-3"
+      data-testid="admin-multi-week-status"
+    >
+      <StatusLine
+        label="Stored odds"
+        value={statusForWeek.storedOddsPresent ? "YES" : "NO"}
+      />
+      <StatusLine label="Candidates" value={`${statusForWeek.candidateCount}`} />
+      <StatusLine
+        label="Backtest"
+        value={statusForWeek.backtestReady ? "READY" : "NOT RUN"}
+      />
+      <StatusLine
+        label="Graded"
+        value={statusForWeek.gradingStatus === "graded" ? "YES" : "NO"}
+      />
+      <StatusLine
+        label="As-of fairness"
+        value={
+          statusForWeek.asOfOk === null
+            ? "—"
+            : statusForWeek.asOfOk
+              ? `PASS · ${statusForWeek.asOfValid}/${statusForWeek.asOfChecked}`
+              : `FAIL · ${statusForWeek.asOfValid}/${statusForWeek.asOfChecked}`
+        }
+      />
+      <StatusLine
+        label="Recommended plays"
+        value={`${statusForWeek.recommendedPlaysCount}`}
+      />
+    </dl>
+  );
+}
+
+function StatusLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="text-zinc-500">{label}</dt>
+      <dd className="font-mono text-[11px] text-zinc-100">{value}</dd>
+    </div>
+  );
+}
+
+function PaidWeekRow({
+  label,
+  description,
+  buttonLabel,
+  confirmText,
+  expectedConfirm,
+  onConfirmTextChange,
+  disabled,
+  busy,
+  onRun,
+}: {
+  label: string;
+  description: string;
+  buttonLabel: string;
+  confirmText: string;
+  expectedConfirm: string;
+  onConfirmTextChange: (s: string) => void;
+  disabled: boolean;
+  busy: boolean;
+  onRun: () => void;
+}) {
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-950 p-3">
+      <div className="text-xs font-semibold text-zinc-200">{label}</div>
+      <div className="mt-1 text-[11px] text-zinc-500">{description}</div>
+      <input
+        type="text"
+        value={confirmText}
+        onChange={(e) => onConfirmTextChange(e.target.value)}
+        placeholder={expectedConfirm}
+        autoComplete="off"
+        spellCheck={false}
+        className="mt-2 w-full rounded border border-zinc-700 bg-black px-3 py-1.5 text-[11px] font-mono text-zinc-100 placeholder:text-zinc-700"
+      />
+      <button
+        onClick={onRun}
+        disabled={disabled}
+        className={
+          "mt-2 rounded px-3 py-1.5 text-xs font-semibold " +
+          (disabled
+            ? "bg-zinc-800 text-zinc-600"
+            : "bg-coral-600 text-white hover:bg-coral-500")
+        }
+      >
+        {busy ? "Running…" : buttonLabel}
+      </button>
     </div>
   );
 }
