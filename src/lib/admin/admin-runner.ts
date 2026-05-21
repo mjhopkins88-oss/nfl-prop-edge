@@ -34,6 +34,10 @@ import {
 } from "../backtest/week-1-grading";
 import { buildMarketContextCalibration } from "../backtest/market-context-calibration";
 import {
+  buildDiagnosticQualificationAudit,
+  bucketScoresFromEvaluatedCandidates,
+} from "../backtest/diagnostic-qualification-audit";
+import {
   validateAsOfFairness,
   formatAsOfReport,
 } from "../backtest/as-of-validation";
@@ -1643,6 +1647,16 @@ export async function runAdminAction(
         candidates: evaluatedCandidates,
         graded: grade.graded,
       });
+      // Diagnostic qualification audit — surfaces per-candidate
+      // gate statuses for every diagnostic-qualified candidate
+      // + edge-filtered slices + an integrity check that
+      // proves only marketContext was overridden. Pure
+      // diagnostic; never alters the live model.
+      const diagnosticQualificationAudit = buildDiagnosticQualificationAudit({
+        replay: marketContextCalibration,
+        bucketScoresByCandidateId:
+          bucketScoresFromEvaluatedCandidates(evaluatedCandidates),
+      });
       // Persist to DB. New row carries both candidatesJson +
       // resultsJson so the pregame snapshot isn't overwritten;
       // the latest row wins.
@@ -1685,6 +1699,10 @@ export async function runAdminAction(
           // section on /monitor and /backtest/week-1 renders
           // without re-running the replay.
           marketContextCalibration,
+          // Per-candidate gate statuses + integrity check +
+          // edge-filtered slices. Diagnostic only; lives next
+          // to the calibration so the pages can render both.
+          diagnosticQualificationAudit,
         },
       });
       // File mirror — small, secret-free. Per-week filename so
@@ -1816,6 +1834,7 @@ export async function runAdminAction(
           summary: grade.summary,
           scorecardAudit,
           marketContextCalibration,
+          diagnosticQualificationAudit,
           dbSaved: dbSave.ok,
           gradedFile,
         },
