@@ -596,9 +596,302 @@ async function main(): Promise<void> {
     else console.log("[13] FAIL — state file");
   }
 
+  // 14. run-nflverse-ingestion runs WITHOUT requiring
+  //     ALLOW_REAL_ODDS_API_CALLS or ODDS_API_KEY.
+  {
+    const r = makeReport("run-nflverse-ingestion runs without paid env");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "nflverse ingest — seasons 2024, 2025, source=nflverse, dryRun=false\n" +
+        "fetched 8 files. Falling through to normalize + write.\n" +
+        "normalized: 570 games, 12588 player-weeks, 0 team-weeks, 1967 roster entries, 0 snap rows\n" +
+        "written:\n" +
+        `  ${path.join(repoRoot, "data/processed/nfl/games.csv")}\n` +
+        `  ${path.join(repoRoot, "data/processed/nfl/player_week_stats.csv")}\n` +
+        `  ${path.join(repoRoot, "data/processed/nfl/rosters.csv")}\n` +
+        "  skipped: team_week_stats.csv (no rows)\n" +
+        "  skipped: snap_counts.csv (none)\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 1000,
+    });
+    const result = await withEnvAsync(
+      {
+        ALLOW_REAL_ODDS_API_CALLS: undefined,
+        ODDS_API_KEY: undefined,
+      },
+      () =>
+        runAdminAction({
+          action: "run-nflverse-ingestion",
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, result.ok === true, `ok=${result.ok}, status=${result.status}`);
+    check(
+      r,
+      spawner.calls.length === 1,
+      `expected one spawn call, got ${spawner.calls.length}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[14] PASS — nflverse ingestion runs without paid env");
+    else console.log("[14] FAIL — nflverse without paid env");
+  }
+
+  // 15. nflverse spec passes ALLOW_NFLVERSE_NETWORK_FETCH=true
+  //     but never ALLOW_REAL_ODDS_API_CALLS=true.
+  {
+    const r = makeReport("nflverse spec env: flips only the nflverse flag");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "normalized: 1 games, 1 player-weeks, 0 team-weeks, 1 roster entries, 0 snap rows\nwritten:\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 10,
+    });
+    // Even if the parent process happens to have ALLOW_REAL_ODDS_API_CALLS
+    // or ODDS_API_KEY set, the runner must STRIP them before spawning the
+    // free nflverse subprocess.
+    await withEnvAsync(
+      {
+        ALLOW_REAL_ODDS_API_CALLS: "true",
+        ODDS_API_KEY: "sk-should-never-be-forwarded",
+      },
+      () =>
+        runAdminAction({
+          action: "run-nflverse-ingestion",
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    const env = spawner.calls[0]?.env ?? {};
+    check(
+      r,
+      env.ALLOW_NFLVERSE_NETWORK_FETCH === "true",
+      `ALLOW_NFLVERSE_NETWORK_FETCH should be 'true', got ${env.ALLOW_NFLVERSE_NETWORK_FETCH}`,
+    );
+    check(
+      r,
+      env.ALLOW_REAL_ODDS_API_CALLS === undefined,
+      `ALLOW_REAL_ODDS_API_CALLS must be stripped, got ${env.ALLOW_REAL_ODDS_API_CALLS}`,
+    );
+    check(
+      r,
+      env.ODDS_API_KEY === undefined,
+      "ODDS_API_KEY must be stripped from the child env",
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[15] PASS — nflverse env: flag-only, paid env stripped");
+    else console.log("[15] FAIL — nflverse env");
+  }
+
+  // 16. nflverse spec argv is a closed list with no --execute,
+  //     no shell metachars, no arbitrary command path.
+  {
+    const r = makeReport("nflverse spec argv shape");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "normalized: 0 games, 0 player-weeks, 0 team-weeks, 0 roster entries, 0 snap rows\nwritten:\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 0,
+    });
+    await runAdminAction({
+      action: "run-nflverse-ingestion",
+      repoRoot,
+      spawner: spawner.fn,
+    });
+    const spec = spawner.calls[0];
+    check(r, Array.isArray(spec.args), "args must be an array (no shell)");
+    check(
+      r,
+      spec.args.includes("--source") && spec.args.includes("nflverse"),
+      "must include --source nflverse",
+    );
+    check(
+      r,
+      spec.args.includes("--no-dry-run"),
+      "must include --no-dry-run (actually write)",
+    );
+    check(
+      r,
+      !spec.args.includes("--execute"),
+      "must NOT include --execute (that's an Odds API flag)",
+    );
+    check(
+      r,
+      !spec.args.some((a) => /the-odds-api|odds-api\.com/i.test(a)),
+      "must not reference any Odds API endpoint in args",
+    );
+    check(
+      r,
+      !spec.args.some((a) => /[;&|`$()<>]/.test(a)),
+      "no shell metachars in args",
+    );
+    check(
+      r,
+      typeof spec.command === "string" && spec.command.endsWith("tsx"),
+      `command should be the tsx binary, got ${spec.command}`,
+    );
+    check(
+      r,
+      spec.args.some((a) => a.endsWith("ingest-nfl-history.ts")),
+      "must invoke ingest-nfl-history.ts (whitelisted), not arbitrary script",
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[16] PASS — nflverse argv is a whitelisted closed list");
+    else console.log("[16] FAIL — nflverse argv shape");
+  }
+
+  // 17. Result file is written with the expected non-secret shape.
+  {
+    const r = makeReport("nflverse result file shape");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "normalized: 570 games, 12588 player-weeks, 0 team-weeks, 1967 roster entries, 0 snap rows\n" +
+        "written:\n" +
+        `  ${path.join(repoRoot, "data/processed/nfl/games.csv")}\n` +
+        `  ${path.join(repoRoot, "data/processed/nfl/player_week_stats.csv")}\n`,
+      stderr: "",
+      timedOut: false,
+      durationMs: 1234,
+    });
+    const before = Date.now();
+    const res = await runAdminAction({
+      action: "run-nflverse-ingestion",
+      repoRoot,
+      spawner: spawner.fn,
+    });
+    check(r, res.ok === true, `action should succeed, got status=${res.status}`);
+    const filePath = path.join(
+      repoRoot,
+      "data",
+      "admin-ingestion",
+      "latest-nflverse-ingestion.json",
+    );
+    check(r, fs.existsSync(filePath), `result file should exist at ${filePath}`);
+    if (fs.existsSync(filePath)) {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      check(
+        r,
+        parsed.action === "run-nflverse-ingestion",
+        `action field: ${parsed.action}`,
+      );
+      check(
+        r,
+        parsed.paidApiCallAttempted === false,
+        "paidApiCallAttempted must be false",
+      );
+      check(
+        r,
+        parsed.guardrails?.noOddsApiCall === true,
+        "guardrails.noOddsApiCall must be true",
+      );
+      check(
+        r,
+        parsed.guardrails?.noTouchdownProps === true,
+        "guardrails.noTouchdownProps must be true",
+      );
+      check(
+        r,
+        parsed.guardrails?.noAutomatedBetting === true,
+        "guardrails.noAutomatedBetting must be true",
+      );
+      check(
+        r,
+        Array.isArray(parsed.outputFilesWritten) &&
+          parsed.outputFilesWritten.length === 2,
+        `outputFilesWritten count=${parsed.outputFilesWritten?.length}`,
+      );
+      check(
+        r,
+        parsed.rowsProcessed?.games === 570 &&
+          parsed.rowsProcessed?.playerWeekStats === 12588,
+        "rowsProcessed parsed from normalized line",
+      );
+      check(
+        r,
+        typeof parsed.startedAt === "string" && typeof parsed.finishedAt === "string",
+        "startedAt + finishedAt are strings",
+      );
+      check(
+        r,
+        Date.parse(parsed.startedAt) >= before - 1000,
+        "startedAt is recent",
+      );
+      // No secret values must leak into the result file.
+      const raw = fs.readFileSync(filePath, "utf8");
+      check(r, !/ODDS_API_KEY/.test(raw), "no ODDS_API_KEY token in result file");
+      check(r, !/ADMIN_INGEST_TOKEN/.test(raw), "no ADMIN_INGEST_TOKEN in result file");
+      check(r, !/sk-/.test(raw), "no sk- key prefix in result file");
+    }
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[17] PASS — nflverse result file shape + no secrets");
+    else console.log("[17] FAIL — nflverse result file");
+  }
+
+  // 18. Even with nflverse action available, paid actions remain
+  //     blocked when ALLOW_REAL_ODDS_API_CALLS is unset.
+  {
+    const r = makeReport("paid actions remain blocked alongside the new action");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      durationMs: 0,
+    });
+    // Trigger the new action successfully...
+    await withEnvAsync({ ALLOW_REAL_ODDS_API_CALLS: undefined }, () =>
+      runAdminAction({
+        action: "run-nflverse-ingestion",
+        repoRoot,
+        spawner: spawner.fn,
+      }),
+    );
+    // ...then verify paid-smoke still refuses.
+    const smoke = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: undefined, ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-smoke",
+          confirmText: PAID_SMOKE_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, smoke.status === "skipped", `paid-smoke status=${smoke.status}`);
+    // Spawner saw exactly the nflverse call — not the smoke call.
+    check(
+      r,
+      spawner.calls.length === 1,
+      `spawner should only be called once (nflverse), got ${spawner.calls.length}`,
+    );
+    check(
+      r,
+      spawner.calls[0].args.some((a) => a.endsWith("ingest-nfl-history.ts")),
+      "the one call should be the nflverse script",
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[18] PASS — paid actions still blocked alongside nflverse action");
+    else console.log("[18] FAIL — paid gating regressed");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 13 admin-ingestion assertions passed.");
+    console.log("All 18 admin-ingestion assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {

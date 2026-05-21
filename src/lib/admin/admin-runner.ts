@@ -157,6 +157,10 @@ const realSubprocessRunner: SubprocessRunner = async (spec) => {
 const CREDITS_DONE_RE =
   /Done\.\s+Credits\s+estimated=(\d+)\s+actual=(\d+)\s+remaining=([\d?]+)/;
 const ESTIMATED_RE = /Estimated credits:\s+(\d+)\s+\(budget\s+(\d+)\)/;
+const NORMALIZED_RE =
+  /normalized:\s+(\d+)\s+games,\s+(\d+)\s+player-weeks,\s+(\d+)\s+team-weeks,\s+(\d+)\s+roster entries,\s+(\d+)\s+snap rows/;
+const WRITTEN_LINE_RE = /^\s+(.*data[/\\]processed[/\\]nfl[/\\][^\s]+\.csv)\s*$/gm;
+const SKIPPED_LINE_RE = /^\s+skipped:\s+([^\s]+\.csv)\s*\(([^)]+)\)\s*$/gm;
 
 interface ParsedCredits {
   creditsUsed?: number;
@@ -180,14 +184,120 @@ export function parseIngestionOutput(stdout: string): ParsedCredits {
   return out;
 }
 
+interface ParsedNflverseOutput {
+  outputFilesWritten: string[];
+  outputFilesSkipped: { name: string; reason: string }[];
+  rowsProcessed?: {
+    games: number;
+    playerWeekStats: number;
+    teamWeekStats: number;
+    rosters: number;
+    snapCounts: number;
+  };
+}
+
+export function parseNflverseIngestionOutput(stdout: string): ParsedNflverseOutput {
+  const out: ParsedNflverseOutput = {
+    outputFilesWritten: [],
+    outputFilesSkipped: [],
+  };
+  WRITTEN_LINE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WRITTEN_LINE_RE.exec(stdout)) !== null) {
+    out.outputFilesWritten.push(m[1]);
+  }
+  SKIPPED_LINE_RE.lastIndex = 0;
+  while ((m = SKIPPED_LINE_RE.exec(stdout)) !== null) {
+    out.outputFilesSkipped.push({ name: m[1], reason: m[2] });
+  }
+  const norm = NORMALIZED_RE.exec(stdout);
+  if (norm) {
+    out.rowsProcessed = {
+      games: Number(norm[1]),
+      playerWeekStats: Number(norm[2]),
+      teamWeekStats: Number(norm[3]),
+      rosters: Number(norm[4]),
+      snapCounts: Number(norm[5]),
+    };
+  }
+  return out;
+}
+
+const NFLVERSE_RESULT_FILE = path.join(
+  "data",
+  "admin-ingestion",
+  "latest-nflverse-ingestion.json",
+);
+
+function writeNflverseResultFile(args: {
+  repoRoot: string;
+  startedAt: string;
+  finishedAt: string;
+  status: "success" | "failure";
+  parsed: ParsedNflverseOutput;
+  errorMessage?: string;
+}): string {
+  const target = path.join(args.repoRoot, NFLVERSE_RESULT_FILE);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const payload = {
+    action: "run-nflverse-ingestion",
+    startedAt: args.startedAt,
+    finishedAt: args.finishedAt,
+    status: args.status,
+    paidApiCallAttempted: false,
+    outputFilesWritten: args.parsed.outputFilesWritten,
+    outputFilesSkipped: args.parsed.outputFilesSkipped,
+    rowsProcessed: args.parsed.rowsProcessed ?? null,
+    errorMessage: args.errorMessage ?? null,
+    guardrails: {
+      noOddsApiCall: true,
+      noTouchdownProps: true,
+      noAutomatedBetting: true,
+    },
+  };
+  fs.writeFileSync(target, JSON.stringify(payload, null, 2) + "\n");
+  return target;
+}
+
 // ---- per-action argv builders (fixed lists, no user input) ------------
 
 function ingestScriptPath(repoRoot: string): string {
   return path.join(repoRoot, "scripts", "ingest-historical-prop-lines.ts");
 }
 
+function nflverseScriptPath(repoRoot: string): string {
+  return path.join(repoRoot, "scripts", "ingest-nfl-history.ts");
+}
+
 function gamesCsvPath(repoRoot: string): string {
   return path.join(repoRoot, "data", "processed", "nfl", "games.csv");
+}
+
+/**
+ * Free public nflverse ingestion. Forwards
+ * ALLOW_NFLVERSE_NETWORK_FETCH=true to the child but explicitly
+ * strips ALLOW_REAL_ODDS_API_CALLS and ODDS_API_KEY — even if
+ * those happen to be set in the parent process — so this action
+ * can never accidentally trip the paid path.
+ */
+function buildNflverseIngestionSpec(repoRoot: string): SubprocessSpec {
+  const parentEnv = { ...process.env };
+  delete parentEnv.ALLOW_REAL_ODDS_API_CALLS;
+  delete parentEnv.ODDS_API_KEY;
+  return {
+    command: defaultTsxBin(repoRoot),
+    args: [
+      nflverseScriptPath(repoRoot),
+      "--seasons",
+      "2024,2025",
+      "--source",
+      "nflverse",
+      "--no-dry-run",
+    ],
+    env: { ...parentEnv, ALLOW_NFLVERSE_NETWORK_FETCH: "true" },
+    timeoutMs: 300_000,
+    cwd: repoRoot,
+  };
 }
 
 function buildDryRunSpec(repoRoot: string): SubprocessSpec {
@@ -288,6 +398,55 @@ export async function runAdminAction(
       recordActionResult({
         action: "readiness-check",
         result: "success",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "run-nflverse-ingestion": {
+      const startedAt = new Date().toISOString();
+      const sub = await spawner(buildNflverseIngestionSpec(repoRoot));
+      const finishedAt = new Date().toISOString();
+      const parsed = parseNflverseIngestionOutput(sub.stdout);
+      const ok = sub.exitCode === 0 && !sub.timedOut;
+      const errorMessage = ok
+        ? undefined
+        : sub.timedOut
+          ? "nflverse ingestion timed out"
+          : `nflverse ingestion failed with exit ${sub.exitCode}`;
+      const resultPath = writeNflverseResultFile({
+        repoRoot,
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        errorMessage,
+      });
+      const fileCount = parsed.outputFilesWritten.length;
+      const result: AdminActionResult = {
+        action: "run-nflverse-ingestion",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `nflverse ingestion OK. Wrote ${fileCount} processed file(s)${
+              parsed.rowsProcessed
+                ? `; ${parsed.rowsProcessed.games} games, ${parsed.rowsProcessed.playerWeekStats} player-weeks`
+                : ""
+            }.`
+          : errorMessage!,
+        detail: truncateForUi(sub.stdout, sub.stderr),
+        data: {
+          outputFilesWritten: parsed.outputFilesWritten,
+          outputFilesSkipped: parsed.outputFilesSkipped,
+          rowsProcessed: parsed.rowsProcessed,
+          resultFile: resultPath,
+          paidApiCallAttempted: false,
+        },
+      };
+      recordActionResult({
+        action: "run-nflverse-ingestion",
+        result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,
       });

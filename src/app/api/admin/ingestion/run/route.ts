@@ -28,6 +28,7 @@ export const dynamic = "force-dynamic";
 
 const VALID_ACTIONS: readonly AdminAction[] = [
   "readiness-check",
+  "run-nflverse-ingestion",
   "dry-run",
   "paid-smoke",
   "paid-week1",

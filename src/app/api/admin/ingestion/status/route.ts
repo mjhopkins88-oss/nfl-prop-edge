@@ -93,7 +93,7 @@ function recommendNext(s: {
   state: { smokeSucceededAt?: string; week1IngestionSucceededAt?: string };
 }): string {
   if (!s.data.processedNflDataPresent) {
-    return "Run the nflverse ingestion locally to populate data/processed/nfl/ before any paid step.";
+    return "Run the free nflverse ingestion to populate data/processed/nfl/ before any paid step.";
   }
   if (!s.configuration.oddsApiKeyConfigured) {
     return "Set ODDS_API_KEY in this environment before any paid action.";
