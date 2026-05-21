@@ -17,7 +17,8 @@ type ActionName =
   | "odds-week1-subset-paid"
   | "paid-week1"
   | "migrate-odds-to-canonical"
-  | "stored-backtest";
+  | "stored-backtest"
+  | "grade-week1-stored";
 
 interface StatusResponse {
   ok: boolean;
@@ -310,6 +311,14 @@ export function AdminIngestionClient() {
             disabled={!token || busy !== null}
             busy={busy === "stored-backtest"}
             onRun={() => void runAction("stored-backtest")}
+          />
+          <ActionRow
+            label="9. Grade Week 1 stored backtest"
+            description="Grades existing stored pregame candidates using processed nflverse results. No API call."
+            buttonLabel="Grade"
+            disabled={!token || busy !== null}
+            busy={busy === "grade-week1-stored"}
+            onRun={() => void runAction("grade-week1-stored")}
           />
         </div>
       </section>

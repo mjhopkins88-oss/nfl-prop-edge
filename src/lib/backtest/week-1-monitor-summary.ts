@@ -22,6 +22,27 @@ import {
   type PersistenceClient,
 } from "../persistence/week-1-persistence";
 
+export interface GradedSideSnapshot {
+  wins: number;
+  losses: number;
+  pushes: number;
+  graded: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+export interface GradedSnapshot {
+  gradedAt: string;
+  totalCandidates: number;
+  candidatesWithActual: number;
+  candidatesMissingActual: number;
+  qualifiedPlays: number;
+  overSide: GradedSideSnapshot;
+  underSide: GradedSideSnapshot;
+  betterSide: "OVER" | "UNDER" | "TIE";
+}
+
 export interface StoredWeek1MonitorSnapshot {
   /** Where the data came from. `"none"` means neither source
    *  had a stored run; the caller should fall back to fixture
@@ -50,10 +71,11 @@ export interface StoredWeek1MonitorSnapshot {
   processedNflPresent: boolean;
   missingStoredOdds: boolean;
   missingProcessedNfl: boolean;
-  /** No graded outcomes exist yet — stored mode only generates
-   *  pregame candidates. `"graded"` is reserved for the future
-   *  when graded results land in the DB. */
+  /** "graded" when the admin grade-week1-stored action has run,
+   *  "ungraded" while only pregame candidates exist. */
   gradingStatus: "ungraded" | "graded" | "unavailable";
+  /** Populated when gradingStatus === "graded". */
+  graded?: GradedSnapshot;
   notes: string[];
 }
 
@@ -70,6 +92,86 @@ interface FileShape {
   missingProcessedNfl: boolean;
   scheduleReport?: { status?: string | null } | null;
   notes?: string[];
+}
+
+interface GradedFileShape {
+  gradedAt: string;
+  season: number;
+  week: number;
+  summary: {
+    totalCandidates: number;
+    candidatesWithActual: number;
+    candidatesMissingActual: number;
+    qualifiedPlays: number;
+    betterSide: "OVER" | "UNDER" | "TIE";
+    overSide: {
+      wins: number;
+      losses: number;
+      pushes: number;
+      graded: number;
+      hitRate: number;
+      roiPct: number;
+      unitsProfit: number;
+    };
+    underSide: {
+      wins: number;
+      losses: number;
+      pushes: number;
+      graded: number;
+      hitRate: number;
+      roiPct: number;
+      unitsProfit: number;
+    };
+  };
+}
+
+function readGradedFile(
+  season: number,
+  week: number,
+): GradedFileShape | undefined {
+  const p = path.join(
+    process.cwd(),
+    "data",
+    "backtests",
+    String(season),
+    `week-${week}-graded-summary.fixture.json`,
+  );
+  if (!fs.existsSync(p)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")) as GradedFileShape;
+  } catch {
+    return undefined;
+  }
+}
+
+function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | undefined {
+  if (!g) return undefined;
+  return {
+    gradedAt: g.gradedAt,
+    totalCandidates: g.summary.totalCandidates,
+    candidatesWithActual: g.summary.candidatesWithActual,
+    candidatesMissingActual: g.summary.candidatesMissingActual,
+    qualifiedPlays: g.summary.qualifiedPlays,
+    betterSide: g.summary.betterSide,
+    overSide: {
+      wins: g.summary.overSide.wins,
+      losses: g.summary.overSide.losses,
+      pushes: g.summary.overSide.pushes,
+      graded: g.summary.overSide.graded,
+      hitRatePct: g.summary.overSide.hitRate * 100,
+      roiPct: g.summary.overSide.roiPct,
+      unitsProfit: g.summary.overSide.unitsProfit,
+    },
+    underSide: {
+      wins: g.summary.underSide.wins,
+      losses: g.summary.underSide.losses,
+      pushes: g.summary.underSide.pushes,
+      graded: g.summary.underSide.graded,
+      hitRatePct: g.summary.underSide.hitRate * 100,
+      roiPct: g.summary.underSide.roiPct,
+      unitsProfit: g.summary.underSide.unitsProfit,
+    },
+  };
 }
 
 function readFile(season: number, week: number): FileShape | undefined {
@@ -118,6 +220,26 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
       const ready = run.realWeek1BacktestReady === true;
       const missingStoredOdds = status === "MISSING_STORED_ODDS";
       const missingProcessedNfl = status === "MISSING_PROCESSED_NFL";
+      // Graded summary lives in resultsJson when the
+      // grade-week1-stored action has run. Fall back to the
+      // file mirror so a redeploy that wipes only one source
+      // still finds the data.
+      const resultsJson = run.resultsJson as
+        | { summary?: GradedFileShape["summary"] }
+        | null
+        | undefined;
+      const dbGraded = resultsJson?.summary
+        ? toGradedSnapshot({
+            gradedAt: new Date().toISOString(),
+            season: args.season,
+            week: args.week,
+            summary: resultsJson.summary,
+          })
+        : undefined;
+      const fileGraded = toGradedSnapshot(
+        readGradedFile(args.season, args.week),
+      );
+      const graded = dbGraded ?? fileGraded;
       return {
         source: "postgres",
         dataMode: "stored",
@@ -130,13 +252,15 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
         processedNflPresent: !missingProcessedNfl,
         missingStoredOdds,
         missingProcessedNfl,
-        gradingStatus: "ungraded",
+        gradingStatus: graded ? "graded" : "ungraded",
+        graded,
         notes: [],
       };
     }
   }
   const file = readFile(args.season, args.week);
   if (file && file.dataMode === "stored") {
+    const graded = toGradedSnapshot(readGradedFile(args.season, args.week));
     return {
       source: "file",
       generatedAt: file.generatedAt,
@@ -150,7 +274,8 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
       processedNflPresent: !file.missingProcessedNfl,
       missingStoredOdds: file.missingStoredOdds,
       missingProcessedNfl: file.missingProcessedNfl,
-      gradingStatus: "ungraded",
+      gradingStatus: graded ? "graded" : "ungraded",
+      graded,
       notes: file.notes ?? [],
     };
   }

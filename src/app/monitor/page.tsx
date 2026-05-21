@@ -223,11 +223,61 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
           }
         />
       </div>
-      <p className={`mt-3 text-[11px] ${readyTone}`}>
-        {stored.realWeek1BacktestReady
-          ? "Stored Week 1 pregame candidates loaded. Hit rate / ROI not shown until graded results land."
-          : `Stored run not ready: ${stored.status}. Run /admin/ingestion → Migrate → Run Week 1 stored backtest.`}
-      </p>
+      {stored.graded ? (
+        <div className="mt-4 space-y-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+            Graded results · stored Week 1
+          </h3>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat
+              label="Qualified plays"
+              value={`${stored.graded.qualifiedPlays}`}
+              sub={`${stored.graded.candidatesWithActual} with actual stat`}
+            />
+            <Stat
+              label="OVER hit rate"
+              value={`${stored.graded.overSide.hitRatePct.toFixed(1)}%`}
+              sub={`${stored.graded.overSide.wins}W · ${stored.graded.overSide.losses}L`}
+            />
+            <Stat
+              label="OVER ROI"
+              value={`${stored.graded.overSide.roiPct.toFixed(1)}%`}
+              sub={`${stored.graded.overSide.unitsProfit.toFixed(2)} units`}
+            />
+            <Stat
+              label="UNDER hit rate"
+              value={`${stored.graded.underSide.hitRatePct.toFixed(1)}%`}
+              sub={`${stored.graded.underSide.wins}W · ${stored.graded.underSide.losses}L`}
+            />
+            <Stat
+              label="UNDER ROI"
+              value={`${stored.graded.underSide.roiPct.toFixed(1)}%`}
+              sub={`${stored.graded.underSide.unitsProfit.toFixed(2)} units`}
+            />
+            <Stat
+              label="Better side"
+              value={stored.graded.betterSide}
+              sub={
+                stored.graded.candidatesMissingActual > 0
+                  ? `${stored.graded.candidatesMissingActual} no-stat skipped`
+                  : undefined
+              }
+            />
+          </div>
+          <p className="text-[11px] text-ink-500">
+            Graded at · {stored.graded.gradedAt}. Naive both-side
+            grading at the recorded line + book odds. Not the
+            scorecard model&rsquo;s pick — see
+            /admin/ingestion for the grading action.
+          </p>
+        </div>
+      ) : (
+        <p className={`mt-3 text-[11px] ${readyTone}`}>
+          {stored.realWeek1BacktestReady
+            ? "Stored Week 1 pregame candidates loaded. Click \"Grade Week 1 stored backtest\" on /admin/ingestion to compute hit rate / ROI from processed nflverse stats. No API call."
+            : `Stored run not ready: ${stored.status}. Run /admin/ingestion → Migrate → Run Week 1 stored backtest.`}
+        </p>
+      )}
       {stored.generatedAt ? (
         <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-ink-500">
           Generated at · {stored.generatedAt}
@@ -363,28 +413,58 @@ function WeekByWeekTable({
           </thead>
           <tbody className="text-ink-800">
             {storedIsPrimary && stored ? (
-              <tr className="border-t border-white/40">
-                <td className="py-2 pr-3">Week 1 (stored, real)</td>
-                <td className="py-2 pr-3 text-right tabular-nums">
-                  {stored.candidateCount}
-                </td>
-                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
-                  pending
-                </td>
-                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
-                  pending
-                </td>
-                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
-                  pending
-                </td>
-                <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
-                  pending
-                </td>
-                <td className="py-2 pr-3 text-[11px] text-ink-500">—</td>
-                <td className="py-2 text-[11px] text-sea-700">
-                  Pregame candidates only — not graded yet
-                </td>
-              </tr>
+              stored.graded ? (
+                <tr className="border-t border-white/40">
+                  <td className="py-2 pr-3">Week 1 (stored, real)</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.candidateCount}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.graded.qualifiedPlays}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.graded.overSide.wins}/{stored.graded.underSide.wins} ·{" "}
+                    {stored.graded.overSide.losses}/{stored.graded.underSide.losses}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.graded.overSide.hitRatePct.toFixed(1)}% /{" "}
+                    {stored.graded.underSide.hitRatePct.toFixed(1)}%
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.graded.overSide.roiPct.toFixed(1)}% /{" "}
+                    {stored.graded.underSide.roiPct.toFixed(1)}%
+                  </td>
+                  <td className="py-2 pr-3 text-[11px]">
+                    Better · {stored.graded.betterSide}
+                  </td>
+                  <td className="py-2 text-[11px] text-sea-700">
+                    OVER / UNDER, naive both-side grading
+                  </td>
+                </tr>
+              ) : (
+                <tr className="border-t border-white/40">
+                  <td className="py-2 pr-3">Week 1 (stored, real)</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {stored.candidateCount}
+                  </td>
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    pending
+                  </td>
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    pending
+                  </td>
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    pending
+                  </td>
+                  <td className="py-2 pr-3 text-right text-[11px] text-ink-500">
+                    pending
+                  </td>
+                  <td className="py-2 pr-3 text-[11px] text-ink-500">—</td>
+                  <td className="py-2 text-[11px] text-sea-700">
+                    Pregame candidates only — not graded yet
+                  </td>
+                </tr>
+              )
             ) : null}
             {week1Results ? (
               <tr className="border-t border-white/40">

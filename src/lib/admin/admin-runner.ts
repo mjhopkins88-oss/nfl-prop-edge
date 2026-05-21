@@ -28,6 +28,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildReadinessReport } from "../../../scripts/check-real-week-1-readiness";
 import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-candidate-builder";
+import { gradeStoredWeek1Backtest } from "../backtest/week-1-grading";
+import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
 import {
   buildCanonicalOddsRows,
   canonicalMarketsPath,
@@ -1150,6 +1152,136 @@ export async function runAdminAction(
       recordActionResult({
         action: "stored-backtest",
         result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "grade-week1-stored": {
+      // Re-run the candidate builder to get the SAME pregame
+      // candidate set the stored-backtest action persisted, then
+      // grade each candidate against processed nflverse stats.
+      // We rebuild rather than reading candidatesJson from DB so
+      // the grader never depends on the previous row's shape
+      // surviving — same code path, same output.
+      const built = buildRealWeek1CandidatesFromStoredData({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      if (built.status !== "READY") {
+        const result: AdminActionResult = {
+          action: "grade-week1-stored",
+          ok: false,
+          status: "failure",
+          summary: `Cannot grade: candidate builder returned ${built.status}. Run the migration + stored backtest first.`,
+          detail: built.notes.join("\n"),
+          data: { candidateBuilderStatus: built.status },
+        };
+        recordActionResult({
+          action: "grade-week1-stored",
+          result: "failure",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+      const stats = loadProcessedPlayerWeekStatsStrict(
+        path.join(repoRoot, "data", "processed", "nfl"),
+      );
+      if (stats.status !== "READY") {
+        const result: AdminActionResult = {
+          action: "grade-week1-stored",
+          ok: false,
+          status: "failure",
+          summary: `Cannot grade: processed player_week_stats.csv missing at ${stats.source}.`,
+          detail: "Run nflverse ingestion to produce data/processed/nfl/player_week_stats.csv.",
+          data: { playerStatsStatus: stats.status, source: stats.source },
+        };
+        recordActionResult({
+          action: "grade-week1-stored",
+          result: "failure",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+      const grade = gradeStoredWeek1Backtest({
+        candidates: built.candidates,
+        season: 2025,
+        week: 1,
+        playerWeekStats: stats.rows,
+      });
+      // Persist to DB. New row carries both candidatesJson +
+      // resultsJson so the pregame snapshot isn't overwritten;
+      // the latest row wins.
+      const dbSave = await persistence.saveStoredBacktestRunToDb({
+        season: 2025,
+        week: 1,
+        dataMode: "stored",
+        status: built.status,
+        realWeek1BacktestReady: true,
+        scheduleValidationStatus: built.scheduleReport?.status ?? "PASS",
+        syntheticFixture: false,
+        candidatesJson: {
+          candidates: built.candidates.slice(0, 500),
+        },
+        resultsJson: {
+          summary: grade.summary,
+          gradedSampleSize: grade.graded.length,
+        },
+      });
+      // File mirror — small, secret-free.
+      const gradedFile = path.join(
+        repoRoot,
+        "data",
+        "backtests",
+        "2025",
+        "week-1-graded-summary.fixture.json",
+      );
+      fs.mkdirSync(path.dirname(gradedFile), { recursive: true });
+      fs.writeFileSync(
+        gradedFile,
+        JSON.stringify(
+          {
+            gradedAt: grade.summary.gradedAt,
+            season: 2025,
+            week: 1,
+            summary: grade.summary,
+            // Persist a few example rows so the page can show a
+            // breakdown without the full 290.
+            samples: grade.graded.slice(0, 20),
+            paidApiCallAttempted: false,
+            guardrails: {
+              noOddsApiCall: true,
+              noTouchdownProps: true,
+              noAutomatedBetting: true,
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      const result: AdminActionResult = {
+        action: "grade-week1-stored",
+        ok: true,
+        status: "success",
+        summary: `Graded ${grade.summary.qualifiedPlays}/${grade.summary.totalCandidates} qualified — OVER hit ${(grade.summary.overSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.overSide.roiPct.toFixed(1)}%, UNDER hit ${(grade.summary.underSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.underSide.roiPct.toFixed(1)}% (better: ${grade.summary.betterSide}).`,
+        detail:
+          `total=${grade.summary.totalCandidates} withActual=${grade.summary.candidatesWithActual} missing=${grade.summary.candidatesMissingActual} pushed=${grade.summary.candidatesPushed}\n` +
+          `OVER:  wins=${grade.summary.overSide.wins} losses=${grade.summary.overSide.losses} units=${grade.summary.overSide.unitsProfit.toFixed(2)}\n` +
+          `UNDER: wins=${grade.summary.underSide.wins} losses=${grade.summary.underSide.losses} units=${grade.summary.underSide.unitsProfit.toFixed(2)}\n` +
+          `DB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
+        data: {
+          summary: grade.summary,
+          dbSaved: dbSave.ok,
+          gradedFile,
+        },
+      };
+      recordActionResult({
+        action: "grade-week1-stored",
+        result: "success",
         summary: result.summary,
         repoRoot,
       });

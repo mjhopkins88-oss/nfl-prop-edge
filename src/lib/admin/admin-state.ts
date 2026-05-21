@@ -24,7 +24,8 @@ export type AdminAction =
   | "odds-week1-subset-paid"
   | "paid-week1"
   | "migrate-odds-to-canonical"
-  | "stored-backtest";
+  | "stored-backtest"
+  | "grade-week1-stored";
 
 export type AdminResult = "success" | "failure" | "skipped";
 
