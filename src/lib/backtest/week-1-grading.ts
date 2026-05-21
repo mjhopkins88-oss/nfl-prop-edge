@@ -100,6 +100,51 @@ export interface UniverseDiagnostics {
 }
 
 /**
+ * Per-prop-type aggregate for recommended plays. Mirrors the
+ * naive-grading MarketBucket but groups by recommendation side
+ * (the model's pick, not OVER+UNDER blindly).
+ */
+export interface RecommendedPropTypeRow {
+  propType: PropType;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+/**
+ * Confidence-tier aggregate. Tiers are the same Low/Medium/High
+ * cut points the live scorecard exposes via `confidenceLabelOf`.
+ */
+export interface RecommendedConfidenceTier {
+  tier: "High" | "Medium" | "Low";
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+/** Edge bucket for recommended plays, by selected-side edge. */
+export interface RecommendedEdgeBucket {
+  label: string;
+  edgeLow: number;
+  edgeHigh: number;
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+/**
  * The model's actual betting performance — qualified plays only.
  * Empty when the stored candidates carry no recommendation
  * (today's state: the candidate builder produces the universe
@@ -120,6 +165,12 @@ export interface RecommendedPlaysPerformance {
   unitsProfit: number;
   averageEdgePct: number;
   averageConfidence: number;
+  /** Optional per-prop-type / per-tier / per-edge-bucket
+   *  breakdowns. Present once the scorecard pass populates
+   *  recommendations on the candidates. */
+  byPropType?: RecommendedPropTypeRow[];
+  byConfidenceTier?: RecommendedConfidenceTier[];
+  byEdgeBucket?: RecommendedEdgeBucket[];
 }
 
 /**
@@ -478,28 +529,24 @@ export function gradeStoredWeek1Backtest(args: {
     byLineBucket: sortedByLineBucket,
   };
 
-  // Recommended plays — empty today. The stored
-  // RealWeekCandidate type carries no `recommendation` or
-  // `qualified` field; producing real numbers here requires
-  // running the V1 scorecard model on each candidate first.
-  // The page surfaces the note instead of zeroes-as-result.
-  const recommendedPlays: RecommendedPlaysPerformance = {
-    enabled: false,
-    note:
-      "Stored candidates carry no scorecard recommendation yet. " +
-      "The 290 candidates are the evaluated UNIVERSE, not bets the " +
-      "model would have placed. Wire `recommendation` + `qualified` " +
-      "onto the candidate builder output to populate this section.",
-    count: 0,
-    wins: 0,
-    losses: 0,
-    pushes: 0,
-    hitRatePct: 0,
-    roiPct: 0,
-    unitsProfit: 0,
-    averageEdgePct: 0,
-    averageConfidence: 0,
-  };
+  // Recommended plays — populated only when candidates carry a
+  // scorecard with qualified=true and a side recommendation
+  // (OVER/UNDER). The scorecard is the SAME decision engine the
+  // live Player Props page uses; we never invent a second
+  // decision path here.
+  const recommendedPlays = computeRecommendedPlays({
+    candidates: args.candidates,
+    graded,
+  });
+
+  // Disqualification breakdown — populated from scorecard
+  // disqualifiers when present, otherwise only from the data-
+  // side reasons grading can compute alone.
+  const disqualificationBreakdownFromScorecard = computeDisqualificationBreakdown({
+    candidates: args.candidates,
+    candidatesMissingActual,
+    candidatesPushed,
+  });
 
   // Parlay performance — same reason as above. Parlay legs
   // require model-derived modelProbability + qualified +
@@ -537,21 +584,7 @@ export function gradeStoredWeek1Backtest(args: {
     rejectionReasons: {},
   };
 
-  // Disqualification breakdown — only the data-side reasons
-  // we can compute today. Model-gate reasons (edge-too-thin,
-  // risk-gate, role-stability) stay at 0 until the scorecard
-  // pass runs and persists its decision per candidate.
-  const missingResult = candidatesMissingActual;
-  const ungradeable = candidatesPushed;
-  const disqualificationBreakdown: DisqualificationBreakdown = {
-    edgeTooThin: 0,
-    riskGate: 0,
-    roleStability: 0,
-    missingResult,
-    ungradeable,
-    other: 0,
-    totalRejected: missingResult + ungradeable,
-  };
+  const disqualificationBreakdown = disqualificationBreakdownFromScorecard;
 
   return {
     summary: {
@@ -575,5 +608,322 @@ export function gradeStoredWeek1Backtest(args: {
       byLineBucket: sortedByLineBucket,
     },
     graded,
+  };
+}
+
+// =====================================================================
+// Scorecard-aware aggregates — recommended plays only
+// =====================================================================
+
+const CONFIDENCE_TIERS: {
+  tier: "High" | "Medium" | "Low";
+  lo: number;
+  hi: number;
+}[] = [
+  { tier: "High", lo: 0.75, hi: 1 + 1e-9 },
+  { tier: "Medium", lo: 0.5, hi: 0.75 },
+  { tier: "Low", lo: 0, hi: 0.5 },
+];
+
+const EDGE_BUCKETS: { label: string; lo: number; hi: number }[] = [
+  { label: "5–7%", lo: 0.05, hi: 0.07 },
+  { label: "7–10%", lo: 0.07, hi: 0.1 },
+  { label: "10–15%", lo: 0.1, hi: 0.15 },
+  { label: "15%+", lo: 0.15, hi: Infinity },
+];
+
+function emptyRecommendedRow<T extends string>(label: T) {
+  return {
+    label,
+    count: 0,
+    wins: 0,
+    losses: 0,
+    pushes: 0,
+    unitsProfit: 0,
+  };
+}
+
+function pickOutcomeForSide(
+  g: GradedCandidate,
+  side: Side,
+): { outcome: GradedOutcome; profit: number } {
+  return side === "OVER"
+    ? { outcome: g.overOutcome, profit: g.overProfitPerUnit }
+    : { outcome: g.underOutcome, profit: g.underProfitPerUnit };
+}
+
+function finalizeRow<R extends {
+  count: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  unitsProfit: number;
+}>(row: R): R & {
+  hitRatePct: number;
+  roiPct: number;
+} {
+  const denom = row.wins + row.losses;
+  const graded = row.wins + row.losses + row.pushes;
+  return {
+    ...row,
+    hitRatePct: denom > 0 ? (row.wins / denom) * 100 : 0,
+    roiPct: graded > 0 ? (row.unitsProfit / graded) * 100 : 0,
+  };
+}
+
+function computeRecommendedPlays(args: {
+  candidates: readonly RealWeekCandidate[];
+  graded: readonly GradedCandidate[];
+}): RecommendedPlaysPerformance {
+  // Index graded outcomes by candidate id.
+  const gradedById = new Map<string, GradedCandidate>();
+  for (const g of args.graded) gradedById.set(g.candidateId, g);
+
+  // Recommended = candidates with a scorecard, qualified=true,
+  // and a side recommendation (OVER/UNDER, never PASS).
+  const recs = args.candidates.filter((c) => {
+    const s = c.scorecard;
+    if (!s) return false;
+    if (!s.qualified) return false;
+    return s.recommendation === "OVER" || s.recommendation === "UNDER";
+  });
+
+  if (recs.length === 0) {
+    // Either no scorecard pass has run, or the pass ran but
+    // every candidate was disqualified. Distinguish the two so
+    // the page note is honest.
+    const anyScored = args.candidates.some((c) => c.scorecard !== undefined);
+    return {
+      enabled: false,
+      note: anyScored
+        ? "Scorecard pass ran but produced 0 qualified plays for this " +
+          "week. Disqualification breakdown below shows why."
+        : "Stored candidates carry no scorecard recommendation yet. " +
+          "Run the admin Grade-Week-1 action to apply the V1 scorecard " +
+          "to the stored candidates and populate this section.",
+      count: 0,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      hitRatePct: 0,
+      roiPct: 0,
+      unitsProfit: 0,
+      averageEdgePct: 0,
+      averageConfidence: 0,
+    };
+  }
+
+  let wins = 0;
+  let losses = 0;
+  let pushes = 0;
+  let unitsProfit = 0;
+  let sumEdge = 0;
+  let sumConfidence = 0;
+  const byPropTypeMap = new Map<PropType, RecommendedPropTypeRow>();
+  const byTierMap = new Map<
+    string,
+    {
+      tier: "High" | "Medium" | "Low";
+      count: number;
+      wins: number;
+      losses: number;
+      pushes: number;
+      unitsProfit: number;
+    }
+  >();
+  const byEdgeBucketMap = new Map<
+    string,
+    {
+      label: string;
+      edgeLow: number;
+      edgeHigh: number;
+      count: number;
+      wins: number;
+      losses: number;
+      pushes: number;
+      unitsProfit: number;
+    }
+  >();
+
+  for (const c of recs) {
+    const s = c.scorecard;
+    if (!s) continue;
+    const g = gradedById.get(c.id);
+    if (!g) continue;
+    const side: Side = s.recommendation === "OVER" ? "OVER" : "UNDER";
+    const { outcome, profit } = pickOutcomeForSide(g, side);
+    if (outcome === "NO_DATA") continue;
+    if (outcome === "WIN") wins += 1;
+    else if (outcome === "LOSS") losses += 1;
+    else if (outcome === "PUSH") pushes += 1;
+    unitsProfit += profit;
+    sumEdge += s.edge;
+    sumConfidence += s.confidence;
+
+    let mkt = byPropTypeMap.get(c.propType);
+    if (!mkt) {
+      mkt = {
+        propType: c.propType,
+        count: 0,
+        wins: 0,
+        losses: 0,
+        pushes: 0,
+        hitRatePct: 0,
+        roiPct: 0,
+        unitsProfit: 0,
+      };
+      byPropTypeMap.set(c.propType, mkt);
+    }
+    mkt.count += 1;
+    if (outcome === "WIN") mkt.wins += 1;
+    else if (outcome === "LOSS") mkt.losses += 1;
+    else if (outcome === "PUSH") mkt.pushes += 1;
+    mkt.unitsProfit += profit;
+
+    const tier = CONFIDENCE_TIERS.find(
+      (t) => s.confidence >= t.lo && s.confidence < t.hi,
+    )?.tier ?? "Low";
+    let tierAgg = byTierMap.get(tier);
+    if (!tierAgg) {
+      tierAgg = {
+        tier,
+        count: 0,
+        wins: 0,
+        losses: 0,
+        pushes: 0,
+        unitsProfit: 0,
+      };
+      byTierMap.set(tier, tierAgg);
+    }
+    tierAgg.count += 1;
+    if (outcome === "WIN") tierAgg.wins += 1;
+    else if (outcome === "LOSS") tierAgg.losses += 1;
+    else if (outcome === "PUSH") tierAgg.pushes += 1;
+    tierAgg.unitsProfit += profit;
+
+    const eb = EDGE_BUCKETS.find(
+      (b) => s.edge >= b.lo && s.edge < b.hi,
+    );
+    if (eb) {
+      let bucket = byEdgeBucketMap.get(eb.label);
+      if (!bucket) {
+        bucket = {
+          label: eb.label,
+          edgeLow: eb.lo,
+          edgeHigh: eb.hi,
+          count: 0,
+          wins: 0,
+          losses: 0,
+          pushes: 0,
+          unitsProfit: 0,
+        };
+        byEdgeBucketMap.set(eb.label, bucket);
+      }
+      bucket.count += 1;
+      if (outcome === "WIN") bucket.wins += 1;
+      else if (outcome === "LOSS") bucket.losses += 1;
+      else if (outcome === "PUSH") bucket.pushes += 1;
+      bucket.unitsProfit += profit;
+    }
+  }
+
+  const count = wins + losses + pushes;
+  const decisive = wins + losses;
+  const byPropType: RecommendedPropTypeRow[] = [];
+  for (const m of byPropTypeMap.values()) {
+    const denom = m.wins + m.losses;
+    const graded = m.wins + m.losses + m.pushes;
+    m.hitRatePct = denom > 0 ? (m.wins / denom) * 100 : 0;
+    m.roiPct = graded > 0 ? (m.unitsProfit / graded) * 100 : 0;
+    byPropType.push(m);
+  }
+  byPropType.sort((a, b) => b.count - a.count);
+
+  const byConfidenceTier: RecommendedConfidenceTier[] = [];
+  for (const t of byTierMap.values()) {
+    byConfidenceTier.push(finalizeRow(t));
+  }
+  // Stable order: High → Medium → Low.
+  byConfidenceTier.sort((a, b) => {
+    const order = { High: 0, Medium: 1, Low: 2 };
+    return order[a.tier] - order[b.tier];
+  });
+
+  const byEdgeBucket: RecommendedEdgeBucket[] = [];
+  for (const b of byEdgeBucketMap.values()) {
+    byEdgeBucket.push(finalizeRow(b));
+  }
+  byEdgeBucket.sort((a, b) => a.edgeLow - b.edgeLow);
+
+  return {
+    enabled: true,
+    note: "",
+    count,
+    wins,
+    losses,
+    pushes,
+    hitRatePct: decisive > 0 ? (wins / decisive) * 100 : 0,
+    roiPct: count > 0 ? (unitsProfit / count) * 100 : 0,
+    unitsProfit,
+    averageEdgePct: count > 0 ? (sumEdge / count) * 100 : 0,
+    averageConfidence: count > 0 ? sumConfidence / count : 0,
+    byPropType,
+    byConfidenceTier,
+    byEdgeBucket,
+  };
+}
+
+function computeDisqualificationBreakdown(args: {
+  candidates: readonly RealWeekCandidate[];
+  candidatesMissingActual: number;
+  candidatesPushed: number;
+}): DisqualificationBreakdown {
+  const anyScored = args.candidates.some((c) => c.scorecard !== undefined);
+  if (!anyScored) {
+    return {
+      edgeTooThin: 0,
+      riskGate: 0,
+      roleStability: 0,
+      missingResult: args.candidatesMissingActual,
+      ungradeable: args.candidatesPushed,
+      other: 0,
+      totalRejected: args.candidatesMissingActual + args.candidatesPushed,
+    };
+  }
+  let edgeTooThin = 0;
+  let riskGate = 0;
+  let roleStability = 0;
+  let other = 0;
+  let totalRejected = 0;
+  for (const c of args.candidates) {
+    const s = c.scorecard;
+    if (!s) continue;
+    if (s.qualified) continue;
+    totalRejected += 1;
+    const primary = (s.primaryDisqualifier ?? "").toLowerCase();
+    if (primary.includes("edge")) edgeTooThin += 1;
+    else if (primary.includes("role stability")) roleStability += 1;
+    else if (
+      primary.includes("data quality") ||
+      primary.includes("injury") ||
+      primary.includes("weather") ||
+      primary.includes("correlation") ||
+      primary.includes("game script") ||
+      primary.includes("pace") ||
+      primary.includes("market context")
+    ) {
+      riskGate += 1;
+    } else {
+      other += 1;
+    }
+  }
+  return {
+    edgeTooThin,
+    riskGate,
+    roleStability,
+    missingResult: args.candidatesMissingActual,
+    ungradeable: args.candidatesPushed,
+    other,
+    totalRejected,
   };
 }
