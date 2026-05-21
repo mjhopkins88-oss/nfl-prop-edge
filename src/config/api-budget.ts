@@ -50,6 +50,32 @@ export type V1IngestionMarket = (typeof V1_INGESTION_MARKETS)[number];
  */
 export const CREDIT_OVERAGE_ABORT_RATIO = 1.1;
 
+/**
+ * Historical per-market credit cost for player-prop markets
+ * (anything keyed `player_*`). The Odds API documents this as the
+ * paid-tier rate for historical player prop snapshots. Standard
+ * markets (h2h / spreads / totals) cost 1 per (market × region);
+ * player props are billed materially higher. The 2026-05 paid
+ * smoke confirmed ~40 credits for 4 markets × 1 region, matching
+ * 10 credits per (market × region). See ODDS_API_CREDIT_AUDIT.md.
+ */
+export const HISTORICAL_PLAYER_PROP_CREDITS_PER_MARKET = 10;
+
+/**
+ * Hard cap on credits the smallest calibration smoke can spend.
+ * The runner refuses any plan or single request whose projected
+ * cumulative cost would push past this number. Keeps a wrong
+ * estimate from blowing real money.
+ */
+export const SMOKE_CALIBRATION_MAX_CREDITS = 50;
+
+/**
+ * The smallest paid smoke fires one events-list call + one
+ * event-odds call, then stops — regardless of how many games
+ * are in the snapshot.
+ */
+export const SMOKE_CALIBRATION_MAX_ODDS_REQUESTS = 1;
+
 /** Pregame snapshot offset (hours before kickoff, rounded to 5-min grid). */
 export const DEFAULT_HISTORICAL_SNAPSHOT_HOURS_BEFORE_KICKOFF = 3.5;
 

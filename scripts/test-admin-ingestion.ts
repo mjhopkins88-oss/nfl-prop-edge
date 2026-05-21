@@ -889,9 +889,142 @@ async function main(): Promise<void> {
     else console.log("[18] FAIL — paid gating regressed");
   }
 
+  // 19. paid-smoke spawns the calibration argv (--calibration,
+  //     --max-odds-requests 1, --max-credits 50).
+  {
+    const r = makeReport("paid-smoke uses calibration argv by default");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      exitCode: 0,
+      stdout:
+        "Dry-run complete. Estimated credits: 41 (budget 50).\n" +
+        "Done. Credits estimated=41 actual=41 remaining=950 budget=50. Usage log: x\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 10,
+    });
+    await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-smoke",
+          confirmText: PAID_SMOKE_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    const call = spawner.calls[0];
+    check(r, call.args.includes("--calibration"), "must pass --calibration");
+    const moIdx = call.args.indexOf("--max-odds-requests");
+    check(
+      r,
+      moIdx >= 0 && call.args[moIdx + 1] === "1",
+      `must pass --max-odds-requests 1, got ${call.args[moIdx + 1]}`,
+    );
+    const mcIdx = call.args.indexOf("--max-credits");
+    check(
+      r,
+      mcIdx >= 0 && call.args[mcIdx + 1] === "50",
+      `must pass --max-credits 50, got ${call.args[mcIdx + 1]}`,
+    );
+    check(r, call.args.includes("--execute"), "must include --execute");
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[19] PASS — paid-smoke argv defaults to calibration (1 odds, 50 credits)");
+    else console.log("[19] FAIL — paid-smoke calibration argv");
+  }
+
+  // 20. Failed paid-smoke records lastPaidSmokeCreditsUsed AND
+  //     does NOT unlock Week 1 paid ingestion.
+  {
+    const r = makeReport("failed smoke records credits, leaves Week 1 locked");
+    const repoRoot = makeTempRepo();
+    const spawner = recordingSpawner({
+      // Reproduces the 2026-05 abort log line — runner parses 41
+      // out of the cumulative-actual figure.
+      exitCode: 4,
+      stdout:
+        "2026-05-21T00:00:00.000Z ERROR ABORT mid-run: actual credits 41 exceed estimate 5 by >10% (cap 5.5)\n",
+      stderr: "",
+      timedOut: false,
+      durationMs: 50,
+    });
+    const fail = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-smoke",
+          confirmText: PAID_SMOKE_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, fail.status === "failure", `status=${fail.status}`);
+    check(r, fail.creditsUsed === 41, `creditsUsed=${fail.creditsUsed}`);
+    const state = readAdminState(repoRoot);
+    check(
+      r,
+      state.lastPaidSmokeResult === "failure",
+      `lastPaidSmokeResult=${state.lastPaidSmokeResult}`,
+    );
+    check(
+      r,
+      state.lastPaidSmokeCreditsUsed === 41,
+      `lastPaidSmokeCreditsUsed=${state.lastPaidSmokeCreditsUsed}`,
+    );
+    check(
+      r,
+      hasPriorSmokeSuccess(repoRoot) === false,
+      "smoke success must NOT be recorded after a failed smoke",
+    );
+    // Confirm Week 1 paid ingestion remains locked.
+    const week1 = await withEnvAsync(
+      { ALLOW_REAL_ODDS_API_CALLS: "true", ODDS_API_KEY: "sk-test" },
+      () =>
+        runAdminAction({
+          action: "paid-week1",
+          confirmText: PAID_WEEK1_CONFIRM_TEXT,
+          repoRoot,
+          spawner: spawner.fn,
+        }),
+    );
+    check(r, week1.status === "skipped", `week1 status=${week1.status}`);
+    check(
+      r,
+      (week1.reason ?? "").toLowerCase().includes("smoke"),
+      `week1 reason should cite smoke prerequisite, got: ${week1.reason}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[20] PASS — failed smoke records credits, Week 1 stays locked");
+    else console.log("[20] FAIL — failed-smoke state");
+  }
+
+  // 21. parseIngestionOutput extracts cumulative credits from the
+  //     pre-call abort line too.
+  {
+    const r = makeReport("output parser extracts credits from abort lines");
+    const overage = parseIngestionOutput(
+      "2026-05-21T00:00:00.000Z ERROR ABORT mid-run: actual credits 41 exceed estimate 5 by >10% (cap 5.5)\n",
+    );
+    check(r, overage.creditsUsed === 41, `overage creditsUsed=${overage.creditsUsed}`);
+    const precall = parseIngestionOutput(
+      "2026-05-21T00:00:00.000Z ERROR ABORT before request: projected cumulative actual 81 would exceed --max-credits 50\n",
+    );
+    check(
+      r,
+      precall.creditsUsed === 81,
+      `precall creditsUsed=${precall.creditsUsed}`,
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log("[21] PASS — parser extracts cumulative credits from aborts");
+    else console.log("[21] FAIL — abort-line parser");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 18 admin-ingestion assertions passed.");
+    console.log("All 21 admin-ingestion assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {
