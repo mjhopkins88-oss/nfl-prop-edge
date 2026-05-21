@@ -1,75 +1,111 @@
 # Real 2025 Week 1 Readiness Status
 
-Snapshot from the free / dry-run readiness pass. No paid APIs
-called. No `--execute`. No env flags flipped. No code logic
-changed.
+Snapshot after the free nflverse network fetch. No paid APIs
+called. No `--execute`. ALLOW_REAL_ODDS_API_CALLS is still unset.
+Only `ALLOW_NFLVERSE_NETWORK_FETCH=true` was used for the free
+public ingestion.
 
 ## TL;DR
 
-`/backtest/week-1` is still **synthetic fixture mode**. Both
-required real data sources are missing. Stored mode correctly
-refuses synthetic fallback.
+Processed nflverse data is now in place. The only remaining gap
+is the paid Odds API ingestion. `/backtest/week-1` still runs in
+synthetic fixture mode (the stored runner correctly refuses to
+fall back when stored odds are missing).
 
 | Required input | Path | Present? |
 |---|---|---|
-| Stored Odds API quotes | `data/processed/odds/2025/week-1-prop-markets.csv` | **No** |
-| Processed nflverse player history | `data/processed/nfl/player_week_stats.csv` | **No** |
+| Stored Odds API quotes | `data/processed/odds/2025/week-1-prop-markets.csv` | **No** (paid) |
+| Processed nflverse player history | `data/processed/nfl/player_week_stats.csv` | **yes (12,588 rows)** |
+| Processed games | `data/processed/nfl/games.csv` | yes (570 games, 2024-25) |
+| Processed rosters | `data/processed/nfl/rosters.csv` | yes (1,967 rows) |
 | Real Week 1 schedule fixture | `data/fixtures/nfl/2025-week-1-schedule.fixture.json` | yes |
-| Raw nflverse drop-zone | `data/raw/nfl/` | empty (`.gitkeep` only) |
+| Raw nflverse drop-zone | `data/raw/nfl/{2024,2025}/` | populated (CSVs, gitignored) |
 
-`realWeek1BacktestReady` is `false`. `dataMode` reports
-`stored / MISSING_STORED_ODDS`. The runner exits cleanly without
-synthesizing fake data.
+`realWeek1BacktestReady` is `false` — but for one reason only:
+stored odds are missing. `storedBuilderStatus` reports
+`MISSING_STORED_ODDS` (no longer `MISSING_PROCESSED_NFL`). The
+runner exits cleanly without synthesizing fake data.
+
+## What changed this pass
+
+### Wired the free nflverse network fetch
+
+`scripts/ingest-nfl-history.ts --source nflverse --no-dry-run`
+previously printed "scaffolded but not wired in" and exited
+without downloading. It now performs the actual fetch via Node's
+global `fetch` against the corrected nflverse-data release URLs,
+streams the CSVs into `data/raw/nfl/<season>/`, then falls
+through to the existing local-mode normalizer + writer.
+
+URL corrections:
+
+| Asset | Old (404) | New (verified) |
+|---|---|---|
+| Player weekly stats | `player_stats/player_stats_{season}.csv` | `stats_player/stats_player_week_{season}.csv` |
+| Schedules | `schedules/sched_{season}.csv` | `schedules/games.csv` (master, filtered per-season) |
+| Rosters | `rosters/roster_{season}.csv` | unchanged |
+| Snap counts | `snap_counts/snap_counts_{season}.csv` | unchanged |
+
+The `stats_player` tag is current for 2024+; the older
+`player_stats` tag stopped being updated mid-2025. The master
+`schedules/games.csv` carries all seasons in one file, so the
+fetcher downloads it once and filters per-season at write time.
+
+### Canonicalized gameId convention
+
+The normalizer in `normalizeGameRow` now always emits canonical
+kebab-case gameIds (`2025-w1-bal-at-buf`) instead of passing
+through nflverse's snake-case (`2025_01_BAL_BUF`). The schedule
+fixture and the stored-odds ingestion already use kebab-case;
+games.csv now matches, so schedule lookup by gameId works
+uniformly whether the schedule comes from the processed file or
+the static fixture.
+
+### Network mode kill-switch unchanged
+
+`ALLOW_NFLVERSE_NETWORK_FETCH=true` is still required to flip
+network fetch from the default off state. The flag is checked at
+CLI parse time; without it, `--source nflverse --no-dry-run`
+errors with a clear message. Dry-run still prints the plan
+without hitting the network.
 
 ## Commands run this pass
 
-All ran cleanly without spending credits or hitting any paid
-endpoint:
+### `ALLOW_NFLVERSE_NETWORK_FETCH=true npx tsx scripts/ingest-nfl-history.ts --seasons 2024,2025 --source nflverse --no-dry-run`
+
+- Downloaded 8 files (4 per season × 2 seasons) totaling ~21 MB.
+- Normalized: 570 games / 12,588 player-weeks / 0 team-weeks /
+  1,967 rosters / 0 snap rows.
+  - Team-week stats are not emitted as a nflverse asset — they
+    aggregate from play-by-play. Not required for V1 starter
+    markets.
+  - Snap-count rows didn't normalize (the new snap_counts CSV
+    uses different column names than the older normalizer
+    expects). Not required for V1.
+- Written: `games.csv`, `player_week_stats.csv`, `rosters.csv`,
+  `player_ids.csv` in `data/processed/nfl/`.
+- All raw and processed paths are gitignored except the directory
+  itself + `.gitkeep`. The processed CSVs themselves are not
+  committed.
 
 ### `npx tsx scripts/check-real-week-1-readiness.ts`
 
-- `status = NOT_READY`
+- `status = NOT_READY` (only the paid Odds API gap remains)
 - `realWeek1BacktestReady = false`
-- `syntheticFixture = true`
 - `missingStoredOdds = true`
-- `missingProcessedNfl = true`
+- `missingProcessedNfl = false`
 - `storedBuilderStatus = MISSING_STORED_ODDS`
-- Missing required files:
-  `data/processed/odds/2025/week-1-prop-markets.csv`,
-  `data/processed/nfl/player_week_stats.csv`
-- Next command: `npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run`
-- Next requires paid API: **false**
-
-### `npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run`
-
-- `note: no raw season folders found under data/raw/nfl/. Drop nflverse CSVs there (per --help) and re-run.`
-- Normalized: 0 games / 0 player-weeks / 0 team-weeks / 0
-  rosters / 0 snap rows.
-- Written: nothing — every output file skipped with "(no rows)".
-- `data/processed/nfl/` still contains only `.gitkeep`. The
-  script never crashed.
-
-### `npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --scope smoke-test --source mock --dry-run`
-
-- `dryRun=true`, `budget=200`, `source=mock`, exit 0.
-- ALLOW_REAL_ODDS_API_CALLS was unset.
-- Markets the script declares it pulls (from its `--help`):
-  `player_pass_attempts`, `player_pass_completions`,
-  `player_receptions`, `player_rush_attempts` — exactly the four
-  starter markets. No yardage. No touchdown markets.
-- Expected output path on a real run:
-  `data/processed/odds/2025/week-1-prop-markets.csv`.
-- 0 games were loaded from the mock source (the smoke mock
-  doesn't pre-seed 2025 W1 games). No paid call was attempted.
+- Next command: the paid Odds API ingestion (requires
+  `ALLOW_REAL_ODDS_API_CALLS=true` AND `--execute`).
+- `nextCommandRequiresPaidApi = true`.
 
 ### `npx tsx scripts/run-week-1-starter-test.ts --phase pregame --data-mode stored --season 2025 --week 1`
 
 - `status = MISSING_STORED_ODDS`. No synthetic fallback.
 - `realWeek1BacktestReady = false`.
-- `syntheticFixture = false` in stored mode (this is correct —
-  the run is "missing data", not "using synthetic data").
-- `data/backtests/2025/week-1-data-mode-status.fixture.json`
-  written with the missing-data status + next-step hints.
+- `syntheticFixture = false` in stored mode.
+- Status file written:
+  `data/backtests/2025/week-1-data-mode-status.fixture.json`.
 - No crash. No API call.
 
 ### Tests
@@ -78,32 +114,35 @@ endpoint:
 - `test-real-week-1-data-wiring.ts` — 10/10 passed
 - `test-week-1-schedule-validation.ts` — 10/10 passed
 - `test-week-1-data-integrity.ts` — 8/8 passed
+- `test-nflverse-ingestion.ts` — 11/11 passed
+- `test-backtest-fixtures.ts` — 22/22 passed
+- `test-backtest-tracking.ts` — 38/38 passed
+- `test-synthetic-model.ts` — 22/22 passed
+- `run-backtest-2025.ts --fixtures` — 7 qualified, 85.7% hit,
+  +63.6% ROI, +4.45 units (unchanged)
 - `tsc --noEmit` — clean
 - `npm run lint` — clean
 - `npm run build` — 63 static pages, deployment manifest written
 
 ## What is still missing
 
-1. `data/processed/nfl/player_week_stats.csv` — produced by
-   nflverse ingestion. The local path needs raw CSVs in
-   `data/raw/nfl/<season>/`. The network path needs
-   `ALLOW_NFLVERSE_NETWORK_FETCH=true` — **not** set.
-2. `data/processed/odds/2025/week-1-prop-markets.csv` — produced
+1. `data/processed/odds/2025/week-1-prop-markets.csv` — produced
    by the paid Odds API ingestion. Requires
    `ALLOW_REAL_ODDS_API_CALLS=true` AND `--execute` — **not**
-   set.
+   set. Not run this pass.
+
+That's the only gap.
 
 ## Confirmed by this pass
 
 - **No paid APIs were called.** ALLOW_REAL_ODDS_API_CALLS is
   unset; the Odds API client refuses real calls without both
   the env flag and `--execute`.
-- **No nflverse network fetches were made.**
-  ALLOW_NFLVERSE_NETWORK_FETCH is unset.
 - **No `--execute` was used** anywhere.
 - **No Kalshi connection.**
-- **No touchdown propTypes were admitted.** The starter-market
-  filter rejects yardage markets and never maps any TD market.
+- **No touchdown propTypes were admitted.** The CSV parser
+  strips TD columns at parse time; the normalizer's output
+  writer doesn't include any TD-bearing column.
 - **No automated betting paths exist.** The
   `test-real-week-1-readiness.ts` grep-asserts no `placeBet`,
   `placeWager`, `kalshi.+place`, `fetch(`, or `the-odds-api`
@@ -111,46 +150,38 @@ endpoint:
 - **Stored mode does not fall back to synthetic data** — the
   runner exits cleanly with a missing-data status instead.
 - **The schedule validator and leakage guard remain active.**
+- **Model logic untouched.** The change is purely in the
+  ingestion layer (URLs + actual network fetch + gameId
+  canonicalization).
 - **Default V1 fixture backtest output is unchanged** (7
   qualified, 85.7% hit, +63.6% ROI, +4.45 units).
 
 ## Exact next command
 
-Two options, in priority order. **Both safe — no paid API
-involved.**
-
-### Preferred — get nflverse data first
-
-The local path needs raw CSVs from the nflverse releases. Drop
-them into `data/raw/nfl/<season>/` and re-run:
+The remaining gap is the paid Odds API ingestion. It is
+**still gated** behind explicit user permission:
 
 ```bash
-# Where to drop the files (per `--help`):
-#   data/raw/nfl/2025/schedules.csv
-#   data/raw/nfl/2025/player_stats.csv
-#   data/raw/nfl/2024/player_stats.csv   (history baseline)
-#   data/raw/nfl/2024/schedules.csv
+# 1. Verify credit cost first (paid, minimal).
+ALLOW_REAL_ODDS_API_CALLS=true \
+  npx tsx scripts/ingest-historical-prop-lines.ts \
+  --scope smoke-test --execute
 
-npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run
+# 2. Actual Week 1 pull (paid).
+ALLOW_REAL_ODDS_API_CALLS=true \
+  npx tsx scripts/ingest-historical-prop-lines.ts \
+  --season 2025 --scope week --week 1 --execute
+
+# 3. Re-run the readiness check + stored-mode pregame.
+npx tsx scripts/check-real-week-1-readiness.ts
+npx tsx scripts/run-week-1-starter-test.ts \
+  --phase full --data-mode stored --season 2025 --week 1
 ```
 
-### Alternative — opt-in to the free nflverse network fetch
-
-Only if you'd rather pull from GitHub directly:
-
-```bash
-ALLOW_NFLVERSE_NETWORK_FETCH=true \
-  npx tsx scripts/ingest-nfl-history.ts --source nflverse --no-dry-run
-```
-
-This is **free**, but does talk to GitHub; it's gated behind
-the env flag for CI predictability.
-
-After either of the above produces
-`data/processed/nfl/player_week_stats.csv`, re-run the
-readiness check. The next-command line will then point at the
-paid Odds API step — which still requires your explicit approval
-before anything is spent.
+After step 2 produces
+`data/processed/odds/2025/week-1-prop-markets.csv`, the
+readiness check will flip to `READY` and the page's red
+synthetic-fixture banner will disappear.
 
 ## Standing rule
 

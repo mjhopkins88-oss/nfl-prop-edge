@@ -22,6 +22,7 @@ import path from "node:path";
 import process from "node:process";
 import {
   buildNflverseDownloadPlan,
+  fetchNflverseAssets,
   isNetworkFetchAllowed,
   loadAndNormalizeRaw,
   NETWORK_FETCH_ENV_FLAG,
@@ -158,8 +159,8 @@ Where to put raw nflverse CSVs (one folder per season):
 
 Public nflverse-data release URLs (no API key required):
   https://github.com/nflverse/nflverse-data/releases
-    /download/schedules/sched_{season}.csv
-    /download/player_stats/player_stats_{season}.csv
+    /download/schedules/games.csv                        (all seasons, filtered)
+    /download/stats_player/stats_player_week_{season}.csv
     /download/rosters/roster_{season}.csv
     /download/snap_counts/snap_counts_{season}.csv
 
@@ -203,22 +204,44 @@ async function main(): Promise<number> {
         console.log(`    ${f.filename} -> ${f.url}`);
       }
     }
-    if (!args.dryRun) {
-      if (!isNetworkFetchAllowed()) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `\nerror: network fetch requires ${NETWORK_FETCH_ENV_FLAG}=true. Set the env var and re-run.`,
-        );
-        return 3;
-      }
-      // eslint-disable-next-line no-console
-      console.error(
-        "\nnote: network fetch is scaffolded but not wired in. Drop the files listed above into the --raw directory and re-run with --source local --no-dry-run.",
-      );
+    if (args.dryRun) {
+      // dry-run path returns without touching the network.
       return 0;
     }
-    // dry-run path returns without writing.
-    return 0;
+    if (!isNetworkFetchAllowed()) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `\nerror: network fetch requires ${NETWORK_FETCH_ENV_FLAG}=true. Set the env var and re-run.`,
+      );
+      return 3;
+    }
+    // eslint-disable-next-line no-console
+    console.log("\nFetching nflverse assets into raw tree…");
+    const result = await fetchNflverseAssets({
+      seasons: args.seasons,
+      rawDir: opts.rawDir,
+      log: (line) => console.log(line),
+    });
+    if (result.errors.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(`\nfetch errors (${result.errors.length}):`);
+      for (const e of result.errors) {
+        // eslint-disable-next-line no-console
+        console.warn(`  HTTP ${e.status}  ${e.url}`);
+      }
+    }
+    if (result.downloaded.length === 0) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "\nerror: no assets downloaded. Check connectivity and the URLs above.",
+      );
+      return 4;
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `\nfetched ${result.downloaded.length} files. Falling through to normalize + write.`,
+    );
+    // Fall through to the local-mode normalize step below.
   }
 
   // local mode — read raw, normalize, optionally write.
