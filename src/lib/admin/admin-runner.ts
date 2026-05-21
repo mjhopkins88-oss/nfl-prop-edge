@@ -33,6 +33,10 @@ import {
   buildScorecardAudit,
 } from "../backtest/week-1-grading";
 import { buildMarketContextCalibration } from "../backtest/market-context-calibration";
+import {
+  validateAsOfFairness,
+  formatAsOfReport,
+} from "../backtest/as-of-validation";
 import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
 import {
   applyScorecardToCandidates,
@@ -1274,6 +1278,34 @@ export async function runAdminAction(
         candidates: built.candidates,
         playerHistoryByName,
       });
+      // As-of fairness validation. Confirms every candidate's
+      // odds were captured BEFORE kickoff and every attached
+      // history row is strict-before the target (season, week).
+      // If anything fails, abort the run — we will not grade a
+      // candidate set that may have leaked future data.
+      const asOfReport = validateAsOfFairness({
+        candidates: evaluatedCandidates,
+        season: 2025,
+        week: 1,
+        playerHistoryByName,
+      });
+      if (!asOfReport.ok) {
+        const result: AdminActionResult = {
+          action: "grade-week1-stored",
+          ok: false,
+          status: "failure",
+          summary: `Aborting grade: as-of fairness check failed — ${asOfReport.candidatesInvalid}/${asOfReport.candidatesChecked} candidates invalid. No grading performed.`,
+          detail: formatAsOfReport(asOfReport),
+          data: { asOfReport },
+        };
+        recordActionResult({
+          action: "grade-week1-stored",
+          result: "failure",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
       const grade = gradeStoredWeek1Backtest({
         candidates: evaluatedCandidates,
         season: 2025,
@@ -1323,6 +1355,11 @@ export async function runAdminAction(
           // + outcomes without re-running the grader. Cap keeps
           // the row JSON modest in size.
           gradedSample: grade.graded.slice(0, 100),
+          // As-of fairness validation report. Persisted so the
+          // page can render confirmation that the run was a
+          // fair as-of simulation (no post-kickoff odds, no
+          // future stats in the model's history join).
+          asOfReport,
           // Per-bucket disqualifier counts + feature-completeness
           // audit. Lets /monitor and /backtest/week-1 surface
           // "why is recommendedPlays empty?" without a second
@@ -1377,16 +1414,26 @@ export async function runAdminAction(
         ? `Recommended plays: ${recPlays.count} (${recPlays.wins}W·${recPlays.losses}L·${recPlays.pushes}P · hit ${recPlays.hitRatePct.toFixed(1)}% · ROI ${recPlays.roiPct.toFixed(1)}% · ${recPlays.unitsProfit.toFixed(2)}u)`
         : `Recommended plays: 0 (scorecard pass produced 0 qualified plays — see scorecardAudit.topDisqualifiers / featureCompleteness for why)`;
       const universeCopy = `Universe diagnostic: ${grade.summary.candidatesWithActual}/${grade.summary.totalCandidates} candidates with actual results — OVER hit ${(grade.summary.overSide.hitRate * 100).toFixed(1)}% / UNDER hit ${(grade.summary.underSide.hitRate * 100).toFixed(1)}% (better side: ${grade.summary.betterSide}, NOT model ROI)`;
+      const asOfHeadline = `As-of fairness: ${asOfReport.candidatesValid}/${asOfReport.candidatesChecked} candidates passed (snapshot < kickoff + strict-before history)`;
       const topDisqLine =
         scorecardAudit.topDisqualifiers.length > 0
           ? `Top disqualifier: ${scorecardAudit.topDisqualifiers[0].reason} (×${scorecardAudit.topDisqualifiers[0].count})`
           : "No scorecard disqualifiers recorded.";
+      const sampleSnapshotKickoffLines = evaluatedCandidates
+        .slice(0, 5)
+        .map(
+          (c) =>
+            `  · ${c.playerName} ${c.propType} ${c.line} · kickoff=${c.kickoffTime ?? "?"} · snapshot=${c.snapshotTime ?? "?"}`,
+        )
+        .join("\n");
       const result: AdminActionResult = {
         action: "grade-week1-stored",
         ok: true,
         status: "success",
-        summary: `${headlineRecCopy} · ${universeCopy}`,
+        summary: `${headlineRecCopy} · ${universeCopy} · ${asOfHeadline}`,
         detail:
+          `${formatAsOfReport(asOfReport)}\n` +
+          `Sample kickoff / snapshot times:\n${sampleSnapshotKickoffLines}\n\n` +
           `Recommended (model-qualified):\n` +
           (recPlays.enabled
             ? `  plays=${recPlays.count}  W=${recPlays.wins}  L=${recPlays.losses}  P=${recPlays.pushes}  hit=${recPlays.hitRatePct.toFixed(1)}%  ROI=${recPlays.roiPct.toFixed(1)}%  units=${recPlays.unitsProfit.toFixed(2)}  avgEdge=${recPlays.averageEdgePct.toFixed(2)}%  avgConfidence=${recPlays.averageConfidence.toFixed(2)}\n`

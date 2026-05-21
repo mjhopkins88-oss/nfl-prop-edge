@@ -81,6 +81,9 @@ export default async function Week1StarterTestPage() {
           graded={storedSnapshot.graded}
         />
       ) : null}
+      {storedSnapshot?.graded?.asOfReport ? (
+        <AsOfFairnessSection report={storedSnapshot.graded.asOfReport} />
+      ) : null}
       {scheduleValidation && (
         <ScheduleValidationSection validation={scheduleValidation} />
       )}
@@ -2079,6 +2082,142 @@ function RecommendedBreakdownTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function AsOfFairnessSection({
+  report,
+}: {
+  report: NonNullable<NonNullable<StoredWeek1MonitorSnapshot["graded"]>["asOfReport"]>;
+}) {
+  const ringColor = report.ok
+    ? "ring-sea-200/70"
+    : "ring-coral-200/70";
+  const chipColor = report.ok
+    ? "bg-sea-100 text-sea-900 ring-sea-300/80"
+    : "bg-coral-100 text-coral-900 ring-coral-300/80";
+  return (
+    <section
+      className={`glass-strong rounded-2xl p-5 ring-1 ${ringColor} sm:p-6`}
+      data-testid="as-of-fairness"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          As-of Fairness · {report.season} W{report.week}
+        </h2>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] ring-1 ${chipColor}`}
+        >
+          {report.ok ? "PASS · fair as-of simulation" : "FAIL · leakage detected"}
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] text-ink-600">
+        Each candidate is checked for: (1) odds carry both
+        kickoffTime and snapshotTime, (2) snapshotTime ≤
+        kickoffTime, and (3) every player-history row attached
+        to the candidate is strict-before the target week. The
+        grading action ABORTS without writing results if any
+        candidate fails — so a graded run that lands here has
+        already passed the check.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Cell label="Checked" value={`${report.candidatesChecked}`} />
+        <Cell
+          label="Valid"
+          value={`${report.candidatesValid}`}
+          sub={`${((report.candidatesValid / Math.max(report.candidatesChecked, 1)) * 100).toFixed(1)}%`}
+        />
+        <Cell
+          label="Invalid"
+          value={`${report.candidatesInvalid}`}
+          sub={report.candidatesInvalid === 0 ? "no leakage" : "leakage"}
+        />
+        <Cell label="Overall" value={report.ok ? "PASS" : "FAIL"} />
+      </div>
+      {report.candidates && report.candidates.length > 0 ? (
+        <div className="mt-3 overflow-x-auto">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Sample candidates (first 20)
+          </div>
+          <table className="mt-1 min-w-full text-[11px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Player</th>
+                <th className="pb-1 pr-2">Prop</th>
+                <th className="pb-1 pr-2">Kickoff</th>
+                <th className="pb-1 pr-2">Snapshot</th>
+                <th className="pb-1 pr-2 text-right">Snap &lt; Kick</th>
+                <th className="pb-1 pr-2 text-right">History rows</th>
+                <th className="pb-1 pr-2 text-right">History OK</th>
+                <th className="pb-1 text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {report.candidates.slice(0, 20).map((c) => (
+                <tr key={c.candidateId} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{c.playerName}</td>
+                  <td className="py-1 pr-2">{c.propType.replace(/_/g, " ")}</td>
+                  <td className="py-1 pr-2 text-[10px] text-ink-600">
+                    {c.kickoffTime ?? "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-[10px] text-ink-600">
+                    {c.snapshotTime ?? "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right">
+                    {c.snapshotBeforeKickoff === true
+                      ? "yes"
+                      : c.snapshotBeforeKickoff === false
+                        ? "NO"
+                        : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {c.historyRowsAttached}
+                  </td>
+                  <td className="py-1 pr-2 text-right">
+                    {c.historyWindowOk ? "yes" : "NO"}
+                  </td>
+                  <td
+                    className={
+                      "py-1 text-right " +
+                      (c.ok ? "text-sea-700" : "text-coral-700")
+                    }
+                  >
+                    {c.ok ? "OK" : "FAIL"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {report.sampleInvalid && report.sampleInvalid.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-coral-700">
+            Invalid candidates ({report.sampleInvalid.length} of {report.candidatesInvalid})
+          </div>
+          <ul className="mt-1 space-y-1 text-[11px] text-coral-800">
+            {report.sampleInvalid.map((c) => (
+              <li key={c.candidateId} className="border-t border-coral-200/60 pt-1">
+                <div className="font-semibold">
+                  {c.playerName} · {c.propType.replace(/_/g, " ")}
+                </div>
+                <div className="text-[10px] text-ink-600">
+                  kickoff={c.kickoffTime ?? "?"} · snapshot={c.snapshotTime ?? "?"}
+                </div>
+                <ul className="ml-3 list-disc">
+                  {c.violations.map((v, i) => (
+                    <li key={i}>
+                      <span className="font-mono text-[10px]">[{v.code}]</span>{" "}
+                      {v.detail}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

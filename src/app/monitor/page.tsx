@@ -501,6 +501,25 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
             />
           ) : null}
 
+          {stored.graded.asOfReport ? (
+            <p className="mt-3 text-[11px]">
+              <span
+                className={
+                  stored.graded.asOfReport.ok
+                    ? "rounded-full bg-sea-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sea-900 ring-1 ring-sea-300/80"
+                    : "rounded-full bg-coral-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-coral-900 ring-1 ring-coral-300/80"
+                }
+              >
+                As-of fairness ·{" "}
+                {stored.graded.asOfReport.ok ? "PASS" : "FAIL"}
+              </span>
+              <span className="ml-2 text-ink-500">
+                {stored.graded.asOfReport.candidatesValid}/
+                {stored.graded.asOfReport.candidatesChecked} candidates ·
+                snapshot &lt; kickoff &amp; strict-before history
+              </span>
+            </p>
+          ) : null}
           <p className="mt-3 text-[11px] text-ink-500">
             Graded at · {stored.graded.gradedAt}.
           </p>
