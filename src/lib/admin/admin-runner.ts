@@ -28,7 +28,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildReadinessReport } from "../../../scripts/check-real-week-1-readiness";
 import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-candidate-builder";
-import { gradeStoredWeek1Backtest } from "../backtest/week-1-grading";
+import {
+  gradeStoredWeek1Backtest,
+  buildScorecardAudit,
+} from "../backtest/week-1-grading";
 import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
 import {
   applyScorecardToCandidates,
@@ -1276,6 +1279,11 @@ export async function runAdminAction(
         week: 1,
         playerWeekStats: stats.rows,
       });
+      const scorecardAudit = buildScorecardAudit({
+        candidates: evaluatedCandidates,
+        playerHistoryByName,
+        samplePicksCount: 50,
+      });
       // Persist to DB. New row carries both candidatesJson +
       // resultsJson so the pregame snapshot isn't overwritten;
       // the latest row wins.
@@ -1302,6 +1310,11 @@ export async function runAdminAction(
           // + outcomes without re-running the grader. Cap keeps
           // the row JSON modest in size.
           gradedSample: grade.graded.slice(0, 100),
+          // Per-bucket disqualifier counts + feature-completeness
+          // audit. Lets /monitor and /backtest/week-1 surface
+          // "why is recommendedPlays empty?" without a second
+          // round trip.
+          scorecardAudit,
         },
       });
       // File mirror — small, secret-free.
@@ -1335,18 +1348,58 @@ export async function runAdminAction(
           2,
         ) + "\n",
       );
+      // Build a summary that honestly splits universe diagnostics
+      // from the model's recommended-plays performance. The old
+      // copy used `qualifiedPlays` (legacy = candidates with both
+      // sides decisive) and labeled it "qualified", which made
+      // the universe look like the model's bet count.
+      const recPlays = grade.summary.recommendedPlays;
+      const headlineRecCopy = recPlays.enabled
+        ? `Recommended plays: ${recPlays.count} (${recPlays.wins}W·${recPlays.losses}L·${recPlays.pushes}P · hit ${recPlays.hitRatePct.toFixed(1)}% · ROI ${recPlays.roiPct.toFixed(1)}% · ${recPlays.unitsProfit.toFixed(2)}u)`
+        : `Recommended plays: 0 (scorecard pass produced 0 qualified plays — see scorecardAudit.topDisqualifiers / featureCompleteness for why)`;
+      const universeCopy = `Universe diagnostic: ${grade.summary.candidatesWithActual}/${grade.summary.totalCandidates} candidates with actual results — OVER hit ${(grade.summary.overSide.hitRate * 100).toFixed(1)}% / UNDER hit ${(grade.summary.underSide.hitRate * 100).toFixed(1)}% (better side: ${grade.summary.betterSide}, NOT model ROI)`;
+      const topDisqLine =
+        scorecardAudit.topDisqualifiers.length > 0
+          ? `Top disqualifier: ${scorecardAudit.topDisqualifiers[0].reason} (×${scorecardAudit.topDisqualifiers[0].count})`
+          : "No scorecard disqualifiers recorded.";
       const result: AdminActionResult = {
         action: "grade-week1-stored",
         ok: true,
         status: "success",
-        summary: `Graded ${grade.summary.qualifiedPlays}/${grade.summary.totalCandidates} qualified — OVER hit ${(grade.summary.overSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.overSide.roiPct.toFixed(1)}%, UNDER hit ${(grade.summary.underSide.hitRate * 100).toFixed(1)}% / ROI ${grade.summary.underSide.roiPct.toFixed(1)}% (better: ${grade.summary.betterSide}).`,
+        summary: `${headlineRecCopy} · ${universeCopy}`,
         detail:
-          `total=${grade.summary.totalCandidates} withActual=${grade.summary.candidatesWithActual} missing=${grade.summary.candidatesMissingActual} pushed=${grade.summary.candidatesPushed}\n` +
-          `OVER:  wins=${grade.summary.overSide.wins} losses=${grade.summary.overSide.losses} units=${grade.summary.overSide.unitsProfit.toFixed(2)}\n` +
-          `UNDER: wins=${grade.summary.underSide.wins} losses=${grade.summary.underSide.losses} units=${grade.summary.underSide.unitsProfit.toFixed(2)}\n` +
-          `DB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
+          `Recommended (model-qualified):\n` +
+          (recPlays.enabled
+            ? `  plays=${recPlays.count}  W=${recPlays.wins}  L=${recPlays.losses}  P=${recPlays.pushes}  hit=${recPlays.hitRatePct.toFixed(1)}%  ROI=${recPlays.roiPct.toFixed(1)}%  units=${recPlays.unitsProfit.toFixed(2)}  avgEdge=${recPlays.averageEdgePct.toFixed(2)}%  avgConfidence=${recPlays.averageConfidence.toFixed(2)}\n`
+            : `  plays=0  reason: ${recPlays.note}\n`) +
+          `\nUniverse diagnostic (NOT betting performance):\n` +
+          `  total=${grade.summary.totalCandidates}  withActual=${grade.summary.candidatesWithActual}  missing=${grade.summary.candidatesMissingActual}  pushed=${grade.summary.candidatesPushed}\n` +
+          `  OVER:  wins=${grade.summary.overSide.wins} losses=${grade.summary.overSide.losses} units=${grade.summary.overSide.unitsProfit.toFixed(2)}\n` +
+          `  UNDER: wins=${grade.summary.underSide.wins} losses=${grade.summary.underSide.losses} units=${grade.summary.underSide.unitsProfit.toFixed(2)}\n` +
+          `\nDisqualification breakdown:\n` +
+          `  edgeTooThin=${grade.summary.disqualificationBreakdown.edgeTooThin}  ` +
+          `riskGate(total)=${grade.summary.disqualificationBreakdown.riskGate}  ` +
+          `other=${grade.summary.disqualificationBreakdown.other}  ` +
+          `missingResult=${grade.summary.disqualificationBreakdown.missingResult}  ` +
+          `ungradeable=${grade.summary.disqualificationBreakdown.ungradeable}\n` +
+          `  dataQualityGate=${grade.summary.disqualificationBreakdown.dataQualityGate}  ` +
+          `roleStabilityGate=${grade.summary.disqualificationBreakdown.roleStabilityGate}  ` +
+          `injuryContextGate=${grade.summary.disqualificationBreakdown.injuryContextGate}  ` +
+          `correlationExposureGate=${grade.summary.disqualificationBreakdown.correlationExposureGate}\n` +
+          `  weatherEnvironmentGate=${grade.summary.disqualificationBreakdown.weatherEnvironmentGate}  ` +
+          `gameScriptGate=${grade.summary.disqualificationBreakdown.gameScriptGate}  ` +
+          `paceGate=${grade.summary.disqualificationBreakdown.paceGate}  ` +
+          `marketContextGate=${grade.summary.disqualificationBreakdown.marketContextGate}\n` +
+          `\nScorecard audit:\n` +
+          `  candidatesWithScorecard=${scorecardAudit.candidatesWithScorecard}/${scorecardAudit.candidatesScored}  ` +
+          `qualified=${scorecardAudit.qualifiedCount}  disqualified=${scorecardAudit.disqualifiedCount}  ` +
+          `missingHistory=${scorecardAudit.candidatesMissingHistory}\n` +
+          `  byRecommendation: OVER=${scorecardAudit.byRecommendation.OVER} UNDER=${scorecardAudit.byRecommendation.UNDER} PASS=${scorecardAudit.byRecommendation.PASS} unknown=${scorecardAudit.byRecommendation.unknown}\n` +
+          `  ${topDisqLine}\n` +
+          `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
         data: {
           summary: grade.summary,
+          scorecardAudit,
           dbSaved: dbSave.ok,
           gradedFile,
         },
