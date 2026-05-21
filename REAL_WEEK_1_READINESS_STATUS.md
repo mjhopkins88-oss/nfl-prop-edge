@@ -1,121 +1,159 @@
 # Real 2025 Week 1 Readiness Status
 
-Snapshot of where the project stands on moving from synthetic
-fixture mode to real stored-data mode for the 2025 Week 1 starter
-test. No code logic changed by this audit. No paid APIs called.
+Snapshot from the free / dry-run readiness pass. No paid APIs
+called. No `--execute`. No env flags flipped. No code logic
+changed.
 
 ## TL;DR
 
-`/backtest/week-1` is still in **synthetic fixture mode** because
-both real data sources are missing:
+`/backtest/week-1` is still **synthetic fixture mode**. Both
+required real data sources are missing. Stored mode correctly
+refuses synthetic fallback.
 
 | Required input | Path | Present? |
 |---|---|---|
-| Stored Odds API quotes for Week 1 | `data/processed/odds/2025/week-1-prop-markets.csv` | **No** |
-| Stored Odds API quotes (alt layout) | `data/processed/prop_markets.csv` | yes (legacy / wrong week) |
+| Stored Odds API quotes | `data/processed/odds/2025/week-1-prop-markets.csv` | **No** |
 | Processed nflverse player history | `data/processed/nfl/player_week_stats.csv` | **No** |
-| Processed nflverse team history | `data/processed/nfl/team_week_stats.csv` | **No** |
-| Processed nflverse games | `data/processed/nfl/games.csv` | **No** |
-| Processed nflverse rosters | `data/processed/nfl/rosters.csv` | **No** |
 | Real Week 1 schedule fixture | `data/fixtures/nfl/2025-week-1-schedule.fixture.json` | yes |
 | Raw nflverse drop-zone | `data/raw/nfl/` | empty (`.gitkeep` only) |
 
 `realWeek1BacktestReady` is `false`. `dataMode` reports
-`stored / MISSING_STORED_ODDS` when invoked. The runner refuses
-synthetic fallback under `--data-mode stored`, exits cleanly,
-and writes the missing-data status file the page reads.
+`stored / MISSING_STORED_ODDS`. The runner exits cleanly without
+synthesizing fake data.
 
-## Verified non-issues
+## Commands run this pass
 
-- **Schedule validator is in place** — 16 real Week 1 games
-  committed in
-  `data/fixtures/nfl/2025-week-1-schedule.fixture.json`.
-- **Stored-data loaders work** — `processed-nfl-loader.ts`,
-  `stored-odds-loader.ts`, `real-week-candidate-builder.ts`
-  return `MISSING_*` statuses without throwing.
-- **Synthetic fallback is blocked** — stored mode never reads
-  `data/fixtures/backtest/week-1/`, even when both real inputs
-  are absent. Verified by re-running
-  `npx tsx scripts/run-week-1-starter-test.ts --phase pregame --data-mode stored --season 2025 --week 1`
-  with empty `data/processed/`.
-- **Leakage guard intact** — pregame writer still strips
-  outcomes (`week-1-leakage-check.fixture.json` reports
-  `leakageDetected: false`).
-- **API credit protection intact** — the Odds API client still
-  defaults to dry-run; `--execute` plus
-  `ALLOW_REAL_ODDS_API_CALLS=true` are both required for any
-  paid call. Neither has been set in this audit.
-- **Touchdown propTypes still excluded.** Starter-market filter
-  rejects `player_pass_yds`, `player_reception_yds`,
-  `player_rush_yds`, and never maps any TD market.
+All ran cleanly without spending credits or hitting any paid
+endpoint:
 
-## Stored-mode smoke check
+### `npx tsx scripts/check-real-week-1-readiness.ts`
 
+- `status = NOT_READY`
+- `realWeek1BacktestReady = false`
+- `syntheticFixture = true`
+- `missingStoredOdds = true`
+- `missingProcessedNfl = true`
+- `storedBuilderStatus = MISSING_STORED_ODDS`
+- Missing required files:
+  `data/processed/odds/2025/week-1-prop-markets.csv`,
+  `data/processed/nfl/player_week_stats.csv`
+- Next command: `npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run`
+- Next requires paid API: **false**
+
+### `npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run`
+
+- `note: no raw season folders found under data/raw/nfl/. Drop nflverse CSVs there (per --help) and re-run.`
+- Normalized: 0 games / 0 player-weeks / 0 team-weeks / 0
+  rosters / 0 snap rows.
+- Written: nothing — every output file skipped with "(no rows)".
+- `data/processed/nfl/` still contains only `.gitkeep`. The
+  script never crashed.
+
+### `npx tsx scripts/ingest-historical-prop-lines.ts --season 2025 --scope smoke-test --source mock --dry-run`
+
+- `dryRun=true`, `budget=200`, `source=mock`, exit 0.
+- ALLOW_REAL_ODDS_API_CALLS was unset.
+- Markets the script declares it pulls (from its `--help`):
+  `player_pass_attempts`, `player_pass_completions`,
+  `player_receptions`, `player_rush_attempts` — exactly the four
+  starter markets. No yardage. No touchdown markets.
+- Expected output path on a real run:
+  `data/processed/odds/2025/week-1-prop-markets.csv`.
+- 0 games were loaded from the mock source (the smoke mock
+  doesn't pre-seed 2025 W1 games). No paid call was attempted.
+
+### `npx tsx scripts/run-week-1-starter-test.ts --phase pregame --data-mode stored --season 2025 --week 1`
+
+- `status = MISSING_STORED_ODDS`. No synthetic fallback.
+- `realWeek1BacktestReady = false`.
+- `syntheticFixture = false` in stored mode (this is correct —
+  the run is "missing data", not "using synthetic data").
+- `data/backtests/2025/week-1-data-mode-status.fixture.json`
+  written with the missing-data status + next-step hints.
+- No crash. No API call.
+
+### Tests
+
+- `test-real-week-1-readiness.ts` — 8/8 passed
+- `test-real-week-1-data-wiring.ts` — 10/10 passed
+- `test-week-1-schedule-validation.ts` — 10/10 passed
+- `test-week-1-data-integrity.ts` — 8/8 passed
+- `tsc --noEmit` — clean
+- `npm run lint` — clean
+- `npm run build` — 63 static pages, deployment manifest written
+
+## What is still missing
+
+1. `data/processed/nfl/player_week_stats.csv` — produced by
+   nflverse ingestion. The local path needs raw CSVs in
+   `data/raw/nfl/<season>/`. The network path needs
+   `ALLOW_NFLVERSE_NETWORK_FETCH=true` — **not** set.
+2. `data/processed/odds/2025/week-1-prop-markets.csv` — produced
+   by the paid Odds API ingestion. Requires
+   `ALLOW_REAL_ODDS_API_CALLS=true` AND `--execute` — **not**
+   set.
+
+## Confirmed by this pass
+
+- **No paid APIs were called.** ALLOW_REAL_ODDS_API_CALLS is
+  unset; the Odds API client refuses real calls without both
+  the env flag and `--execute`.
+- **No nflverse network fetches were made.**
+  ALLOW_NFLVERSE_NETWORK_FETCH is unset.
+- **No `--execute` was used** anywhere.
+- **No Kalshi connection.**
+- **No touchdown propTypes were admitted.** The starter-market
+  filter rejects yardage markets and never maps any TD market.
+- **No automated betting paths exist.** The
+  `test-real-week-1-readiness.ts` grep-asserts no `placeBet`,
+  `placeWager`, `kalshi.+place`, `fetch(`, or `the-odds-api`
+  patterns in the production readiness module.
+- **Stored mode does not fall back to synthetic data** — the
+  runner exits cleanly with a missing-data status instead.
+- **The schedule validator and leakage guard remain active.**
+- **Default V1 fixture backtest output is unchanged** (7
+  qualified, 85.7% hit, +63.6% ROI, +4.45 units).
+
+## Exact next command
+
+Two options, in priority order. **Both safe — no paid API
+involved.**
+
+### Preferred — get nflverse data first
+
+The local path needs raw CSVs from the nflverse releases. Drop
+them into `data/raw/nfl/<season>/` and re-run:
+
+```bash
+# Where to drop the files (per `--help`):
+#   data/raw/nfl/2025/schedules.csv
+#   data/raw/nfl/2025/player_stats.csv
+#   data/raw/nfl/2024/player_stats.csv   (history baseline)
+#   data/raw/nfl/2024/schedules.csv
+
+npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run
 ```
-$ npx tsx scripts/run-week-1-starter-test.ts \
-    --phase pregame --data-mode stored --season 2025 --week 1
-stored mode: status=MISSING_STORED_ODDS;
-wrote week-1-data-mode-status.fixture.json. No synthetic fallback.
-  · No usable stored Odds API rows found for 2025 Week 1.
-  · Inspected: data/processed/odds/2025/week-1-prop-markets.csv (missing);
-              data/processed/prop_markets.csv (present)
-  · Next: run the Odds API ingestion in --execute mode
-          (requires ALLOW_REAL_ODDS_API_CALLS=true)
-          and re-run with --data-mode stored.
+
+### Alternative — opt-in to the free nflverse network fetch
+
+Only if you'd rather pull from GitHub directly:
+
+```bash
+ALLOW_NFLVERSE_NETWORK_FETCH=true \
+  npx tsx scripts/ingest-nfl-history.ts --source nflverse --no-dry-run
 ```
 
-Expected outcome — no crash, no synthetic data, exit 0.
+This is **free**, but does talk to GitHub; it's gated behind
+the env flag for CI predictability.
 
-## What we have not done (and will not do without explicit approval)
+After either of the above produces
+`data/processed/nfl/player_week_stats.csv`, re-run the
+readiness check. The next-command line will then point at the
+paid Odds API step — which still requires your explicit approval
+before anything is spent.
 
-- Set `ALLOW_REAL_ODDS_API_CALLS=true`.
-- Run any Odds API ingestion with `--execute`.
-- Set `ALLOW_NFLVERSE_NETWORK_FETCH=true`.
-- Hit any GitHub release URL.
-- Connect to Kalshi.
-- Place any wager.
-
-## What we need before stored mode can return READY
-
-In order:
-
-1. Get nflverse stat CSVs into the processed directory.
-   Two equivalent paths:
-   - **Local path** — drop nflverse CSVs into
-     `data/raw/nfl/{season}/{schedules,player_stats,team_stats,rosters,snap_counts}.csv`
-     and run
-     `npx tsx scripts/ingest-nfl-history.ts --source local --no-dry-run`
-     to normalize them into `data/processed/nfl/*.csv`.
-   - **Network path (opt-in, free)** — set
-     `ALLOW_NFLVERSE_NETWORK_FETCH=true` and run
-     `npx tsx scripts/ingest-nfl-history.ts --source nflverse --no-dry-run`.
-2. Run the Odds API ingestion for Week 1. Always smoke first,
-   then the actual pull:
-   ```
-   npx tsx scripts/ingest-historical-prop-lines.ts \
-       --season 2025 --scope smoke-test --source mock --dry-run
-   # ↓ explicit user approval required ↓
-   ALLOW_REAL_ODDS_API_CALLS=true \
-       npx tsx scripts/ingest-historical-prop-lines.ts \
-       --season 2025 --scope smoke-test --execute
-   ALLOW_REAL_ODDS_API_CALLS=true \
-       npx tsx scripts/ingest-historical-prop-lines.ts \
-       --season 2025 --scope week --week 1 --execute
-   ```
-3. Re-run stored mode:
-   ```
-   npx tsx scripts/run-week-1-starter-test.ts \
-       --phase full --data-mode stored --season 2025 --week 1
-   ```
-
-When step 3 returns `READY`, the page chip flips to
-`stored · READY`, the red synthetic banner disappears, and
-`realWeek1BacktestReady` becomes `true`.
-
-## Standing rule on this transition
+## Standing rule
 
 **Do not judge model performance until
 `realWeek1BacktestReady === true`.** The current Week 1
-synthetic output (KC@BAL + BUF@MIA placeholders) is a
-pipeline-mechanics test only. It must not be cited as evidence
-of edge.
+fixture-mode output is a pipeline-mechanics test only.
