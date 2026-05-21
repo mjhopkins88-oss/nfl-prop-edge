@@ -1269,28 +1269,75 @@ export async function runAdminAction(
           2,
         ) + "\n",
       );
+      // Build a focused failure summary when NO_ROWS_FOR_WEEK so
+      // the operator sees the week-mismatch root cause without
+      // hunting through the diagnostics blob.
+      const noRowsHint = (() => {
+        if (r.status !== "NO_ROWS_FOR_WEEK") return "";
+        const hist = r.marketWeekHistogram ?? {};
+        const lines: string[] = [
+          `Selected (season=${r.targetSeason ?? migrateWeek === 1 ? 2025 : 2025}, week=${r.targetWeek ?? migrateWeek}).`,
+        ];
+        const histEntries = Object.entries(hist).sort((a, b) => b[1] - a[1]);
+        if (histEntries.length > 0) {
+          lines.push("Legacy markets per week (parsed from gameId):");
+          for (const [k, v] of histEntries) lines.push(`  · ${k} → ${v} markets`);
+        }
+        if ((r.droppedWrongWeek ?? 0) > 0) {
+          lines.push(
+            `${r.droppedWrongWeek} markets dropped BEFORE join because their gameId is from a different week than the selected one.`,
+          );
+        }
+        if (r.sampleMarketGameIds && r.sampleMarketGameIds.length > 0) {
+          lines.push(
+            `First ${r.sampleMarketGameIds.length} market gameIds: ${r.sampleMarketGameIds.join(", ")}`,
+          );
+        }
+        if (r.sampleScheduleGameIds && r.sampleScheduleGameIds.length > 0) {
+          lines.push(
+            `First ${r.sampleScheduleGameIds.length} schedule gameIds for the target week: ${r.sampleScheduleGameIds.join(", ")}`,
+          );
+        } else {
+          lines.push(
+            `Schedule for the target week is EMPTY. games.csv has no rows for season=${r.targetSeason} week=${r.targetWeek}.`,
+          );
+        }
+        lines.push(
+          "Action: either pick the week that matches the markets in the CSV, or re-ingest legacy odds for the target week.",
+        );
+        return "\n\n" + lines.join("\n");
+      })();
       const result: AdminActionResult = {
         action: "migrate-odds-to-canonical",
         ok,
         status: ok ? "success" : "failure",
         summary: ok
-          ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}${
+          ? `Migration OK (week ${migrateWeek}). Wrote ${r.rowsWritten} canonical rows to ${r.target}${
               dbUpserted > 0
                 ? `; deleted ${dbDeleted} stale + upserted ${dbUpserted} in Postgres (rowCountAfter=${dbRowCountAfter}).`
                 : "."
             }${persistenceWarning ? ` ⚠ ${persistenceWarning}` : ""}`
-          : `Migration ${r.status}. No canonical file written.`,
+          : r.status === "NO_ROWS_FOR_WEEK"
+            ? `Migration ${r.status} for week ${migrateWeek}. Likely a week mismatch — see details below.`
+            : `Migration ${r.status}. No canonical file written.`,
         detail:
           `sourcesInspected:\n  ${r.sourcesInspected.join("\n  ")}` +
           (r.diagnostics
             ? `\ndiagnostics: ${JSON.stringify(r.diagnostics)}`
             : "") +
-          (dbError ? `\npersistence: ${dbError}` : ""),
+          (dbError ? `\npersistence: ${dbError}` : "") +
+          noRowsHint,
         data: {
           status: r.status,
+          targetSeason: r.targetSeason,
+          targetWeek: r.targetWeek,
           target: r.target,
           rowsWritten: r.rowsWritten,
           diagnostics: r.diagnostics,
+          marketWeekHistogram: r.marketWeekHistogram,
+          droppedWrongWeek: r.droppedWrongWeek,
+          sampleMarketGameIds: r.sampleMarketGameIds,
+          sampleScheduleGameIds: r.sampleScheduleGameIds,
           dbDeleted,
           dbUpserted,
           dbRowCountAfter,

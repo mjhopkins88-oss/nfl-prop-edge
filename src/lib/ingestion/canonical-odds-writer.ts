@@ -485,6 +485,27 @@ export interface MigrationResult {
   rowsWritten?: number;
   diagnostics?: CanonicalBuildResult["diagnostics"];
   sourcesInspected: string[];
+  /** Resolved (season, week) the migration actually operated
+   *  on. Surfaced even on failure so the operator can confirm
+   *  the UI sent the week they expected. */
+  targetSeason?: number;
+  targetWeek?: number;
+  /** Counts of how many legacy-CSV markets live in each week
+   *  (parsed from the gameId prefix `YYYY-w{N}-...`). Helps
+   *  operators see "your CSV has 122 Week 1 markets but you
+   *  migrated Week 2 → 0 rows expected." */
+  marketWeekHistogram?: Record<string, number>;
+  /** Markets dropped because their parsed week ≠ target week.
+   *  Counted separately from `droppedMissingGame`. */
+  droppedWrongWeek?: number;
+  /** First 20 distinct gameIds from the legacy markets CSV. */
+  sampleMarketGameIds?: string[];
+  /** First 20 distinct gameIds from games.csv for the target
+   *  (season, week). When `sampleMarketGameIds` and this list
+   *  contain similar-but-different strings (e.g., LA vs LAR),
+   *  the join failure is a normalization issue, not a missing-
+   *  data issue. */
+  sampleScheduleGameIds?: string[];
 }
 
 /**
@@ -565,7 +586,7 @@ export function migrateLegacyToCanonical(args: {
     return { status: "MISSING_GAMES", sourcesInspected };
   }
 
-  const markets = parseCsvRows(fs.readFileSync(legacyMarkets, "utf8"))
+  const allMarkets = parseCsvRows(fs.readFileSync(legacyMarkets, "utf8"))
     .map((r) => ({
       market_key: r.market_key,
       game_id: r.game_id,
@@ -575,6 +596,42 @@ export function migrateLegacyToCanonical(args: {
       snapshot_time: r.snapshot_time,
     }))
     .filter((r) => V1_STARTER_PROP_TYPES.has(r.prop_type));
+
+  // Pre-filter markets to the target week by parsing the
+  // gameId prefix. Legacy gameIds are `{season}-w{N}-...`; any
+  // market whose extracted week ≠ args.week is dropped here
+  // with a clear `wrong-week` reason instead of falling through
+  // to the writer's confusing `missing-game` bucket. We also
+  // collect a per-week histogram so the operator can see
+  // "your CSV has 122 Week 1 markets, 0 Week 2 markets" at a
+  // glance.
+  const gameIdWeekRegex = /^(\d{4})-w(\d+)-/;
+  const marketWeekHistogram: Record<string, number> = {};
+  let droppedWrongWeek = 0;
+  const sampleMarketGameIdSet = new Set<string>();
+  const markets: typeof allMarkets = [];
+  for (const m of allMarkets) {
+    if (sampleMarketGameIdSet.size < 20) sampleMarketGameIdSet.add(m.game_id);
+    const match = gameIdWeekRegex.exec(m.game_id);
+    if (!match) {
+      // Unparseable gameId — keep the market so the writer's
+      // existing diagnostic surfaces the drop reason. Bucket
+      // it under "unknown" in the histogram for visibility.
+      marketWeekHistogram.unknown = (marketWeekHistogram.unknown ?? 0) + 1;
+      markets.push(m);
+      continue;
+    }
+    const marketSeason = Number(match[1]);
+    const marketWeek = Number(match[2]);
+    const key = `${marketSeason}-w${marketWeek}`;
+    marketWeekHistogram[key] = (marketWeekHistogram[key] ?? 0) + 1;
+    if (marketSeason !== args.season || marketWeek !== args.week) {
+      droppedWrongWeek += 1;
+      continue;
+    }
+    markets.push(m);
+  }
+  const sampleMarketGameIds = [...sampleMarketGameIdSet];
 
   const quotes = parseCsvRows(fs.readFileSync(legacyQuotes, "utf8"))
     .map((r) => ({
@@ -644,11 +701,26 @@ export function migrateLegacyToCanonical(args: {
   const inWeek = built.rows.filter(
     (r) => r.season === args.season && r.week === args.week,
   );
+  const sampleScheduleGameIds: string[] = [];
+  {
+    const seen = new Set<string>();
+    for (const g of games) {
+      if (seen.has(g.gameId) || seen.size >= 20) break;
+      seen.add(g.gameId);
+      sampleScheduleGameIds.push(g.gameId);
+    }
+  }
   if (inWeek.length === 0) {
     return {
       status: "NO_ROWS_FOR_WEEK",
       diagnostics: built.diagnostics,
       sourcesInspected,
+      targetSeason: args.season,
+      targetWeek: args.week,
+      marketWeekHistogram,
+      droppedWrongWeek,
+      sampleMarketGameIds,
+      sampleScheduleGameIds,
     };
   }
 
@@ -665,5 +737,11 @@ export function migrateLegacyToCanonical(args: {
     rowsWritten: writeOut.rowsWritten,
     diagnostics: built.diagnostics,
     sourcesInspected,
+    targetSeason: args.season,
+    targetWeek: args.week,
+    marketWeekHistogram,
+    droppedWrongWeek,
+    sampleMarketGameIds,
+    sampleScheduleGameIds,
   };
 }
