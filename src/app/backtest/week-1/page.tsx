@@ -1164,8 +1164,7 @@ function StoredGradedSection({
           {(
             [
               ["Edge too thin", graded.disqualificationBreakdown.edgeTooThin],
-              ["Risk gate", graded.disqualificationBreakdown.riskGate],
-              ["Role stability", graded.disqualificationBreakdown.roleStability],
+              ["Risk gate (total)", graded.disqualificationBreakdown.riskGate],
               ["Missing result", graded.disqualificationBreakdown.missingResult],
               ["Ungradeable (push)", graded.disqualificationBreakdown.ungradeable],
               ["Other", graded.disqualificationBreakdown.other],
@@ -1187,7 +1186,38 @@ function StoredGradedSection({
             </div>
           ))}
         </div>
+        <p className="mt-2 text-[11px] text-ink-500">
+          &ldquo;Risk gate&rdquo; is the SUM of the eight per-bucket gates below.
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+          {(
+            [
+              ["Data quality", graded.disqualificationBreakdown.dataQualityGate ?? 0],
+              ["Role stability", graded.disqualificationBreakdown.roleStabilityGate ?? graded.disqualificationBreakdown.roleStability],
+              ["Injury context", graded.disqualificationBreakdown.injuryContextGate ?? 0],
+              ["Correlation exposure", graded.disqualificationBreakdown.correlationExposureGate ?? 0],
+              ["Weather / env", graded.disqualificationBreakdown.weatherEnvironmentGate ?? 0],
+              ["Game script", graded.disqualificationBreakdown.gameScriptGate ?? 0],
+              ["Pace", graded.disqualificationBreakdown.paceGate ?? 0],
+              ["Market context", graded.disqualificationBreakdown.marketContextGate ?? 0],
+            ] as const
+          ).map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center justify-between rounded-lg bg-white/65 px-3 py-2 ring-1 ring-white/40"
+            >
+              <span className="text-ink-600">{label}</span>
+              <span className="font-semibold tabular-nums text-ink-900">
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
+
+      {snapshot.graded?.scorecardAudit ? (
+        <ScorecardAuditSection audit={snapshot.graded.scorecardAudit} />
+      ) : null}
 
       {sample.length > 0 && (
         <div className="mt-4">
@@ -1249,6 +1279,185 @@ function StoredGradedSection({
         </div>
       )}
     </section>
+  );
+}
+
+function ScorecardAuditSection({
+  audit,
+}: {
+  audit: NonNullable<StoredWeek1MonitorSnapshot["graded"]>["scorecardAudit"];
+}) {
+  if (!audit) return null;
+  return (
+    <div className="mt-4 rounded-2xl bg-white/65 p-4 ring-1 ring-white/40">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Scorecard audit · why are 0 plays qualified?
+        </h3>
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+          Diagnostic · stored Week 1
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+        <Cell
+          label="Candidates scored"
+          value={`${audit.candidatesScored}`}
+          sub={`${audit.candidatesWithScorecard} with scorecard`}
+        />
+        <Cell
+          label="Qualified / disqualified"
+          value={`${audit.qualifiedCount} / ${audit.disqualifiedCount}`}
+        />
+        <Cell
+          label="Missing prior history"
+          value={`${audit.candidatesMissingHistory}`}
+          sub="rows without a strict-before history join"
+        />
+        <Cell
+          label="Recommendations"
+          value={`O ${audit.byRecommendation.OVER} · U ${audit.byRecommendation.UNDER} · P ${audit.byRecommendation.PASS}`}
+          sub={`${audit.byRecommendation.unknown} unknown`}
+        />
+      </div>
+      {audit.topDisqualifiers.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Top exact disqualifier reasons
+          </div>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-ink-800">
+            {audit.topDisqualifiers.map((d) => (
+              <li
+                key={d.reason}
+                className="flex items-center justify-between gap-3 border-b border-white/40 pb-1"
+              >
+                <span className="truncate">{d.reason}</span>
+                <span className="font-semibold tabular-nums text-ink-900">
+                  ×{d.count}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {audit.featureCompleteness.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Per-feature gate health
+          </div>
+          <div className="mt-1 overflow-x-auto">
+            <table className="min-w-full text-[11px]">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                  <th className="pb-1 pr-2">Bucket</th>
+                  <th className="pb-1 pr-2 text-right">Gate</th>
+                  <th className="pb-1 pr-2 text-right">Below gate</th>
+                  <th className="pb-1 pr-2 text-right">Missing</th>
+                  <th className="pb-1 pr-2 text-right">Min</th>
+                  <th className="pb-1 pr-2 text-right">Mean</th>
+                  <th className="pb-1 text-right">Max</th>
+                </tr>
+              </thead>
+              <tbody className="text-ink-800">
+                {audit.featureCompleteness.map((row) => (
+                  <tr key={row.bucket} className="border-t border-white/40">
+                    <td className="py-1 pr-2">{row.bucket}</td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.gateThreshold.toFixed(2)}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.belowGate}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.missing}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.scored > 0 ? row.minScore.toFixed(2) : "—"}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">
+                      {row.scored > 0 ? row.meanScore.toFixed(2) : "—"}
+                    </td>
+                    <td className="py-1 text-right tabular-nums">
+                      {row.scored > 0 ? row.maxScore.toFixed(2) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-[10px] text-ink-500">
+            A bucket with belowGate ≈ candidatesScored AND a low
+            mean is the most likely structural reason for 0
+            qualified plays. A bucket with high missing count
+            points to a feature-wiring gap.
+          </p>
+        </div>
+      ) : null}
+      {audit.samplePicks.length > 0 ? (
+        <div className="mt-3 overflow-x-auto">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+            Sample picks (first {audit.samplePicks.length})
+          </div>
+          <table className="mt-1 min-w-full text-[11px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Player</th>
+                <th className="pb-1 pr-2">Prop</th>
+                <th className="pb-1 pr-2 text-right">Line</th>
+                <th className="pb-1 pr-2 text-right">Rec</th>
+                <th className="pb-1 pr-2 text-right">Q</th>
+                <th className="pb-1 pr-2 text-right">Model p</th>
+                <th className="pb-1 pr-2 text-right">Mkt p</th>
+                <th className="pb-1 pr-2 text-right">Edge</th>
+                <th className="pb-1 pr-2 text-right">Conf</th>
+                <th className="pb-1 pr-2 text-right">Risk</th>
+                <th className="pb-1">Primary disq</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {audit.samplePicks.slice(0, 20).map((row) => (
+                <tr key={row.candidateId} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{row.playerName}</td>
+                  <td className="py-1 pr-2">{row.propType.replace(/_/g, " ")}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.line}
+                  </td>
+                  <td className="py-1 pr-2 text-right">{row.recommendation}</td>
+                  <td className="py-1 pr-2 text-right">
+                    {row.qualified === null ? "—" : row.qualified ? "yes" : "no"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.modelProbability !== null
+                      ? `${(row.modelProbability * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.marketProbability !== null
+                      ? `${(row.marketProbability * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.edge !== null ? `${(row.edge * 100).toFixed(1)}%` : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.confidence !== null
+                      ? row.confidence.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {row.riskScore !== null
+                      ? row.riskScore.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1 truncate text-ink-600">
+                    {row.primaryDisqualifier ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

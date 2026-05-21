@@ -150,11 +150,71 @@ export interface GradedSnapshot {
     edgeTooThin: number;
     riskGate: number;
     roleStability: number;
+    /** Per-bucket counts the page uses to break "Risk gate"
+     *  into 8 specific categories. Always present once the
+     *  grading payload comes from a scorecard-aware run. */
+    dataQualityGate?: number;
+    roleStabilityGate?: number;
+    injuryContextGate?: number;
+    correlationExposureGate?: number;
+    weatherEnvironmentGate?: number;
+    gameScriptGate?: number;
+    paceGate?: number;
+    marketContextGate?: number;
     missingResult: number;
     ungradeable: number;
     other: number;
     totalRejected: number;
   };
+  /** Per-feature audit + sample picks. Populated when the
+   *  grading payload includes `scorecardAudit`. */
+  scorecardAudit?: ScorecardAuditSnapshot;
+}
+
+export interface ScorecardAuditFeatureRow {
+  bucket: string;
+  gateThreshold: number;
+  belowGate: number;
+  scored: number;
+  missing: number;
+  minScore: number;
+  meanScore: number;
+  maxScore: number;
+}
+
+export interface ScorecardAuditSamplePick {
+  candidateId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  recommendation: "OVER" | "UNDER" | "PASS" | "unknown";
+  qualified: boolean | null;
+  modelProbability: number | null;
+  marketProbability: number | null;
+  edge: number | null;
+  confidence: number | null;
+  riskScore: number | null;
+  primaryDisqualifier: string | null;
+  projectedMean: number | null;
+}
+
+export interface ScorecardAuditSnapshot {
+  candidatesScored: number;
+  candidatesWithScorecard: number;
+  candidatesMissingHistory: number;
+  byRecommendation: {
+    OVER: number;
+    UNDER: number;
+    PASS: number;
+    unknown: number;
+  };
+  qualifiedCount: number;
+  disqualifiedCount: number;
+  topDisqualifiers: Array<{ reason: string; count: number }>;
+  featureCompleteness: ScorecardAuditFeatureRow[];
+  samplePicks: ScorecardAuditSamplePick[];
 }
 
 export interface StoredWeek1MonitorSnapshot {
@@ -246,6 +306,8 @@ interface GradedFileShape {
   /** Same shape, just a different key name used by the DB
    *  resultsJson path. */
   gradedSample?: GradedSampleRow[];
+  /** Scorecard audit payload from the admin grading action. */
+  scorecardAudit?: ScorecardAuditSnapshot;
   summary: {
     gradedAt?: string;
     /** Legacy headline fields — diagnostic only. */
@@ -342,6 +404,14 @@ interface GradedFileShape {
       edgeTooThin: number;
       riskGate: number;
       roleStability: number;
+      dataQualityGate?: number;
+      roleStabilityGate?: number;
+      injuryContextGate?: number;
+      correlationExposureGate?: number;
+      weatherEnvironmentGate?: number;
+      gameScriptGate?: number;
+      paceGate?: number;
+      marketContextGate?: number;
       missingResult: number;
       ungradeable: number;
       other: number;
@@ -524,15 +594,36 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
       },
       rejectionReasons: {},
     },
-    disqualificationBreakdown: s.disqualificationBreakdown ?? {
-      edgeTooThin: 0,
-      riskGate: 0,
-      roleStability: 0,
-      missingResult: s.candidatesMissingActual,
-      ungradeable: s.candidatesPushed ?? 0,
-      other: 0,
-      totalRejected: s.candidatesMissingActual + (s.candidatesPushed ?? 0),
-    },
+    disqualificationBreakdown: s.disqualificationBreakdown
+      ? {
+          edgeTooThin: s.disqualificationBreakdown.edgeTooThin,
+          riskGate: s.disqualificationBreakdown.riskGate,
+          roleStability: s.disqualificationBreakdown.roleStability,
+          dataQualityGate: s.disqualificationBreakdown.dataQualityGate,
+          roleStabilityGate: s.disqualificationBreakdown.roleStabilityGate,
+          injuryContextGate: s.disqualificationBreakdown.injuryContextGate,
+          correlationExposureGate:
+            s.disqualificationBreakdown.correlationExposureGate,
+          weatherEnvironmentGate:
+            s.disqualificationBreakdown.weatherEnvironmentGate,
+          gameScriptGate: s.disqualificationBreakdown.gameScriptGate,
+          paceGate: s.disqualificationBreakdown.paceGate,
+          marketContextGate: s.disqualificationBreakdown.marketContextGate,
+          missingResult: s.disqualificationBreakdown.missingResult,
+          ungradeable: s.disqualificationBreakdown.ungradeable,
+          other: s.disqualificationBreakdown.other,
+          totalRejected: s.disqualificationBreakdown.totalRejected,
+        }
+      : {
+          edgeTooThin: 0,
+          riskGate: 0,
+          roleStability: 0,
+          missingResult: s.candidatesMissingActual,
+          ungradeable: s.candidatesPushed ?? 0,
+          other: 0,
+          totalRejected: s.candidatesMissingActual + (s.candidatesPushed ?? 0),
+        },
+    scorecardAudit: g.scorecardAudit,
   };
 }
 
@@ -590,6 +681,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
         | {
             summary?: GradedFileShape["summary"];
             gradedSample?: GradedSampleRow[];
+            scorecardAudit?: ScorecardAuditSnapshot;
           }
         | null
         | undefined;
@@ -600,6 +692,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             week: args.week,
             summary: resultsJson.summary,
             gradedSample: resultsJson.gradedSample,
+            scorecardAudit: resultsJson.scorecardAudit,
           })
         : undefined;
       const fileGraded = toGradedSnapshot(

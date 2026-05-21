@@ -396,12 +396,8 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
                 value={stored.graded.disqualificationBreakdown.edgeTooThin}
               />
               <DisqStat
-                label="Risk gate"
+                label="Risk gate (total)"
                 value={stored.graded.disqualificationBreakdown.riskGate}
-              />
-              <DisqStat
-                label="Role stability"
-                value={stored.graded.disqualificationBreakdown.roleStability}
               />
               <DisqStat
                 label="Missing result"
@@ -427,7 +423,57 @@ function StoredWeek1Panel({ stored }: { stored: StoredWeek1MonitorSnapshot }) {
                 }
               />
             </div>
+            <p className="text-[10px] text-ink-500">
+              Risk gate = sum of the 8 per-bucket gates below.
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-[11px]">
+              <DisqStat
+                label="Data quality"
+                value={stored.graded.disqualificationBreakdown.dataQualityGate ?? 0}
+              />
+              <DisqStat
+                label="Role stability"
+                value={
+                  stored.graded.disqualificationBreakdown.roleStabilityGate ??
+                  stored.graded.disqualificationBreakdown.roleStability
+                }
+              />
+              <DisqStat
+                label="Injury context"
+                value={stored.graded.disqualificationBreakdown.injuryContextGate ?? 0}
+              />
+              <DisqStat
+                label="Correlation exposure"
+                value={
+                  stored.graded.disqualificationBreakdown
+                    .correlationExposureGate ?? 0
+                }
+              />
+              <DisqStat
+                label="Weather / env"
+                value={
+                  stored.graded.disqualificationBreakdown
+                    .weatherEnvironmentGate ?? 0
+                }
+              />
+              <DisqStat
+                label="Game script"
+                value={stored.graded.disqualificationBreakdown.gameScriptGate ?? 0}
+              />
+              <DisqStat
+                label="Pace"
+                value={stored.graded.disqualificationBreakdown.paceGate ?? 0}
+              />
+              <DisqStat
+                label="Market context"
+                value={stored.graded.disqualificationBreakdown.marketContextGate ?? 0}
+              />
+            </div>
           </div>
+
+          {stored.graded.scorecardAudit ? (
+            <ScorecardAuditMonitor audit={stored.graded.scorecardAudit} />
+          ) : null}
 
           <p className="mt-3 text-[11px] text-ink-500">
             Graded at · {stored.graded.gradedAt}.
@@ -1909,6 +1955,115 @@ function Stat({
       </div>
       <div className="mt-0.5 text-base font-semibold text-ink-900">{value}</div>
       {sub && <div className="text-[11px] text-ink-600">{sub}</div>}
+    </div>
+  );
+}
+
+function ScorecardAuditMonitor({
+  audit,
+}: {
+  audit: NonNullable<StoredWeek1MonitorSnapshot["graded"]>["scorecardAudit"];
+}) {
+  if (!audit) return null;
+  return (
+    <div
+      className="mt-4 space-y-2"
+      data-testid="monitor-scorecard-audit"
+    >
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Scorecard audit · why is recommendedPlays empty?
+        </h3>
+        <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+          Diagnostic only
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-[11px]">
+        <DisqStat
+          label="Candidates scored"
+          value={audit.candidatesScored}
+        />
+        <DisqStat
+          label="With scorecard"
+          value={audit.candidatesWithScorecard}
+        />
+        <DisqStat label="Qualified" value={audit.qualifiedCount} />
+        <DisqStat label="Disqualified" value={audit.disqualifiedCount} />
+        <DisqStat
+          label="Missing prior history"
+          value={audit.candidatesMissingHistory}
+        />
+        <DisqStat label="Rec · OVER" value={audit.byRecommendation.OVER} />
+        <DisqStat label="Rec · UNDER" value={audit.byRecommendation.UNDER} />
+        <DisqStat label="Rec · PASS" value={audit.byRecommendation.PASS} />
+      </div>
+      {audit.topDisqualifiers.length > 0 ? (
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Top exact disqualifier reasons
+          </div>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-ink-800">
+            {audit.topDisqualifiers.map((d) => (
+              <li
+                key={d.reason}
+                className="flex items-center justify-between gap-3 border-b border-white/40 pb-1"
+              >
+                <span className="truncate">{d.reason}</span>
+                <span className="font-semibold tabular-nums text-ink-900">
+                  ×{d.count}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {audit.featureCompleteness.length > 0 ? (
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Per-feature gate health
+          </div>
+          <table className="mt-1 min-w-full text-[11px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-1 pr-2">Bucket</th>
+                <th className="pb-1 pr-2 text-right">Gate</th>
+                <th className="pb-1 pr-2 text-right">Below gate</th>
+                <th className="pb-1 pr-2 text-right">Missing</th>
+                <th className="pb-1 pr-2 text-right">Mean</th>
+                <th className="pb-1 text-right">Min · Max</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {audit.featureCompleteness.map((r) => (
+                <tr key={r.bucket} className="border-t border-white/40">
+                  <td className="py-1 pr-2">{r.bucket}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {r.gateThreshold.toFixed(2)}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {r.belowGate}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {r.missing}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {r.scored > 0 ? r.meanScore.toFixed(2) : "—"}
+                  </td>
+                  <td className="py-1 text-right tabular-nums">
+                    {r.scored > 0
+                      ? `${r.minScore.toFixed(2)} · ${r.maxScore.toFixed(2)}`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-2 text-[10px] text-ink-500">
+            Bucket with belowGate ≈ scored AND a low mean is the
+            most likely structural reason for 0 qualified plays.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -221,12 +221,29 @@ export interface ParlayGradedRow {
 /**
  * Counts of why candidates couldn't become recommended plays.
  * `missingResult` + `ungradeable` are populated from grading
- * directly; the other reasons require model integration and
- * stay 0 until that lands.
+ * directly; the rest come from the scorecard's per-candidate
+ * primary disqualifier.
+ *
+ * `riskGate` is the SUM of the eight per-bucket gates below
+ * (kept as a backwards-compat field). The per-bucket counts
+ * let the page show "265 risk-gate rejections" broken down
+ * into exactly which gate failed.
  */
 export interface DisqualificationBreakdown {
   edgeTooThin: number;
   riskGate: number;
+  /** Per-bucket rejections. Sum equals `riskGate`. */
+  dataQualityGate: number;
+  roleStabilityGate: number;
+  injuryContextGate: number;
+  correlationExposureGate: number;
+  weatherEnvironmentGate: number;
+  gameScriptGate: number;
+  paceGate: number;
+  marketContextGate: number;
+  /** Legacy alias for roleStabilityGate, kept on the type so
+   *  older callers still compile. New code should use
+   *  `roleStabilityGate`. */
   roleStability: number;
   missingResult: number;
   ungradeable: number;
@@ -241,19 +258,110 @@ export interface GradedSummary {
   recommendedPlays: RecommendedPlaysPerformance;
   parlayPerformance: ParlayPerformance;
   disqualificationBreakdown: DisqualificationBreakdown;
+  /** Headline count of MODEL-qualified plays. Mirrors
+   *  `recommendedPlays.count`. New callers prefer this name so
+   *  `qualifiedPlays` below (legacy = candidatesDecisive) is no
+   *  longer mistaken for "the model's bet count". */
+  modelQualifiedPlays: number;
   /** Backwards-compat headline fields for older callers. NEVER
    *  used for the "betting performance" headline — only for
-   *  the diagnostic universe number. */
+   *  the diagnostic universe number. Despite the misleading
+   *  name, this counts candidates with BOTH sides decisive
+   *  (with actual stats, no PUSH), NOT model-qualified plays. */
   totalCandidates: number;
   candidatesWithActual: number;
   candidatesMissingActual: number;
   candidatesPushed: number;
+  /** Legacy alias for "candidates with both sides decisive".
+   *  Equivalent to `universeDiagnostics.candidatesWithActual −
+   *  candidatesPushed`. NOT the model's bet count — use
+   *  `modelQualifiedPlays` for that. */
   qualifiedPlays: number;
   overSide: SideAggregate;
   underSide: SideAggregate;
   betterSide: Side | "TIE";
   byPropType: MarketBucket[];
   byLineBucket: LineBucket[];
+}
+
+/**
+ * Per-candidate scorecard audit row — what the model decided,
+ * why, and where it landed. Surfaced from the grading action so
+ * the admin page can show a first-N peek into why recommended
+ * plays might be 0.
+ */
+export interface ScorecardAuditRow {
+  candidateId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  recommendation: "OVER" | "UNDER" | "PASS" | "unknown";
+  qualified: boolean | null;
+  modelProbability: number | null;
+  marketProbability: number | null;
+  edge: number | null;
+  confidence: number | null;
+  riskScore: number | null;
+  primaryDisqualifier: string | null;
+  projectedMean: number | null;
+}
+
+/**
+ * Per-feature completeness audit. For each of the 8 risk-bucket
+ * scores the scorecard expects, report how many candidates have
+ * a value below the gate (would fail this gate alone) and what
+ * the mean / min / max of the score looks like across the
+ * candidate set. Helps distinguish "model truly rejects these"
+ * from "we're feeding the scorecard garbage values".
+ */
+export interface FeatureCompletenessAudit {
+  bucket: string;
+  /** Gate threshold from the scorecard (0..1). */
+  gateThreshold: number;
+  /** Count of candidates whose score is below the gate. */
+  belowGate: number;
+  /** Count of candidates with a defined score (≥0, ≤1). */
+  scored: number;
+  /** Count of candidates where the score is null/undefined. */
+  missing: number;
+  /** Min / mean / max across the scored candidates. */
+  minScore: number;
+  meanScore: number;
+  maxScore: number;
+}
+
+/**
+ * Aggregate scorecard audit data for the admin summary. Lets
+ * the page answer "why is recommendedPlays empty?" without a
+ * second round trip.
+ */
+export interface ScorecardAudit {
+  /** Total candidates the scorecard ran on. */
+  candidatesScored: number;
+  /** Number of candidates carrying a scorecard field. When this
+   *  is zero, the candidate set went through the grader without
+   *  the enrichment step. */
+  candidatesWithScorecard: number;
+  byRecommendation: {
+    OVER: number;
+    UNDER: number;
+    PASS: number;
+    unknown: number;
+  };
+  qualifiedCount: number;
+  disqualifiedCount: number;
+  /** Disqualifier reason → count of candidates rejected with
+   *  that reason as their primary. Sorted by count descending. */
+  topDisqualifiers: Array<{ reason: string; count: number }>;
+  /** Per-feature completeness audit. */
+  featureCompleteness: FeatureCompletenessAudit[];
+  /** Candidates without any prior-week history rows attached.
+   *  Strong signal of a playerName/team join failure. */
+  candidatesMissingHistory: number;
+  /** First N candidates' decisions for a quick eye-check. */
+  samplePicks: ScorecardAuditRow[];
 }
 
 export interface GradeResult {
@@ -593,6 +701,9 @@ export function gradeStoredWeek1Backtest(args: {
       recommendedPlays,
       parlayPerformance,
       disqualificationBreakdown,
+      modelQualifiedPlays: recommendedPlays.enabled
+        ? recommendedPlays.count
+        : 0,
       // Backwards-compat headline fields. Diagnostics only —
       // the page now puts them under "Candidate Universe
       // Diagnostics", not under "Betting Performance".
@@ -608,6 +719,259 @@ export function gradeStoredWeek1Backtest(args: {
       byLineBucket: sortedByLineBucket,
     },
     graded,
+  };
+}
+
+// =====================================================================
+// Scorecard audit — diagnostic snapshot of model decisions
+// =====================================================================
+
+/** Gate thresholds the live scorecard applies (mirrored from
+ *  `src/lib/model/model-scorecard.ts` GATE_THRESHOLDS). */
+const SCORECARD_GATE_THRESHOLDS = {
+  dataQuality: 0.55,
+  roleStability: 0.55,
+  injuryContext: 0.55,
+  correlationExposure: 0.5,
+  weatherEnvironment: 0.5,
+  gameScript: 0.45,
+  pace: 0.45,
+  marketContext: 0.45,
+} as const;
+
+function bucketStats(
+  values: number[],
+  gate: number,
+): { belowGate: number; min: number; mean: number; max: number } {
+  if (values.length === 0) {
+    return { belowGate: 0, min: 0, mean: 0, max: 0 };
+  }
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  let belowGate = 0;
+  for (const v of values) {
+    sum += v;
+    if (v < min) min = v;
+    if (v > max) max = v;
+    if (v < gate) belowGate += 1;
+  }
+  return { belowGate, min, mean: sum / values.length, max };
+}
+
+/**
+ * Build an audit snapshot of the scorecard decisions. Pure
+ * function — no IO, no API. Used by the admin action so the
+ * page can show why recommendedPlays.count is whatever it is.
+ *
+ * Pass `playerHistoryByName` so the audit can flag candidates
+ * that had zero prior-week rows attached (a strong signal of a
+ * playerName/team join failure rather than a true rejection).
+ */
+export function buildScorecardAudit(args: {
+  candidates: readonly RealWeekCandidate[];
+  playerHistoryByName?: Map<string, readonly { playerName?: string }[]>;
+  samplePicksCount?: number;
+}): ScorecardAudit {
+  const n = args.samplePicksCount ?? 50;
+  const byRec = { OVER: 0, UNDER: 0, PASS: 0, unknown: 0 };
+  const disqCounts = new Map<string, number>();
+  let qualifiedCount = 0;
+  let disqualifiedCount = 0;
+  let withScorecard = 0;
+  let candidatesMissingHistory = 0;
+  const samples: ScorecardAuditRow[] = [];
+  // Collect each bucket's scores so we can report min/mean/max
+  // + below-gate counts after the loop.
+  const buckets = {
+    dataQuality: [] as number[],
+    roleStability: [] as number[],
+    injuryContext: [] as number[],
+    correlationExposure: [] as number[],
+    weatherEnvironment: [] as number[],
+    gameScript: [] as number[],
+    pace: [] as number[],
+    marketContext: [] as number[],
+  };
+  let missingDataQuality = 0;
+  let missingRoleStability = 0;
+  let missingInjuryContext = 0;
+  let missingCorrelationExposure = 0;
+  let missingWeatherEnvironment = 0;
+  let missingGameScript = 0;
+  let missingPace = 0;
+  let missingMarketContext = 0;
+  for (const c of args.candidates) {
+    const s = c.scorecard;
+    if (s) withScorecard += 1;
+    if (s?.qualified === true) qualifiedCount += 1;
+    else if (s !== undefined) disqualifiedCount += 1;
+    const rec = s?.recommendation ?? "unknown";
+    if (rec === "OVER") byRec.OVER += 1;
+    else if (rec === "UNDER") byRec.UNDER += 1;
+    else if (rec === "PASS") byRec.PASS += 1;
+    else byRec.unknown += 1;
+    if (s && !s.qualified && s.primaryDisqualifier) {
+      disqCounts.set(
+        s.primaryDisqualifier,
+        (disqCounts.get(s.primaryDisqualifier) ?? 0) + 1,
+      );
+    }
+    // History join check — independent of scorecard outcomes
+    // so we can confirm whether the engine even saw prior
+    // weeks.
+    if (args.playerHistoryByName) {
+      const k = `${c.playerName}::${c.team}`;
+      const rows = args.playerHistoryByName.get(k);
+      if (!rows || rows.length === 0) candidatesMissingHistory += 1;
+    }
+    // Push each bucket's score for the aggregate.
+    if (typeof s?.dataQualityScore === "number")
+      buckets.dataQuality.push(s.dataQualityScore);
+    else missingDataQuality += 1;
+    if (typeof s?.roleStabilityScore === "number")
+      buckets.roleStability.push(s.roleStabilityScore);
+    else missingRoleStability += 1;
+    if (typeof s?.injuryContextScore === "number")
+      buckets.injuryContext.push(s.injuryContextScore);
+    else missingInjuryContext += 1;
+    if (typeof s?.correlationExposureScore === "number")
+      buckets.correlationExposure.push(s.correlationExposureScore);
+    else missingCorrelationExposure += 1;
+    if (typeof s?.weatherEnvironmentScore === "number")
+      buckets.weatherEnvironment.push(s.weatherEnvironmentScore);
+    else missingWeatherEnvironment += 1;
+    if (typeof s?.gameScriptScore === "number")
+      buckets.gameScript.push(s.gameScriptScore);
+    else missingGameScript += 1;
+    if (typeof s?.paceScore === "number") buckets.pace.push(s.paceScore);
+    else missingPace += 1;
+    if (typeof s?.marketContextScore === "number")
+      buckets.marketContext.push(s.marketContextScore);
+    else missingMarketContext += 1;
+    if (samples.length < n) {
+      samples.push({
+        candidateId: c.id,
+        playerName: c.playerName,
+        team: c.team,
+        opponent: c.opponent,
+        propType: c.propType,
+        line: c.line,
+        recommendation: s?.recommendation ?? "unknown",
+        qualified: s?.qualified ?? null,
+        modelProbability: s?.modelProbability ?? null,
+        marketProbability:
+          s?.recommendation === "UNDER"
+            ? s.marketUnderProbability
+            : s?.recommendation === "OVER"
+              ? s.marketOverProbability
+              : (s?.marketOverProbability ?? null),
+        edge: s?.edge ?? null,
+        confidence: s?.confidence ?? null,
+        riskScore: s?.riskScore ?? null,
+        primaryDisqualifier: s?.primaryDisqualifier ?? null,
+        projectedMean: s?.projectedMean ?? null,
+      });
+    }
+  }
+  const topDisqualifiers = [...disqCounts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const featureCompleteness: FeatureCompletenessAudit[] = [
+    {
+      bucket: "dataQuality",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.dataQuality,
+      missing: missingDataQuality,
+      scored: buckets.dataQuality.length,
+      ...bucketStats(buckets.dataQuality, SCORECARD_GATE_THRESHOLDS.dataQuality),
+      minScore: bucketStats(buckets.dataQuality, SCORECARD_GATE_THRESHOLDS.dataQuality).min,
+      meanScore: bucketStats(buckets.dataQuality, SCORECARD_GATE_THRESHOLDS.dataQuality).mean,
+      maxScore: bucketStats(buckets.dataQuality, SCORECARD_GATE_THRESHOLDS.dataQuality).max,
+    },
+    {
+      bucket: "roleStability",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.roleStability,
+      missing: missingRoleStability,
+      scored: buckets.roleStability.length,
+      ...bucketStats(buckets.roleStability, SCORECARD_GATE_THRESHOLDS.roleStability),
+      minScore: bucketStats(buckets.roleStability, SCORECARD_GATE_THRESHOLDS.roleStability).min,
+      meanScore: bucketStats(buckets.roleStability, SCORECARD_GATE_THRESHOLDS.roleStability).mean,
+      maxScore: bucketStats(buckets.roleStability, SCORECARD_GATE_THRESHOLDS.roleStability).max,
+    },
+    {
+      bucket: "injuryContext",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.injuryContext,
+      missing: missingInjuryContext,
+      scored: buckets.injuryContext.length,
+      ...bucketStats(buckets.injuryContext, SCORECARD_GATE_THRESHOLDS.injuryContext),
+      minScore: bucketStats(buckets.injuryContext, SCORECARD_GATE_THRESHOLDS.injuryContext).min,
+      meanScore: bucketStats(buckets.injuryContext, SCORECARD_GATE_THRESHOLDS.injuryContext).mean,
+      maxScore: bucketStats(buckets.injuryContext, SCORECARD_GATE_THRESHOLDS.injuryContext).max,
+    },
+    {
+      bucket: "correlationExposure",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.correlationExposure,
+      missing: missingCorrelationExposure,
+      scored: buckets.correlationExposure.length,
+      ...bucketStats(buckets.correlationExposure, SCORECARD_GATE_THRESHOLDS.correlationExposure),
+      minScore: bucketStats(buckets.correlationExposure, SCORECARD_GATE_THRESHOLDS.correlationExposure).min,
+      meanScore: bucketStats(buckets.correlationExposure, SCORECARD_GATE_THRESHOLDS.correlationExposure).mean,
+      maxScore: bucketStats(buckets.correlationExposure, SCORECARD_GATE_THRESHOLDS.correlationExposure).max,
+    },
+    {
+      bucket: "weatherEnvironment",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.weatherEnvironment,
+      missing: missingWeatherEnvironment,
+      scored: buckets.weatherEnvironment.length,
+      ...bucketStats(buckets.weatherEnvironment, SCORECARD_GATE_THRESHOLDS.weatherEnvironment),
+      minScore: bucketStats(buckets.weatherEnvironment, SCORECARD_GATE_THRESHOLDS.weatherEnvironment).min,
+      meanScore: bucketStats(buckets.weatherEnvironment, SCORECARD_GATE_THRESHOLDS.weatherEnvironment).mean,
+      maxScore: bucketStats(buckets.weatherEnvironment, SCORECARD_GATE_THRESHOLDS.weatherEnvironment).max,
+    },
+    {
+      bucket: "gameScript",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.gameScript,
+      missing: missingGameScript,
+      scored: buckets.gameScript.length,
+      ...bucketStats(buckets.gameScript, SCORECARD_GATE_THRESHOLDS.gameScript),
+      minScore: bucketStats(buckets.gameScript, SCORECARD_GATE_THRESHOLDS.gameScript).min,
+      meanScore: bucketStats(buckets.gameScript, SCORECARD_GATE_THRESHOLDS.gameScript).mean,
+      maxScore: bucketStats(buckets.gameScript, SCORECARD_GATE_THRESHOLDS.gameScript).max,
+    },
+    {
+      bucket: "pace",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.pace,
+      missing: missingPace,
+      scored: buckets.pace.length,
+      ...bucketStats(buckets.pace, SCORECARD_GATE_THRESHOLDS.pace),
+      minScore: bucketStats(buckets.pace, SCORECARD_GATE_THRESHOLDS.pace).min,
+      meanScore: bucketStats(buckets.pace, SCORECARD_GATE_THRESHOLDS.pace).mean,
+      maxScore: bucketStats(buckets.pace, SCORECARD_GATE_THRESHOLDS.pace).max,
+    },
+    {
+      bucket: "marketContext",
+      gateThreshold: SCORECARD_GATE_THRESHOLDS.marketContext,
+      missing: missingMarketContext,
+      scored: buckets.marketContext.length,
+      ...bucketStats(buckets.marketContext, SCORECARD_GATE_THRESHOLDS.marketContext),
+      minScore: bucketStats(buckets.marketContext, SCORECARD_GATE_THRESHOLDS.marketContext).min,
+      meanScore: bucketStats(buckets.marketContext, SCORECARD_GATE_THRESHOLDS.marketContext).mean,
+      maxScore: bucketStats(buckets.marketContext, SCORECARD_GATE_THRESHOLDS.marketContext).max,
+    },
+  ];
+
+  return {
+    candidatesScored: args.candidates.length,
+    candidatesWithScorecard: withScorecard,
+    byRecommendation: byRec,
+    qualifiedCount,
+    disqualifiedCount,
+    topDisqualifiers,
+    featureCompleteness,
+    candidatesMissingHistory,
+    samplePicks: samples,
   };
 }
 
@@ -883,6 +1247,14 @@ function computeDisqualificationBreakdown(args: {
     return {
       edgeTooThin: 0,
       riskGate: 0,
+      dataQualityGate: 0,
+      roleStabilityGate: 0,
+      injuryContextGate: 0,
+      correlationExposureGate: 0,
+      weatherEnvironmentGate: 0,
+      gameScriptGate: 0,
+      paceGate: 0,
+      marketContextGate: 0,
       roleStability: 0,
       missingResult: args.candidatesMissingActual,
       ungradeable: args.candidatesPushed,
@@ -891,8 +1263,14 @@ function computeDisqualificationBreakdown(args: {
     };
   }
   let edgeTooThin = 0;
-  let riskGate = 0;
-  let roleStability = 0;
+  let dataQualityGate = 0;
+  let roleStabilityGate = 0;
+  let injuryContextGate = 0;
+  let correlationExposureGate = 0;
+  let weatherEnvironmentGate = 0;
+  let gameScriptGate = 0;
+  let paceGate = 0;
+  let marketContextGate = 0;
   let other = 0;
   let totalRejected = 0;
   for (const c of args.candidates) {
@@ -901,26 +1279,53 @@ function computeDisqualificationBreakdown(args: {
     if (s.qualified) continue;
     totalRejected += 1;
     const primary = (s.primaryDisqualifier ?? "").toLowerCase();
-    if (primary.includes("edge")) edgeTooThin += 1;
-    else if (primary.includes("role stability")) roleStability += 1;
-    else if (
-      primary.includes("data quality") ||
-      primary.includes("injury") ||
-      primary.includes("weather") ||
-      primary.includes("correlation") ||
-      primary.includes("game script") ||
-      primary.includes("pace") ||
-      primary.includes("market context")
-    ) {
-      riskGate += 1;
+    // Match the scorecard's RISK_BUCKET_LABELS — the disqualifier
+    // text is `Capitalize(label) score X.XX below Y.YY gate`. We
+    // bucket on the label portion. Order matters: more specific
+    // labels first ("market context" before "context").
+    if (primary.includes("edge")) {
+      edgeTooThin += 1;
+    } else if (primary.includes("data quality")) {
+      dataQualityGate += 1;
+    } else if (primary.includes("role stability")) {
+      roleStabilityGate += 1;
+    } else if (primary.includes("injury")) {
+      injuryContextGate += 1;
+    } else if (primary.includes("correlation")) {
+      correlationExposureGate += 1;
+    } else if (primary.includes("weather")) {
+      weatherEnvironmentGate += 1;
+    } else if (primary.includes("game script")) {
+      gameScriptGate += 1;
+    } else if (primary.includes("market context")) {
+      marketContextGate += 1;
+    } else if (primary.includes("pace")) {
+      paceGate += 1;
     } else {
       other += 1;
     }
   }
+  const riskGate =
+    dataQualityGate +
+    roleStabilityGate +
+    injuryContextGate +
+    correlationExposureGate +
+    weatherEnvironmentGate +
+    gameScriptGate +
+    paceGate +
+    marketContextGate;
   return {
     edgeTooThin,
     riskGate,
-    roleStability,
+    dataQualityGate,
+    roleStabilityGate,
+    injuryContextGate,
+    correlationExposureGate,
+    weatherEnvironmentGate,
+    gameScriptGate,
+    paceGate,
+    marketContextGate,
+    roleStability: roleStabilityGate,
     missingResult: args.candidatesMissingActual,
     ungradeable: args.candidatesPushed,
     other,
