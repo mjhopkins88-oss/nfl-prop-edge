@@ -1,57 +1,23 @@
 {
-  "generatedAt": "2026-05-21T00:51:15.003Z",
+  "generatedAt": "2026-05-21T01:06:41.630Z",
   "season": 2025,
   "week": 1,
-  "dataMode": "fixture",
-  "status": "FIXTURE_SYNTHETIC",
-  "candidateCount": 8,
-  "syntheticFixture": true,
+  "dataMode": "stored",
+  "status": "MISSING_STORED_ODDS",
+  "candidateCount": 0,
+  "syntheticFixture": false,
   "realWeek1BacktestReady": false,
   "missingStoredOdds": true,
-  "missingProcessedNfl": true,
-  "scheduleReport": {
-    "generatedAt": "2026-05-21T00:51:15.003Z",
-    "season": 2025,
-    "week": 1,
-    "scheduleSource": "data/fixtures/nfl/2025-week-1-schedule.fixture.json",
-    "expectedGames": 16,
-    "candidateGames": 2,
-    "validCandidateGames": 0,
-    "invalidCandidateGames": 2,
-    "status": "SYNTHETIC_ONLY",
-    "realWeek1BacktestReady": false,
-    "syntheticFixture": true,
-    "candidates": [
-      {
-        "gameId": "fixture-kc-at-bal-w1",
-        "homeTeam": "BAL",
-        "awayTeam": "KC",
-        "valid": false,
-        "reason": "KC did not play BAL in 2025 Week 1"
-      },
-      {
-        "gameId": "fixture-buf-at-mia-w1",
-        "homeTeam": "MIA",
-        "awayTeam": "BUF",
-        "valid": false,
-        "reason": "BUF did not play MIA in 2025 Week 1"
-      }
-    ],
-    "notes": [
-      "All candidate games are synthetic placeholders — no overlap with the real 2025 Week 1 schedule.",
-      "Real Week 1 backtest is NOT ready — wire processed Odds API + nflverse data and re-run.",
-      "Real Week 1 odds not loaded yet.",
-      "Run stored odds ingestion before real Week 1 simulation."
-    ]
-  },
+  "missingProcessedNfl": false,
+  "scheduleReport": null,
   "notes": [
-    "Fixture mode — synthetic Week-1 placeholders are expected to fail schedule validation.",
-    "Switch to --data-mode stored once nflverse + Odds API ingestion have written processed files."
+    "No usable stored Odds API rows found for 2025 Week 1.",
+    "Inspected: /home/user/nfl-prop-edge/data/processed/odds/2025/week-1-prop-markets.csv (missing); /home/user/nfl-prop-edge/data/processed/prop_markets.csv (present)",
+    "Next: run the Odds API ingestion in --execute mode (requires ALLOW_REAL_ODDS_API_CALLS=true) and re-run with --data-mode stored."
   ],
   "nextSteps": [
-    "npx tsx scripts/ingest-historical-prop-lines.ts --scope smoke-test --source mock --dry-run",
-    "ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope smoke-test --execute",
-    "ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope week --season 2025 --week 1 --execute",
-    "npx tsx scripts/run-week-1-starter-test.ts --phase full --data-mode stored --season 2025 --week 1"
+    "1. Run `ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope smoke-test --execute` once to verify the credit estimate.",
+    "2. Run `ALLOW_REAL_ODDS_API_CALLS=true npx tsx scripts/ingest-historical-prop-lines.ts --scope week --season 2025 --week 1 --execute` to populate data/processed/odds/2025/week-1-prop-markets.csv.",
+    "3. Re-run this script with `--data-mode stored`."
   ]
 }
