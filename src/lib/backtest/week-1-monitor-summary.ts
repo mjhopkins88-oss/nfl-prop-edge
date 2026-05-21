@@ -200,6 +200,74 @@ export interface ScorecardAuditSamplePick {
   projectedMean: number | null;
 }
 
+export interface ScorecardClosestRow {
+  candidateId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  side: "OVER" | "UNDER" | "PASS" | "unknown";
+  modelProbability: number | null;
+  marketProbability: number | null;
+  edge: number | null;
+  edgeThreshold: number | null;
+  confidence: number | null;
+  riskScore: number | null;
+  dataQualityScore: number | null;
+  marketContextScore: number | null;
+  historyRows: number | null;
+  disqualifiers: string[];
+  gateGaps: Array<{ bucket: string; score: number; gate: number; gap: number }>;
+  edgeGap: number | null;
+  qualificationGap: number;
+}
+
+export interface ScorecardMarketContextAudit {
+  gateThreshold: number;
+  clampFloor: number;
+  clampedDistribution: {
+    gte045: number;
+    band040To045: number;
+    band035To040: number;
+    lt035: number;
+  };
+  rawDistribution: {
+    gte045: number;
+    band040To045: number;
+    band035To040: number;
+    band020To035: number;
+    band000To020: number;
+    lt000: number;
+  };
+  rawMin: number;
+  rawMean: number;
+  rawMax: number;
+  simulation: {
+    qualifyingAtGate045: number;
+    qualifyingAtGate040: number;
+    qualifyingAtGate035: number;
+  };
+}
+
+export interface ScorecardMissingHistoryAudit {
+  totalMissing: number;
+  teamSwitched: number;
+  rookieOrUnknown: number;
+  possibleNameMismatch: number;
+  examples: Array<{
+    candidateId: string;
+    playerName: string;
+    team: string;
+    opponent: string;
+    propType: string;
+    line: number;
+    cause: "teamSwitched" | "rookieOrUnknown" | "possibleNameMismatch" | "unknown";
+    matchedTeam?: string;
+    matchedName?: string;
+  }>;
+}
+
 export interface ScorecardAuditSnapshot {
   candidatesScored: number;
   candidatesWithScorecard: number;
@@ -215,6 +283,12 @@ export interface ScorecardAuditSnapshot {
   topDisqualifiers: Array<{ reason: string; count: number }>;
   featureCompleteness: ScorecardAuditFeatureRow[];
   samplePicks: ScorecardAuditSamplePick[];
+  /** Closest-to-qualifying candidates sorted ascending by gap. */
+  closestToQualifying?: ScorecardClosestRow[];
+  /** Market context distribution + threshold simulation. */
+  marketContext?: ScorecardMarketContextAudit;
+  /** Missing-history cause categorization. */
+  missingHistory?: ScorecardMissingHistoryAudit;
 }
 
 export interface StoredWeek1MonitorSnapshot {

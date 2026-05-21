@@ -2064,6 +2064,85 @@ function ScorecardAuditMonitor({
           </p>
         </div>
       ) : null}
+      {audit.marketContext ? (
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Market-context simulation · diagnostic only · no threshold changes
+          </div>
+          <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+            <DisqStat
+              label="At current gate 0.45"
+              value={audit.marketContext.simulation.qualifyingAtGate045}
+            />
+            <DisqStat
+              label="If gate were 0.40"
+              value={audit.marketContext.simulation.qualifyingAtGate040}
+            />
+            <DisqStat
+              label="If gate were 0.35"
+              value={audit.marketContext.simulation.qualifyingAtGate035}
+            />
+            <DisqStat
+              label="Raw < 0 (extreme juice)"
+              value={audit.marketContext.rawDistribution.lt000}
+            />
+          </div>
+          <p className="mt-2 text-[10px] text-ink-500">
+            Raw min/mean/max:{" "}
+            {audit.marketContext.rawMin.toFixed(2)} ·{" "}
+            {audit.marketContext.rawMean.toFixed(2)} ·{" "}
+            {audit.marketContext.rawMax.toFixed(2)}. A 0.40
+            clamped score means the raw score was ≤ 0.40 before
+            clamping; lowering the GATE to 0.40 lets candidates
+            whose raw score is ≥ 0.40 qualify (those with raw
+            &lt; 0.40 stay disqualified).
+          </p>
+        </div>
+      ) : null}
+      {audit.missingHistory && audit.missingHistory.totalMissing > 0 ? (
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Missing-history split ({audit.missingHistory.totalMissing} candidates)
+          </div>
+          <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
+            <DisqStat
+              label="Team-switched"
+              value={audit.missingHistory.teamSwitched}
+            />
+            <DisqStat
+              label="Rookie / unknown"
+              value={audit.missingHistory.rookieOrUnknown}
+            />
+            <DisqStat
+              label="Name mismatch"
+              value={audit.missingHistory.possibleNameMismatch}
+            />
+          </div>
+        </div>
+      ) : null}
+      {audit.closestToQualifying && audit.closestToQualifying.length > 0 ? (
+        <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white/40">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-500">
+            Closest to qualifying (top 5 · diagnostic)
+          </div>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-ink-800">
+            {audit.closestToQualifying.slice(0, 5).map((row) => (
+              <li
+                key={row.candidateId}
+                className="flex items-center justify-between gap-3 border-b border-white/40 pb-1"
+              >
+                <span className="truncate">
+                  {row.playerName} · {row.propType.replace(/_/g, " ")} · {row.line} ·{" "}
+                  {row.side}
+                </span>
+                <span className="font-semibold tabular-nums text-ink-900">
+                  gap {row.qualificationGap.toFixed(2)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

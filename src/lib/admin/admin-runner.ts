@@ -1282,7 +1282,10 @@ export async function runAdminAction(
       const scorecardAudit = buildScorecardAudit({
         candidates: evaluatedCandidates,
         playerHistoryByName,
+        playerWeekStats: stats.rows,
         samplePicksCount: 50,
+        closestToQualifyingCount: 50,
+        missingHistoryExamplesCount: 25,
       });
       // Persist to DB. New row carries both candidatesJson +
       // resultsJson so the pregame snapshot isn't overwritten;
@@ -1396,6 +1399,36 @@ export async function runAdminAction(
           `missingHistory=${scorecardAudit.candidatesMissingHistory}\n` +
           `  byRecommendation: OVER=${scorecardAudit.byRecommendation.OVER} UNDER=${scorecardAudit.byRecommendation.UNDER} PASS=${scorecardAudit.byRecommendation.PASS} unknown=${scorecardAudit.byRecommendation.unknown}\n` +
           `  ${topDisqLine}\n` +
+          (scorecardAudit.missingHistory
+            ? `  missingHistory split: teamSwitched=${scorecardAudit.missingHistory.teamSwitched} ` +
+              `rookieOrUnknown=${scorecardAudit.missingHistory.rookieOrUnknown} ` +
+              `possibleNameMismatch=${scorecardAudit.missingHistory.possibleNameMismatch}\n`
+            : "") +
+          (scorecardAudit.marketContext
+            ? `\nMarket context audit (gate ${scorecardAudit.marketContext.gateThreshold.toFixed(2)}, clamp floor ${scorecardAudit.marketContext.clampFloor.toFixed(2)}):\n` +
+              `  raw score min/mean/max: ${scorecardAudit.marketContext.rawMin.toFixed(2)} / ${scorecardAudit.marketContext.rawMean.toFixed(2)} / ${scorecardAudit.marketContext.rawMax.toFixed(2)}\n` +
+              `  raw distribution: ≥0.45=${scorecardAudit.marketContext.rawDistribution.gte045} ` +
+              `0.40–0.45=${scorecardAudit.marketContext.rawDistribution.band040To045} ` +
+              `0.35–0.40=${scorecardAudit.marketContext.rawDistribution.band035To040} ` +
+              `0.20–0.35=${scorecardAudit.marketContext.rawDistribution.band020To035} ` +
+              `0.00–0.20=${scorecardAudit.marketContext.rawDistribution.band000To020} ` +
+              `<0=${scorecardAudit.marketContext.rawDistribution.lt000}\n` +
+              `  simulation (DIAGNOSTIC — gate unchanged): would qualify at gate 0.45=${scorecardAudit.marketContext.simulation.qualifyingAtGate045}  ` +
+              `at 0.40=${scorecardAudit.marketContext.simulation.qualifyingAtGate040}  ` +
+              `at 0.35=${scorecardAudit.marketContext.simulation.qualifyingAtGate035}\n`
+            : "") +
+          (scorecardAudit.closestToQualifying &&
+          scorecardAudit.closestToQualifying.length > 0
+            ? `\nClosest 5 to qualifying (smallest gap = closest):\n` +
+              scorecardAudit.closestToQualifying
+                .slice(0, 5)
+                .map(
+                  (c, i) =>
+                    `  ${i + 1}. ${c.playerName} ${c.propType} ${c.line} (${c.side}) gap=${c.qualificationGap.toFixed(2)} disq=${c.disqualifiers.join("; ")}`,
+                )
+                .join("\n") +
+              `\n`
+            : "") +
           `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
         data: {
           summary: grade.summary,

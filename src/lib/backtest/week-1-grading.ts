@@ -22,6 +22,7 @@
 import type { PropType } from "../types";
 import type { NflPlayerWeekStat } from "../ingestion/nflverse-types";
 import type { RealWeekCandidate } from "./real-week-candidate-builder";
+import { rawMarketContextScore } from "./stored-candidate-scorecard";
 
 export type Side = "OVER" | "UNDER";
 export type GradedOutcome = "WIN" | "LOSS" | "PUSH" | "NO_DATA";
@@ -333,6 +334,122 @@ export interface FeatureCompletenessAudit {
 }
 
 /**
+ * One per-candidate row sorted by closeness to qualification.
+ * `qualificationGap` is the LARGEST gap that, if closed, would
+ * tip the candidate into qualified. Smaller gap = closer.
+ */
+export interface ClosestToQualifyingRow {
+  candidateId: string;
+  playerName: string;
+  team: string;
+  opponent: string;
+  propType: string;
+  line: number;
+  side: "OVER" | "UNDER" | "PASS" | "unknown";
+  modelProbability: number | null;
+  marketProbability: number | null;
+  edge: number | null;
+  edgeThreshold: number | null;
+  confidence: number | null;
+  riskScore: number | null;
+  dataQualityScore: number | null;
+  marketContextScore: number | null;
+  historyRows: number | null;
+  disqualifiers: string[];
+  /** Each gate this candidate failed and how far below the
+   *  threshold the score landed. Positive = score below gate. */
+  gateGaps: Array<{ bucket: string; score: number; gate: number; gap: number }>;
+  /** Edge shortfall if the candidate failed the edge gate.
+   *  Positive = edge below threshold. */
+  edgeGap: number | null;
+  /** The single largest gap across all failures. The candidate
+   *  with the smallest `qualificationGap` is the closest to
+   *  qualifying. */
+  qualificationGap: number;
+}
+
+/**
+ * Market-context distribution + simulation. The current
+ * adapter clamps marketContextScore to a floor of 0.40 so
+ * many candidates appear to "sit at the gate" when their RAW
+ * overround-derived score is actually well below 0.
+ */
+export interface MarketContextAudit {
+  gateThreshold: number;
+  clampFloor: number;
+  /** Distribution of CLAMPED marketContextScore on rejected
+   *  candidates. */
+  clampedDistribution: {
+    gte045: number;
+    band040To045: number;
+    band035To040: number;
+    lt035: number;
+  };
+  /** Distribution of RAW (un-clamped) marketContextScore. */
+  rawDistribution: {
+    gte045: number;
+    band040To045: number;
+    band035To040: number;
+    band020To035: number;
+    band000To020: number;
+    lt000: number;
+  };
+  /** Min / mean / max of the raw score across rejected
+   *  candidates — exposes how far below 0.45 the typical
+   *  market actually lands. */
+  rawMin: number;
+  rawMean: number;
+  rawMax: number;
+  /** "How many candidates would QUALIFY end-to-end if the
+   *  marketContext gate were lowered to X, holding all other
+   *  gates fixed at the current scorecard thresholds." Counts
+   *  candidates whose only failure(s) involved marketContext
+   *  AND whose raw score meets the lowered gate.
+   *
+   *  Diagnostic only — the live model never sees these
+   *  alternative gates. */
+  simulation: {
+    qualifyingAtGate045: number;
+    qualifyingAtGate040: number;
+    qualifyingAtGate035: number;
+  };
+}
+
+/**
+ * Categorize candidates whose strict-before history join was
+ * empty. Helps tell apart "rookie / never appeared in nflverse"
+ * from "team-switched" from "name mismatch" without touching
+ * the model.
+ */
+export interface MissingHistoryAudit {
+  /** Total candidates with 0 history rows attached. */
+  totalMissing: number;
+  /** Candidates whose playerName appears in player_week_stats
+   *  but under a different team — buildPlayerHistoryByName's
+   *  (playerName, team) key joins out their real history. */
+  teamSwitched: number;
+  /** Candidates whose playerName does not appear in
+   *  player_week_stats at all — true rookies or unknowns. */
+  rookieOrUnknown: number;
+  /** Candidates whose playerName appears with a small variation
+   *  (suffix, jr, ii, ascii-fold) — fixable with a tighter
+   *  name match. */
+  possibleNameMismatch: number;
+  /** Examples (up to 25) for the page to display. */
+  examples: Array<{
+    candidateId: string;
+    playerName: string;
+    team: string;
+    opponent: string;
+    propType: string;
+    line: number;
+    cause: "teamSwitched" | "rookieOrUnknown" | "possibleNameMismatch" | "unknown";
+    matchedTeam?: string;
+    matchedName?: string;
+  }>;
+}
+
+/**
  * Aggregate scorecard audit data for the admin summary. Lets
  * the page answer "why is recommendedPlays empty?" without a
  * second round trip.
@@ -360,8 +477,14 @@ export interface ScorecardAudit {
   /** Candidates without any prior-week history rows attached.
    *  Strong signal of a playerName/team join failure. */
   candidatesMissingHistory: number;
+  /** Categorized missing-history audit. */
+  missingHistory?: MissingHistoryAudit;
   /** First N candidates' decisions for a quick eye-check. */
   samplePicks: ScorecardAuditRow[];
+  /** Top N candidates sorted by closeness to qualification. */
+  closestToQualifying?: ClosestToQualifyingRow[];
+  /** Market context distribution + threshold simulation. */
+  marketContext?: MarketContextAudit;
 }
 
 export interface GradeResult {
@@ -771,7 +894,13 @@ function bucketStats(
 export function buildScorecardAudit(args: {
   candidates: readonly RealWeekCandidate[];
   playerHistoryByName?: Map<string, readonly { playerName?: string }[]>;
+  /** Full player_week_stats — when supplied, the audit
+   *  categorizes missing-history candidates as teamSwitched /
+   *  rookieOrUnknown / possibleNameMismatch. */
+  playerWeekStats?: ReadonlyArray<{ playerName: string; team: string }>;
   samplePicksCount?: number;
+  closestToQualifyingCount?: number;
+  missingHistoryExamplesCount?: number;
 }): ScorecardAudit {
   const n = args.samplePicksCount ?? 50;
   const byRec = { OVER: 0, UNDER: 0, PASS: 0, unknown: 0 };
@@ -962,6 +1091,23 @@ export function buildScorecardAudit(args: {
     },
   ];
 
+  const closestToQualifying = buildClosestToQualifyingRows({
+    candidates: args.candidates,
+    playerHistoryByName: args.playerHistoryByName,
+    limit: args.closestToQualifyingCount ?? 50,
+  });
+  const marketContext = buildMarketContextAudit({
+    candidates: args.candidates,
+  });
+  const missingHistory = args.playerWeekStats
+    ? buildMissingHistoryAudit({
+        candidates: args.candidates,
+        playerHistoryByName: args.playerHistoryByName,
+        playerWeekStats: args.playerWeekStats,
+        examplesCount: args.missingHistoryExamplesCount ?? 25,
+      })
+    : undefined;
+
   return {
     candidatesScored: args.candidates.length,
     candidatesWithScorecard: withScorecard,
@@ -971,7 +1117,300 @@ export function buildScorecardAudit(args: {
     topDisqualifiers,
     featureCompleteness,
     candidatesMissingHistory,
+    missingHistory,
     samplePicks: samples,
+    closestToQualifying,
+    marketContext,
+  };
+}
+
+// =====================================================================
+// Closest-to-qualifying audit
+// =====================================================================
+
+const PER_BUCKET_GATE: Record<string, number> = {
+  dataQuality: SCORECARD_GATE_THRESHOLDS.dataQuality,
+  roleStability: SCORECARD_GATE_THRESHOLDS.roleStability,
+  injuryContext: SCORECARD_GATE_THRESHOLDS.injuryContext,
+  correlationExposure: SCORECARD_GATE_THRESHOLDS.correlationExposure,
+  weatherEnvironment: SCORECARD_GATE_THRESHOLDS.weatherEnvironment,
+  gameScript: SCORECARD_GATE_THRESHOLDS.gameScript,
+  pace: SCORECARD_GATE_THRESHOLDS.pace,
+  marketContext: SCORECARD_GATE_THRESHOLDS.marketContext,
+};
+
+function parseGateGaps(args: {
+  scorecard: NonNullable<RealWeekCandidate["scorecard"]>;
+}): {
+  gateGaps: ClosestToQualifyingRow["gateGaps"];
+  edgeGap: number | null;
+} {
+  const s = args.scorecard;
+  const gateGaps: ClosestToQualifyingRow["gateGaps"] = [];
+  let edgeGap: number | null = null;
+  // Parse each disqualifier string. Edge gate uses
+  // `Edge of +X% on SIDE below Y% threshold`; risk gates use
+  // `<Bucket> score X.XX below Y.YY gate`.
+  for (const d of s.disqualifiers) {
+    const edgeMatch = d.match(/Edge of ([+-]?[\d.]+)%.*below ([\d.]+)% threshold/);
+    if (edgeMatch) {
+      const edge = parseFloat(edgeMatch[1]) / 100;
+      const threshold = parseFloat(edgeMatch[2]) / 100;
+      edgeGap = threshold - edge;
+      continue;
+    }
+    const bucketMatch = d.match(/^([\w \/-]+?) score ([\d.]+) below ([\d.]+) gate$/i);
+    if (bucketMatch) {
+      const label = bucketMatch[1].toLowerCase().trim();
+      const score = parseFloat(bucketMatch[2]);
+      const gate = parseFloat(bucketMatch[3]);
+      // Map the label back to the bucket key.
+      let bucket = "other";
+      if (label.includes("data quality")) bucket = "dataQuality";
+      else if (label.includes("role stability")) bucket = "roleStability";
+      else if (label.includes("injury")) bucket = "injuryContext";
+      else if (label.includes("correlation")) bucket = "correlationExposure";
+      else if (label.includes("weather")) bucket = "weatherEnvironment";
+      else if (label.includes("game script")) bucket = "gameScript";
+      else if (label.includes("market context")) bucket = "marketContext";
+      else if (label.includes("pace")) bucket = "pace";
+      gateGaps.push({ bucket, score, gate, gap: gate - score });
+    }
+  }
+  return { gateGaps, edgeGap };
+}
+
+function buildClosestToQualifyingRows(args: {
+  candidates: readonly RealWeekCandidate[];
+  playerHistoryByName?: Map<string, readonly { playerName?: string }[]>;
+  limit: number;
+}): ClosestToQualifyingRow[] {
+  const rows: ClosestToQualifyingRow[] = [];
+  for (const c of args.candidates) {
+    const s = c.scorecard;
+    if (!s) continue;
+    if (s.qualified) continue;
+    const { gateGaps, edgeGap } = parseGateGaps({ scorecard: s });
+    // qualificationGap = max gap that still needs to close. If
+    // the candidate had no parseable gap (unrecognized string),
+    // skip it from the closest list — it would dominate by a
+    // 0-gap default and mislead.
+    const allGaps = [
+      ...gateGaps.map((g) => g.gap),
+      ...(edgeGap !== null ? [edgeGap] : []),
+    ];
+    if (allGaps.length === 0) continue;
+    const qualificationGap = Math.max(...allGaps);
+    const historyRows =
+      args.playerHistoryByName?.get(`${c.playerName}::${c.team}`)?.length ?? null;
+    rows.push({
+      candidateId: c.id,
+      playerName: c.playerName,
+      team: c.team,
+      opponent: c.opponent,
+      propType: c.propType,
+      line: c.line,
+      side: s.recommendation,
+      modelProbability: s.modelProbability ?? null,
+      marketProbability:
+        s.recommendation === "UNDER"
+          ? s.marketUnderProbability
+          : s.recommendation === "OVER"
+            ? s.marketOverProbability
+            : s.marketOverProbability,
+      edge: s.edge,
+      edgeThreshold: s.edgeThreshold,
+      confidence: s.confidence,
+      riskScore: s.riskScore,
+      dataQualityScore: s.dataQualityScore,
+      marketContextScore: s.marketContextScore,
+      historyRows,
+      disqualifiers: s.disqualifiers,
+      gateGaps,
+      edgeGap,
+      qualificationGap,
+    });
+  }
+  rows.sort((a, b) => a.qualificationGap - b.qualificationGap);
+  return rows.slice(0, args.limit);
+}
+
+// =====================================================================
+// Market-context distribution + simulation
+// =====================================================================
+
+function buildMarketContextAudit(args: {
+  candidates: readonly RealWeekCandidate[];
+}): MarketContextAudit {
+  const clamped = { gte045: 0, band040To045: 0, band035To040: 0, lt035: 0 };
+  const raw = {
+    gte045: 0,
+    band040To045: 0,
+    band035To040: 0,
+    band020To035: 0,
+    band000To020: 0,
+    lt000: 0,
+  };
+  const rawScores: number[] = [];
+  // For the simulation, count candidates whose ONLY remaining
+  // hurdle (beyond marketContext) would be cleared if the
+  // marketContext gate were lowered.
+  let qualifyingAtGate045 = 0;
+  let qualifyingAtGate040 = 0;
+  let qualifyingAtGate035 = 0;
+  for (const c of args.candidates) {
+    const s = c.scorecard;
+    if (!s) continue;
+    if (s.qualified) {
+      // Already qualified at the current gate.
+      qualifyingAtGate045 += 1;
+      qualifyingAtGate040 += 1;
+      qualifyingAtGate035 += 1;
+      continue;
+    }
+    const clampedScore = s.marketContextScore;
+    if (clampedScore >= 0.45) clamped.gte045 += 1;
+    else if (clampedScore >= 0.4) clamped.band040To045 += 1;
+    else if (clampedScore >= 0.35) clamped.band035To040 += 1;
+    else clamped.lt035 += 1;
+    const rawScore = rawMarketContextScore(c);
+    rawScores.push(rawScore);
+    if (rawScore >= 0.45) raw.gte045 += 1;
+    else if (rawScore >= 0.4) raw.band040To045 += 1;
+    else if (rawScore >= 0.35) raw.band035To040 += 1;
+    else if (rawScore >= 0.2) raw.band020To035 += 1;
+    else if (rawScore >= 0) raw.band000To020 += 1;
+    else raw.lt000 += 1;
+    // Simulation: would this candidate qualify if we lowered
+    // ONLY the marketContext gate to X? Strip marketContext
+    // disqualifiers from the failure list; if NO other failure
+    // remains AND the candidate's raw marketContext score
+    // meets the new gate, it qualifies.
+    const nonMarketFailures = s.disqualifiers.filter(
+      (d) => !d.toLowerCase().includes("market context"),
+    );
+    if (nonMarketFailures.length === 0) {
+      if (rawScore >= 0.45) qualifyingAtGate045 += 1;
+      if (rawScore >= 0.4) qualifyingAtGate040 += 1;
+      if (rawScore >= 0.35) qualifyingAtGate035 += 1;
+    }
+  }
+  const rawStats =
+    rawScores.length === 0
+      ? { min: 0, mean: 0, max: 0 }
+      : {
+          min: Math.min(...rawScores),
+          mean: rawScores.reduce((a, b) => a + b, 0) / rawScores.length,
+          max: Math.max(...rawScores),
+        };
+  return {
+    gateThreshold: SCORECARD_GATE_THRESHOLDS.marketContext,
+    clampFloor: 0.4,
+    clampedDistribution: clamped,
+    rawDistribution: raw,
+    rawMin: rawStats.min,
+    rawMean: rawStats.mean,
+    rawMax: rawStats.max,
+    simulation: {
+      qualifyingAtGate045,
+      qualifyingAtGate040,
+      qualifyingAtGate035,
+    },
+  };
+}
+
+// =====================================================================
+// Missing-history categorization
+// =====================================================================
+
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/\b(jr|sr|ii|iii|iv)\b\.?/g, "")
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildMissingHistoryAudit(args: {
+  candidates: readonly RealWeekCandidate[];
+  playerHistoryByName?: Map<string, readonly { playerName?: string }[]>;
+  playerWeekStats: ReadonlyArray<{ playerName: string; team: string }>;
+  examplesCount: number;
+}): MissingHistoryAudit {
+  // Build two indexes for fast lookup:
+  //   nameToTeams: playerName → Set of teams with at least one row
+  //   normalizedToOriginal: normalized name → array of {originalName, team}
+  const nameToTeams = new Map<string, Set<string>>();
+  const normalizedToOriginals = new Map<
+    string,
+    Array<{ name: string; team: string }>
+  >();
+  for (const row of args.playerWeekStats) {
+    const set = nameToTeams.get(row.playerName) ?? new Set<string>();
+    set.add(row.team);
+    nameToTeams.set(row.playerName, set);
+    const norm = normalizeName(row.playerName);
+    const arr = normalizedToOriginals.get(norm) ?? [];
+    if (!arr.find((x) => x.name === row.playerName && x.team === row.team)) {
+      arr.push({ name: row.playerName, team: row.team });
+    }
+    normalizedToOriginals.set(norm, arr);
+  }
+
+  let teamSwitched = 0;
+  let rookieOrUnknown = 0;
+  let possibleNameMismatch = 0;
+  const examples: MissingHistoryAudit["examples"] = [];
+
+  for (const c of args.candidates) {
+    const rows = args.playerHistoryByName?.get(`${c.playerName}::${c.team}`);
+    if (rows && rows.length > 0) continue;
+    // History missing — categorize the cause.
+    let cause: MissingHistoryAudit["examples"][number]["cause"] = "unknown";
+    let matchedTeam: string | undefined;
+    let matchedName: string | undefined;
+    const exactTeams = nameToTeams.get(c.playerName);
+    if (exactTeams && exactTeams.size > 0) {
+      cause = "teamSwitched";
+      matchedTeam = [...exactTeams].sort().join(",");
+      teamSwitched += 1;
+    } else {
+      // No exact-name row — try a normalized name match.
+      const norm = normalizeName(c.playerName);
+      const normalized = normalizedToOriginals.get(norm);
+      if (normalized && normalized.length > 0) {
+        cause = "possibleNameMismatch";
+        matchedName = normalized[0].name;
+        matchedTeam = normalized[0].team;
+        possibleNameMismatch += 1;
+      } else {
+        cause = "rookieOrUnknown";
+        rookieOrUnknown += 1;
+      }
+    }
+    if (examples.length < args.examplesCount) {
+      examples.push({
+        candidateId: c.id,
+        playerName: c.playerName,
+        team: c.team,
+        opponent: c.opponent,
+        propType: c.propType,
+        line: c.line,
+        cause,
+        matchedTeam,
+        matchedName,
+      });
+    }
+  }
+  return {
+    totalMissing: teamSwitched + rookieOrUnknown + possibleNameMismatch,
+    teamSwitched,
+    rookieOrUnknown,
+    possibleNameMismatch,
+    examples,
   };
 }
 
