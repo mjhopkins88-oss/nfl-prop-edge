@@ -23,13 +23,28 @@ import {
   type StoredSeasonAggregate,
 } from "@/lib/backtest/week-1-monitor-summary";
 import { getWeek1StarterTestContext } from "@/lib/app-context";
+import { WeekSelector } from "@/components/WeekSelector";
 
 export const dynamic = "force-dynamic";
 
-export default async function MonitorPage() {
+interface MonitorPageProps {
+  searchParams?: Promise<{ week?: string }>;
+}
+
+export default async function MonitorPage(props: MonitorPageProps) {
+  const sp = (await props.searchParams) ?? {};
+  const parsedWeek = sp.week ? Number(sp.week) : undefined;
+  const selectedWeek =
+    parsedWeek !== undefined && Number.isFinite(parsedWeek) && parsedWeek > 0
+      ? parsedWeek
+      : undefined;
   const stored = await loadStoredWeek1MonitorSnapshot({ season: 2025, week: 1 });
   const allStoredWeeks = await loadAllStoredMonitorSnapshots({ season: 2025 });
   const seasonAggregate = aggregateStoredSeason(allStoredWeeks);
+  const selectedSnapshot =
+    selectedWeek !== undefined
+      ? allStoredWeeks.find((w) => w.week === selectedWeek)
+      : undefined;
   const fixture = loadFixtureBacktestSummary();
   const proxySummary = loadFixtureProxySummary();
   const compareLatest = loadFixtureComparisonSummary();
@@ -66,22 +81,69 @@ export default async function MonitorPage() {
   return (
     <div className="space-y-8">
       <Hero readiness={readiness} storedIsPrimary={storedIsPrimary} />
-      {stored ? <StoredWeek1Panel stored={stored} /> : null}
       {allStoredWeeks.length > 0 ? (
-        <SeasonStoredWeeksTable
-          weeks={allStoredWeeks}
-          aggregate={seasonAggregate}
+        <WeekSelector
+          mode="searchParam"
+          searchParamKey="week"
+          selectedWeek={selectedWeek}
+          options={allStoredWeeks.map((w) => ({
+            week: w.week,
+            graded: w.graded !== undefined,
+          }))}
+          label="View stored week"
+          hint="All shows the season aggregate. Pick a week to drill into its detail. Past weeks stay persisted independently."
+          testid="monitor-week-selector"
         />
       ) : null}
-      {storedWeeks.length > 0 ? (
-        <StoredWeeksAggregated storedWeeks={storedWeeks} />
-      ) : null}
-      {seasonAggregate.calibration.available ? (
-        <SeasonCalibrationAggregate aggregate={seasonAggregate} />
-      ) : null}
-      {stored?.graded ? (
-        <StoredBreakdowns stored={stored} />
-      ) : null}
+
+      {selectedWeek === undefined ? (
+        <>
+          {/* Season view — default. */}
+          {stored ? <StoredWeek1Panel stored={stored} /> : null}
+          {allStoredWeeks.length > 0 ? (
+            <SeasonStoredWeeksTable
+              weeks={allStoredWeeks}
+              aggregate={seasonAggregate}
+            />
+          ) : null}
+          {storedWeeks.length > 0 ? (
+            <StoredWeeksAggregated storedWeeks={storedWeeks} />
+          ) : null}
+          {seasonAggregate.calibration.available ? (
+            <SeasonCalibrationAggregate aggregate={seasonAggregate} />
+          ) : null}
+          {stored?.graded ? <StoredBreakdowns stored={stored} /> : null}
+        </>
+      ) : selectedSnapshot ? (
+        <>
+          {/* Selected-week detail view. */}
+          <StoredWeek1Panel stored={selectedSnapshot} />
+          {selectedSnapshot.graded ? (
+            <StoredBreakdowns stored={selectedSnapshot} />
+          ) : null}
+          <p className="text-[11px] text-ink-500">
+            Selected Week {selectedWeek} only. The season aggregate +
+            calibration rollup are hidden — switch the selector above
+            back to &ldquo;All&rdquo; to see them.
+          </p>
+        </>
+      ) : (
+        <section
+          className="rounded-2xl bg-amber-50/70 p-5 ring-1 ring-amber-200/60 sm:p-6"
+          data-testid="monitor-week-not-found"
+        >
+          <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-amber-900">
+            Week {selectedWeek}
+          </h2>
+          <p className="mt-2 text-[11px] text-amber-900">
+            No stored backtest data for this week yet. Run the
+            stored-data pipeline for this week first (see{" "}
+            <code>scripts/run-stored-pipeline-weeks-2-6.ts</code>)
+            or switch the selector back to &ldquo;All&rdquo; for
+            the season aggregate.
+          </p>
+        </section>
+      )}
       <OverallHealth
         fixture={fixture}
         week1Results={week1Results}
