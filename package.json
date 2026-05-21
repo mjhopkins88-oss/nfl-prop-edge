@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "tsx scripts/write-deployment-manifest.ts && prisma generate && next build",
-    "start": "next start",
+    "start": "node scripts/run-db-push-if-configured.cjs && next start",
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",

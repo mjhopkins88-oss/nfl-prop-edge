@@ -88,9 +88,49 @@ PR branches do not deploy to production. Options:
 `prisma generate` step reads the schema but does not connect to
 any database, so the build does not depend on `DATABASE_URL`.
 
+`npm run start` runs
+`node scripts/run-db-push-if-configured.cjs && next start`. The
+schema-sync helper only acts when `DATABASE_URL` is set (no-op
+otherwise) and uses `prisma db push --skip-generate
+--accept-data-loss=false`, which is additive-only and
+idempotent — re-running across redeploys is safe. Failures log a
+warning and let the app start; the persistence layer falls back
+to file-only mode when the tables aren't present.
+
+The project does NOT use Prisma migrations (no `prisma/migrations/`
+directory). `db push` is the agreed pattern. To bootstrap a fresh
+database, set `DATABASE_URL` in Railway and let `npm start`
+handle it on the next deploy — no manual step required.
+
+## Runtime persistence
+
+Railway web-service containers are **ephemeral**. Anything
+written under the working directory at runtime is wiped on the
+next build/redeploy. The paid Odds API ingestion, the canonical
+migration result, the admin smoke-success flag, and the stored
+backtest output are all expensive (paid or labour-cost) to
+regenerate. Those are mirrored into Postgres by
+`src/lib/persistence/week-1-persistence.ts` on every successful
+admin action, and `/admin/ingestion` reads the merged DB + file
+state at load time so a redeploy doesn't reset the page.
+
+If the canonical odds file is missing on disk but Postgres has
+rows for `(2025, 1)`, the `stored-backtest` admin action
+rehydrates the file from DB before running. **Do not rerun the
+paid Odds API ingestion just because the file disappeared** —
+check `/admin/ingestion` first; the "Persistent storage:
+Postgres available" indicator + the per-source labels
+(`canonical odds source: postgres`, `admin state source:
+postgres`) will tell you whether DB rehydration is possible.
+
+See `RUNTIME_DATA_PERSISTENCE_AUDIT.md` for the full classification
+of which files are persisted and which are intentionally kept
+file-only.
+
 The start command deliberately does NOT run
-`prisma migrate deploy`. See the README's
-"Why no `prisma migrate deploy` in the start command" note.
+`prisma migrate deploy` (no migration history). `db push` covers
+it; if you ever switch to migrations, replace the helper script
+or move the command into `start`.
 
 ## Deployment trigger log
 

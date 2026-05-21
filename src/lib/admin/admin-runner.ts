@@ -29,9 +29,15 @@ import path from "node:path";
 import { buildReadinessReport } from "../../../scripts/check-real-week-1-readiness";
 import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-candidate-builder";
 import {
+  buildCanonicalOddsRows,
   canonicalMarketsPath,
   migrateLegacyToCanonical,
 } from "../ingestion/canonical-odds-writer";
+import {
+  getPersistenceClient,
+  rehydrateCanonicalOddsFromDbIfMissing,
+  type PersistenceClient,
+} from "../persistence/week-1-persistence";
 import {
   hasPriorSmokeSuccess,
   recordActionResult,
@@ -86,6 +92,9 @@ export interface AdminRunArgs {
   repoRoot?: string;
   /** Injected for tests; defaults to a real spawn-based runner. */
   spawner?: SubprocessRunner;
+  /** Injected for tests; defaults to the lazily-resolved Prisma
+   *  client (or the null client when DATABASE_URL is unset). */
+  persistence?: PersistenceClient;
 }
 
 export interface SubprocessSpec {
@@ -549,6 +558,8 @@ export async function runAdminAction(
 ): Promise<AdminActionResult> {
   const repoRoot = args.repoRoot ?? process.cwd();
   const spawner = args.spawner ?? realSubprocessRunner;
+  const persistence =
+    args.persistence ?? (await getPersistenceClient());
 
   switch (args.action) {
     case "readiness-check": {
@@ -664,9 +675,40 @@ export async function runAdminAction(
         repoRoot,
       });
       if (gate) return recordSkip("paid-smoke", gate, repoRoot);
+      const startedAt = new Date().toISOString();
       const sub = await spawner(buildPaidSmokeSpec(repoRoot));
+      const finishedAt = new Date().toISOString();
       const parsed = parseIngestionOutput(sub.stdout);
       const ok = sub.exitCode === 0 && !sub.timedOut;
+      const persistenceNotes: string[] = [];
+      if (ok) {
+        recordSmokeSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+        const dbState = await persistence.saveAdminIngestionStateToDb({
+          smokeSucceededAt: finishedAt,
+          smokeCreditsUsed: parsed.creditsUsed,
+        });
+        if (!dbState.ok && dbState.error)
+          persistenceNotes.push(`db state: ${dbState.error}`);
+      }
+      recordPaidSmokeAttempt({
+        result: ok ? "success" : "failure",
+        creditsUsed: parsed.creditsUsed,
+        reason: ok ? undefined : `smoke ${ok ? "ok" : "failed"}`,
+        repoRoot,
+      });
+      const dbRun = await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-smoke-calibration",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      });
+      if (!dbRun.ok && dbRun.error)
+        persistenceNotes.push(`db run: ${dbRun.error}`);
       const result: AdminActionResult = {
         action: "paid-smoke",
         ok,
@@ -676,26 +718,18 @@ export async function runAdminAction(
           : sub.timedOut
             ? "Smoke timed out."
             : `Smoke failed with exit ${sub.exitCode}.`,
-        detail: truncateForUi(sub.stdout, sub.stderr),
+        detail: truncateForUi(sub.stdout, sub.stderr) +
+          (persistenceNotes.length > 0
+            ? `\n--- persistence ---\n${persistenceNotes.join("\n")}`
+            : ""),
         data: {
           creditsUsed: parsed.creditsUsed,
           creditsRemaining: parsed.creditsRemaining,
+          persistedToDb: dbRun.ok,
         },
         creditsUsed: parsed.creditsUsed,
         creditsRemaining: parsed.creditsRemaining,
       };
-      if (ok) {
-        recordSmokeSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
-      }
-      // Record every paid smoke attempt (success or failure) with
-      // the credits-used parsed from output. Lets the UI surface
-      // "last smoke used X credits before aborting" on retry.
-      recordPaidSmokeAttempt({
-        result: ok ? "success" : "failure",
-        creditsUsed: parsed.creditsUsed,
-        reason: ok ? undefined : result.summary,
-        repoRoot,
-      });
       recordActionResult({
         action: "paid-smoke",
         result: ok ? "success" : "failure",
@@ -757,7 +791,24 @@ export async function runAdminAction(
       };
       if (ok) {
         recordWeek1SubsetSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+        await persistence.saveAdminIngestionStateToDb({
+          week1SubsetSucceededAt: finishedAt,
+          week1SubsetCreditsUsed: parsed.creditsUsed,
+        });
       }
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-week1-subset",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+        gamesRequested: ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS,
+      });
       recordActionResult({
         action: "odds-week1-subset-paid",
         result: ok ? "success" : "failure",
@@ -816,7 +867,24 @@ export async function runAdminAction(
         creditsUsed: parsed.creditsUsed,
         creditsRemaining: parsed.creditsRemaining,
       };
-      if (ok) recordWeek1Success(repoRoot);
+      if (ok) {
+        recordWeek1Success(repoRoot);
+        await persistence.saveAdminIngestionStateToDb({
+          week1IngestionSucceededAt: finishedAt,
+        });
+      }
+      await persistence.saveOddsIngestionRunToDb({
+        season: 2025,
+        week: 1,
+        scope: "paid-week1-full",
+        status: ok ? "success" : "failure",
+        startedAt,
+        finishedAt,
+        creditsEstimated: parsed.estimatedCredits,
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+        marketsRequested: 4,
+      });
       recordActionResult({
         action: "paid-week1",
         result: ok ? "success" : "failure",
@@ -841,6 +909,27 @@ export async function runAdminAction(
         week: 1,
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
+      // Mirror canonical rows to Postgres so a redeploy doesn't
+      // erase the migration result. Read the file we just wrote
+      // and re-derive rows via buildCanonicalOddsRows would be
+      // wasteful; the migration already produced them. Re-parse
+      // the written file instead.
+      let dbUpserted = 0;
+      let dbError: string | undefined;
+      if (ok && r.target) {
+        try {
+          const parsed = parseWrittenCanonicalCsv(r.target);
+          const saved = await persistence.saveCanonicalOddsRowsToDb({
+            season: 2025,
+            week: 1,
+            rows: parsed,
+          });
+          if (saved.ok) dbUpserted = saved.upserted ?? parsed.length;
+          else dbError = saved.error ?? "unknown DB error";
+        } catch (err) {
+          dbError = (err as Error).message;
+        }
+      }
       const resultFile = path.join(
         repoRoot,
         "data",
@@ -860,6 +949,11 @@ export async function runAdminAction(
             diagnostics: r.diagnostics ?? null,
             sourcesInspected: r.sourcesInspected,
             paidApiCallAttempted: false,
+            persistence: {
+              dbAvailable: persistence.isAvailable(),
+              dbUpserted,
+              dbError: dbError ?? null,
+            },
             guardrails: {
               noOddsApiCall: true,
               noTouchdownProps: true,
@@ -876,18 +970,23 @@ export async function runAdminAction(
         ok,
         status: ok ? "success" : "failure",
         summary: ok
-          ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}.`
+          ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}${
+              dbUpserted > 0 ? `; mirrored ${dbUpserted} to Postgres.` : "."
+            }`
           : `Migration ${r.status}. No canonical file written.`,
         detail:
           `sourcesInspected:\n  ${r.sourcesInspected.join("\n  ")}` +
           (r.diagnostics
             ? `\ndiagnostics: ${JSON.stringify(r.diagnostics)}`
-            : ""),
+            : "") +
+          (dbError ? `\npersistence: ${dbError}` : ""),
         data: {
           status: r.status,
           target: r.target,
           rowsWritten: r.rowsWritten,
           diagnostics: r.diagnostics,
+          dbUpserted,
+          dbAvailable: persistence.isAvailable(),
         },
       };
       recordActionResult({
@@ -900,21 +999,55 @@ export async function runAdminAction(
     }
 
     case "stored-backtest": {
+      // First: if the canonical odds file is missing on disk but
+      // we have rows in Postgres, rehydrate the file from DB.
+      // This handles the redeploy case where the container's
+      // ephemeral filesystem lost the file but the DB row
+      // survives.
+      const rehydration = await rehydrateCanonicalOddsFromDbIfMissing({
+        season: 2025,
+        week: 1,
+        client: persistence,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
       const r = buildRealWeek1CandidatesFromStoredData({
         season: 2025,
         week: 1,
       });
       const ok = r.status === "READY";
+      // Mirror the run output to Postgres so the page can read
+      // it back after a redeploy.
+      const dbSave = await persistence.saveStoredBacktestRunToDb({
+        season: 2025,
+        week: 1,
+        dataMode: "stored",
+        status: r.status,
+        realWeek1BacktestReady: ok,
+        scheduleValidationStatus: r.scheduleReport?.status ?? null,
+        syntheticFixture: false,
+        candidatesJson: { candidates: r.candidates.slice(0, 500) },
+      });
       const result: AdminActionResult = {
         action: "stored-backtest",
         ok,
         status: ok ? "success" : "failure",
-        summary: `${r.status} — ${r.candidates.length} candidates`,
-        detail: r.notes.join("\n"),
+        summary: `${r.status} — ${r.candidates.length} candidates${
+          rehydration.rehydrated
+            ? ` (rehydrated ${rehydration.rowsRestored} odds rows from Postgres)`
+            : ""
+        }`,
+        detail:
+          r.notes.join("\n") +
+          `\n--- persistence ---\ncanonical odds source: ${rehydration.source}` +
+          (rehydration.error ? `\nrehydration error: ${rehydration.error}` : "") +
+          `\nDB save: ${dbSave.ok ? "ok" : `failed (${dbSave.error ?? "?"})`}`,
         data: {
           status: r.status,
           candidateCount: r.candidates.length,
           scheduleReportStatus: r.scheduleReport?.status,
+          canonicalOddsSource: rehydration.source,
+          dbAvailable: persistence.isAvailable(),
+          dbRunSaved: dbSave.ok,
         },
       };
       recordActionResult({
@@ -931,6 +1064,44 @@ export async function runAdminAction(
       throw new Error(`Unknown admin action: ${String(unknown)}`);
     }
   }
+}
+
+/**
+ * Parse a canonical Week-N CSV back into rows for persistence.
+ * Used by the migrate-odds-to-canonical action — the migration
+ * already wrote the file, so we re-parse it to avoid re-joining
+ * the legacy CSVs in memory. Tolerant of column reordering: the
+ * column index map is built from the header row.
+ */
+function parseWrittenCanonicalCsv(
+  filePath: string,
+): import("../ingestion/canonical-odds-writer").CanonicalPropRow[] {
+  const text = fs.readFileSync(filePath, "utf8");
+  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+  if (lines.length <= 1) return [];
+  const header = lines[0].split(",");
+  const idx = (name: string): number => header.indexOf(name);
+  const out: import("../ingestion/canonical-odds-writer").CanonicalPropRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(",");
+    out.push({
+      season: Number(cells[idx("season")]),
+      week: Number(cells[idx("week")]),
+      gameId: cells[idx("gameId")] ?? "",
+      kickoffTime: cells[idx("kickoffTime")] ?? "",
+      sportsbook: cells[idx("sportsbook")] ?? "",
+      playerName: cells[idx("playerName")] ?? "",
+      team: cells[idx("team")] ?? "",
+      opponent: cells[idx("opponent")] ?? "",
+      marketKey: cells[idx("marketKey")] ?? "",
+      propType: cells[idx("propType")] ?? "",
+      line: Number(cells[idx("line")]),
+      overOdds: Number(cells[idx("overOdds")]),
+      underOdds: Number(cells[idx("underOdds")]),
+      snapshotTime: cells[idx("snapshotTime")] ?? "",
+    });
+  }
+  return out;
 }
 
 // ---- gates + helpers --------------------------------------------------

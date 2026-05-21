@@ -330,3 +330,100 @@ model ApiUsageLog {
   @@index([source, createdAt])
   @@index([requestUrlHash])
 }
+
+/// One row per paid Odds-API ingestion (smoke, week-subset,
+/// week-full). Audit trail for what was paid for. Never carries
+/// secrets — only credit counts + metadata.
+model OddsIngestionRun {
+  id                String   @id @default(cuid())
+  season            Int
+  week              Int?
+  scope             String
+  status            String
+  startedAt         DateTime
+  finishedAt        DateTime?
+  creditsEstimated  Int?
+  creditsUsed       Int?
+  creditsRemaining  Int?
+  marketsRequested  Int?
+  gamesRequested    Int?
+  errorMessage      String?
+  rawResultJson     Json?
+  createdAt         DateTime @default(now())
+
+  @@index([season, week, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Canonical per-row stored odds — the table form of
+/// data/processed/odds/{season}/week-{N}-prop-markets.csv. The
+/// migration helper writes both file and table so a redeploy
+/// can rehydrate the file from the DB.
+model StoredPropMarket {
+  id              String   @id @default(cuid())
+  season          Int
+  week            Int
+  gameId          String
+  eventId         String?
+  marketKey       String
+  playerName      String
+  playerId        String?
+  team            String
+  opponent        String
+  propType        String
+  line            Float
+  sportsbook      String
+  overOdds        Float
+  underOdds       Float
+  snapshotTime    String?
+  oddsSource      String?
+  isBeforeKickoff Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  /// Re-running the migration produces the same (season, week,
+  /// marketKey, sportsbook, snapshotTime) tuple. Upsert on this
+  /// key so a redeploy doesn't duplicate the file's contents.
+  @@unique([season, week, marketKey, sportsbook, snapshotTime])
+  @@index([season, week, gameId])
+  @@index([season, week, playerName])
+}
+
+/// Full stored-mode backtest output. One row per run; the page
+/// fetches the most recent `(season, week, dataMode)` entry.
+/// JSON columns hold opaque payloads — never secrets.
+model StoredBacktestRun {
+  id                          String   @id @default(cuid())
+  season                      Int
+  week                        Int
+  dataMode                    String
+  status                      String
+  realWeek1BacktestReady      Boolean
+  scheduleValidationStatus    String?
+  syntheticFixture            Boolean
+  candidatesJson              Json?
+  resultsJson                 Json?
+  v1v2Json                    Json?
+  parlayJson                  Json?
+  gameEdgeJson                Json?
+  createdAt                   DateTime @default(now())
+
+  @@index([season, week, createdAt])
+  @@index([dataMode, createdAt])
+}
+
+/// Single-row table for the admin ingestion state. We pin
+/// `id = "singleton"` so reads are deterministic — no listing
+/// to find the latest row, no race window for two writers.
+model AdminIngestionState {
+  id                          String   @id @default("singleton")
+  smokeSucceededAt            DateTime?
+  smokeCreditsUsed            Int?
+  week1IngestionSucceededAt   DateTime?
+  week1SubsetSucceededAt      DateTime?
+  week1SubsetCreditsUsed      Int?
+  lastAction                  String?
+  lastResultJson              Json?
+  lastTimestamp               DateTime?
+  lastSummary                 String?
+  updatedAt                   DateTime @updatedAt
+}
