@@ -18,7 +18,8 @@ type ActionName =
   | "paid-week1"
   | "migrate-odds-to-canonical"
   | "stored-backtest"
-  | "grade-week1-stored";
+  | "grade-week1-stored"
+  | "verify-persistence";
 
 interface StatusResponse {
   ok: boolean;
@@ -319,6 +320,14 @@ export function AdminIngestionClient() {
             disabled={!token || busy !== null}
             busy={busy === "grade-week1-stored"}
             onRun={() => void runAction("grade-week1-stored")}
+          />
+          <ActionRow
+            label="10. Verify persisted Week 1 data"
+            description="Pings Postgres, counts StoredPropMarket / StoredBacktestRun / OddsIngestionRun rows, reports whether canonical file can be rehydrated from DB. No API call."
+            buttonLabel="Verify"
+            disabled={!token || busy !== null}
+            busy={busy === "verify-persistence"}
+            onRun={() => void runAction("verify-persistence")}
           />
         </div>
       </section>

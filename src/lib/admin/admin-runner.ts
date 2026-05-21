@@ -925,6 +925,7 @@ export async function runAdminAction(
       // newly-normalized rows.
       let dbUpserted = 0;
       let dbDeleted = 0;
+      let dbRowCountAfter = 0;
       let dbError: string | undefined;
       if (ok && r.target) {
         try {
@@ -942,10 +943,30 @@ export async function runAdminAction(
           });
           if (saved.ok) dbUpserted = saved.upserted ?? parsed.length;
           else dbError = saved.error ?? dbError ?? "unknown DB error";
+          // Verify: count what landed. Catches half-failures
+          // (delete OK, save half-failed) the upsert response
+          // alone wouldn't surface.
+          if (persistence.isAvailable()) {
+            const post = await persistence.countPersistence({
+              season: 2025,
+              week: 1,
+            });
+            if (post.ok) {
+              dbRowCountAfter = post.counts?.storedPropMarketRows ?? 0;
+            } else if (!dbError) {
+              dbError = post.error ?? "count verification failed";
+            }
+          }
         } catch (err) {
           dbError = (err as Error).message;
         }
       }
+      const persistenceWarning =
+        ok && persistence.isAvailable() && dbRowCountAfter === 0
+          ? "Data is only in ephemeral file cache and will be lost on redeploy."
+          : !persistence.isAvailable() && ok
+            ? "DATABASE_URL not configured — file cache is the only source; data will be lost on redeploy."
+            : undefined;
       const resultFile = path.join(
         repoRoot,
         "data",
@@ -989,9 +1010,9 @@ export async function runAdminAction(
         summary: ok
           ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}${
               dbUpserted > 0
-                ? `; deleted ${dbDeleted} stale + upserted ${dbUpserted} in Postgres.`
+                ? `; deleted ${dbDeleted} stale + upserted ${dbUpserted} in Postgres (rowCountAfter=${dbRowCountAfter}).`
                 : "."
-            }`
+            }${persistenceWarning ? ` ⚠ ${persistenceWarning}` : ""}`
           : `Migration ${r.status}. No canonical file written.`,
         detail:
           `sourcesInspected:\n  ${r.sourcesInspected.join("\n  ")}` +
@@ -1006,7 +1027,9 @@ export async function runAdminAction(
           diagnostics: r.diagnostics,
           dbDeleted,
           dbUpserted,
+          dbRowCountAfter,
           dbAvailable: persistence.isAvailable(),
+          persistenceWarning: persistenceWarning ?? null,
         },
       };
       recordActionResult({
@@ -1036,6 +1059,16 @@ export async function runAdminAction(
         processedRoot: path.join(repoRoot, "data", "processed"),
       });
       const ok = r.status === "READY";
+      // Determine the canonical-odds source for the admin
+      // result. "postgres-rehydrated" when we just wrote the
+      // file from DB, "file" when the file was already there,
+      // "missing" when neither DB nor file had it.
+      const storedBacktestSource: "postgres-rehydrated" | "file" | "missing" =
+        rehydration.rehydrated
+          ? "postgres-rehydrated"
+          : rehydration.source === "file"
+            ? "file"
+            : "missing";
       // Mirror the data-mode-status file that
       // run-week-1-starter-test.ts writes, so /backtest/week-1
       // and /monitor (which read this file) reflect the latest
@@ -1144,8 +1177,17 @@ export async function runAdminAction(
           candidateCount: r.candidates.length,
           scheduleReportStatus: r.scheduleReport?.status,
           canonicalOddsSource: rehydration.source,
+          storedBacktestSource,
+          storedBacktestDbSave: dbSave.ok ? "ok" : "fail",
+          storedBacktestDbError: dbSave.ok ? null : dbSave.error ?? null,
           dbAvailable: persistence.isAvailable(),
           dbRunSaved: dbSave.ok,
+          persistenceWarning:
+            ok && persistence.isAvailable() && !dbSave.ok
+              ? "Backtest output is only in ephemeral file cache and will be lost on redeploy."
+              : !persistence.isAvailable() && ok
+                ? "DATABASE_URL not configured — backtest output is only in the ephemeral file cache."
+                : null,
           scheduleValidationDebug: debug,
         },
       };
@@ -1282,6 +1324,78 @@ export async function runAdminAction(
       recordActionResult({
         action: "grade-week1-stored",
         result: "success",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "verify-persistence": {
+      // Pure read: ping the DB, count rows, peek at the legacy
+      // files, report rehydration availability. No external API.
+      const ping = await persistence.ping();
+      const countsResult = ping.tablesReady
+        ? await persistence.countPersistence({ season: 2025, week: 1 })
+        : { ok: false, counts: undefined };
+      const stored = inspectStoredWeek1OddsOnDisk(repoRoot);
+      const canonicalFilePresent = stored.canonical.present;
+      const dbOddsRows = countsResult.counts?.storedPropMarketRows ?? 0;
+      const dbBacktestRuns = countsResult.counts?.storedBacktestRuns ?? 0;
+      const dbIngestionRuns = countsResult.counts?.oddsIngestionRuns ?? 0;
+      const adminStateExists = countsResult.counts?.adminStateExists ?? false;
+      const canRehydrateOdds = !canonicalFilePresent && dbOddsRows > 0;
+      const canLoadStoredBacktest = dbBacktestRuns > 0;
+      const ok = persistence.isAvailable() && ping.tablesReady;
+      const summary = ok
+        ? `DB ok · ${dbOddsRows} odds rows · ${dbBacktestRuns} backtest runs · ${dbIngestionRuns} ingestion runs · admin state ${adminStateExists ? "present" : "missing"}.`
+        : persistence.isAvailable()
+          ? `DB reachable but tables not ready: ${ping.error ?? "unknown"}.`
+          : `DATABASE_URL not configured — persistence disabled, file cache is the only source.`;
+      const result: AdminActionResult = {
+        action: "verify-persistence",
+        ok,
+        status: ok ? "success" : "failure",
+        summary,
+        detail: [
+          `dbConfigured: ${typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.length > 0}`,
+          `dbAvailable: ${persistence.isAvailable()}`,
+          `prismaTablesReady: ${ping.tablesReady}`,
+          ping.error ? `pingError: ${ping.error}` : null,
+          `StoredPropMarket(2025, w1): ${dbOddsRows} rows`,
+          `StoredBacktestRun(2025, w1): ${dbBacktestRuns} rows`,
+          `OddsIngestionRun(2025, w1): ${dbIngestionRuns} rows`,
+          `AdminIngestionState: ${adminStateExists ? "present" : "missing"}`,
+          `canonical file present: ${canonicalFilePresent}`,
+          `legacy file present: ${stored.legacy.present}`,
+          `canRehydrateCanonicalFromDb: ${canRehydrateOdds}`,
+          `canLoadStoredBacktestFromDb: ${canLoadStoredBacktest}`,
+        ]
+          .filter((line): line is string => line !== null)
+          .join("\n"),
+        data: {
+          dbConfigured:
+            typeof process.env.DATABASE_URL === "string" &&
+            process.env.DATABASE_URL.length > 0,
+          dbAvailable: persistence.isAvailable(),
+          prismaTablesReady: ping.tablesReady,
+          pingError: ping.tablesReady ? null : ping.error ?? null,
+          counts: {
+            storedPropMarketRows: dbOddsRows,
+            storedBacktestRuns: dbBacktestRuns,
+            oddsIngestionRuns: dbIngestionRuns,
+            adminStateExists,
+          },
+          files: {
+            canonicalPresent: canonicalFilePresent,
+            legacyPresent: stored.legacy.present,
+          },
+          canRehydrateCanonicalFromDb: canRehydrateOdds,
+          canLoadStoredBacktestFromDb: canLoadStoredBacktest,
+        },
+      };
+      recordActionResult({
+        action: "verify-persistence",
+        result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,
       });
