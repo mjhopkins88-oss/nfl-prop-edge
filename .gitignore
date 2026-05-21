@@ -71,6 +71,10 @@ data/deployment-manifest.json
 data/cache/**
 !data/cache/.gitkeep
 
+# Admin ingestion state — runtime persistence, never committed.
+data/admin/**
+!data/admin/.gitkeep
+
 # python
 __pycache__/
 *.pyc
