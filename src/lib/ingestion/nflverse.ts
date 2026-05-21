@@ -26,6 +26,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeNflKickoffTime } from "./nfl-schedule-time";
 import type {
   NflGame,
   NflGameType,
@@ -52,11 +53,23 @@ export const NFLVERSE_RELEASE_BASE =
   process.env.NFLVERSE_RELEASE_BASE ??
   "https://github.com/nflverse/nflverse-data/releases/download";
 
+/**
+ * Per-season weekly player stats. The newer `stats_player` release
+ * tag is current for 2024+; the older `player_stats` tag stopped
+ * being updated mid-2025. We use `stats_player_week_<season>.csv`
+ * for both seasons so the column layout matches between years.
+ */
 export const nflversePlayerStatsCsvUrl = (season: number): string =>
-  `${NFLVERSE_RELEASE_BASE}/player_stats/player_stats_${season}.csv`;
+  `${NFLVERSE_RELEASE_BASE}/stats_player/stats_player_week_${season}.csv`;
 
-export const nflverseSchedulesCsvUrl = (season: number): string =>
-  `${NFLVERSE_RELEASE_BASE}/schedules/sched_${season}.csv`;
+/**
+ * Master schedules file — all seasons in one CSV. The fetcher
+ * filters it per-season when writing into the raw tree. The
+ * `season` argument is accepted for backwards compatibility but
+ * ignored.
+ */
+export const nflverseSchedulesCsvUrl = (_season?: number): string =>
+  `${NFLVERSE_RELEASE_BASE}/schedules/games.csv`;
 
 export const nflverseRostersCsvUrl = (season: number): string =>
   `${NFLVERSE_RELEASE_BASE}/rosters/roster_${season}.csv`;
@@ -255,8 +268,25 @@ function asHomeAway(team: string, homeTeam: string): NflHomeAway {
 }
 
 /**
+ * Canonical kebab-case gameId used across the codebase. Both the
+ * Week-1 schedule fixture and the stored-odds ingestion produce
+ * IDs in this shape, so the games.csv we emit must match.
+ */
+export function canonicalGameId(args: {
+  season: number;
+  week: number;
+  awayTeam: string;
+  homeTeam: string;
+}): string {
+  return `${args.season}-w${args.week}-${args.awayTeam.toLowerCase()}-at-${args.homeTeam.toLowerCase()}`;
+}
+
+/**
  * Normalize a single nflverse schedules row into our `NflGame`
- * shape. Rejects rows where season / week are missing.
+ * shape. Rejects rows where season / week are missing. Always
+ * emits the canonical kebab-case gameId — the source's
+ * `2025_01_BAL_BUF` style is discarded so downstream lookups can
+ * key on a single convention.
  */
 export function normalizeGameRow(
   row: Record<string, string>,
@@ -267,13 +297,13 @@ export function normalizeGameRow(
   const homeTeam = row.home_team ?? row.home;
   const awayTeam = row.away_team ?? row.away;
   if (!homeTeam || !awayTeam) return undefined;
-  const gameId = row.game_id ?? `${season}-w${week}-${awayTeam}-at-${homeTeam}`;
+  const gameId = canonicalGameId({ season, week, awayTeam, homeTeam });
   return {
     gameId,
     season,
     week,
     gameType: asGameType(row.game_type),
-    startTimeUtc: row.gametime || row.start_time || undefined,
+    startTimeUtc: normalizeNflKickoffTime(row),
     homeTeam,
     awayTeam,
     homeScore: asInt(row.home_score),
@@ -305,12 +335,13 @@ export function normalizePlayerWeekStatRow(
   const playerId = row.player_id || row.gsis_id || row.pfr_id || "";
   const playerName = row.player_display_name || row.player_name || "";
   if (!playerId || !playerName) return undefined;
-  // Resolve the game ID by lookup (gameId is not always present on
-  // player_stats rows). The fixture builder always sets it; downstream
-  // backfill should run against schedules.
+  // Resolve the canonical game ID by lookup. The schedules
+  // normalizer emits canonical kebab-case IDs, so we prefer that
+  // over the source row's nflverse-style `game_id` to keep one
+  // convention across the codebase.
   const gameKey = `${season}-w${week}-${team}`;
   const gameRow = gameLookup.get(gameKey);
-  const gameId = row.game_id || gameRow?.gameId || gameKey;
+  const gameId = gameRow?.gameId ?? `${season}-w${week}-${team.toLowerCase()}`;
   const homeAway: NflHomeAway = gameRow
     ? asHomeAway(team, gameRow.homeTeam)
     : "HOME";
@@ -728,4 +759,113 @@ export function buildNflverseDownloadPlan(
       { filename: "snap_counts.csv", url: nflverseSnapCountsCsvUrl(season) },
     ],
   }));
+}
+
+// --- network fetch (opt-in) --------------------------------------------
+
+export interface FetchedAsset {
+  url: string;
+  target: string;
+  bytes: number;
+}
+
+export interface FetchedAssetError {
+  url: string;
+  status: number;
+}
+
+export interface FetchAssetsResult {
+  downloaded: FetchedAsset[];
+  errors: FetchedAssetError[];
+}
+
+function rowsToCsvText(headers: string[], rows: string[][]): string {
+  const lines = [headers.map(String).join(",")];
+  for (const r of rows) lines.push(toCsvLine(r));
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Download the public nflverse assets for each requested season
+ * into `<rawDir>/<season>/`. The master schedules file is fetched
+ * once and filtered per-season. Other assets are per-season files.
+ *
+ * Fail-soft: an HTTP error on one asset is recorded and the rest of
+ * the plan continues. The caller decides whether the partial set is
+ * enough.
+ *
+ * Network mode is opt-in: callers must check `isNetworkFetchAllowed()`
+ * before invoking this helper. The function itself does not re-check
+ * the env flag — it trusts the CLI gate.
+ */
+export async function fetchNflverseAssets(args: {
+  seasons: number[];
+  rawDir: string;
+  log?: (line: string) => void;
+}): Promise<FetchAssetsResult> {
+  const log = args.log ?? (() => {});
+  const downloaded: FetchedAsset[] = [];
+  const errors: FetchedAssetError[] = [];
+
+  async function fetchText(url: string): Promise<string | null> {
+    log(`  GET ${url}`);
+    const res = await fetch(url, { redirect: "follow" });
+    if (!res.ok) {
+      errors.push({ url, status: res.status });
+      log(`    -> HTTP ${res.status}`);
+      return null;
+    }
+    return await res.text();
+  }
+
+  // 1. Master schedules file (all seasons).
+  const gamesUrl = nflverseSchedulesCsvUrl();
+  const gamesText = await fetchText(gamesUrl);
+  let gamesHeader: string[] | undefined;
+  let gamesRows: string[][] | undefined;
+  let seasonIdx = -1;
+  if (gamesText) {
+    const parsed = parseCsv(gamesText);
+    if (parsed.length > 0) {
+      gamesHeader = parsed[0];
+      gamesRows = parsed.slice(1).filter((r) => r.some((c) => c !== ""));
+      seasonIdx = gamesHeader.indexOf("season");
+    }
+  }
+
+  // 2. Per-season assets + filtered schedules.
+  for (const season of args.seasons) {
+    const seasonDir = path.join(args.rawDir, String(season));
+    ensureDir(seasonDir);
+
+    if (gamesHeader && gamesRows && seasonIdx >= 0) {
+      const filtered = gamesRows.filter(
+        (r) => String(r[seasonIdx]) === String(season),
+      );
+      const target = path.join(seasonDir, "schedules.csv");
+      const text = rowsToCsvText(gamesHeader, filtered);
+      fs.writeFileSync(target, text);
+      downloaded.push({ url: gamesUrl, target, bytes: text.length });
+      log(`  wrote ${target} (${filtered.length} games)`);
+    }
+
+    const plan = [
+      {
+        url: nflversePlayerStatsCsvUrl(season),
+        filename: "player_stats.csv",
+      },
+      { url: nflverseRostersCsvUrl(season), filename: "rosters.csv" },
+      { url: nflverseSnapCountsCsvUrl(season), filename: "snap_counts.csv" },
+    ];
+    for (const asset of plan) {
+      const text = await fetchText(asset.url);
+      if (text === null) continue;
+      const target = path.join(seasonDir, asset.filename);
+      fs.writeFileSync(target, text);
+      downloaded.push({ url: asset.url, target, bytes: text.length });
+      log(`  wrote ${target} (${text.length} bytes)`);
+    }
+  }
+
+  return { downloaded, errors };
 }
