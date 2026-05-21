@@ -12,9 +12,16 @@ import {
   loadWeek1Results,
   loadWeek1ScheduleValidation,
   loadWeek1V1V2Comparison,
+  type Week1DataModeStatus,
 } from "@/lib/backtest/week-1-summary";
+import {
+  loadStoredWeek1MonitorSnapshot,
+  type StoredWeek1MonitorSnapshot,
+} from "@/lib/backtest/week-1-monitor-summary";
 
-export default function Week1StarterTestPage() {
+export const dynamic = "force-dynamic";
+
+export default async function Week1StarterTestPage() {
   const pregame = loadWeek1Pregame();
   const locked = loadWeek1LockedRecommendations();
   const dataAudit = loadWeek1DataAudit();
@@ -22,16 +29,30 @@ export default function Week1StarterTestPage() {
   const nflCoverage = loadWeek1NflDataCoverage();
   const leakage = loadWeek1LeakageCheck();
   const scheduleValidation = loadWeek1ScheduleValidation();
-  const dataModeStatus = loadWeek1DataModeStatus();
+  // DB-backed stored Week-1 snapshot wins over the file when
+  // available — survives a Railway redeploy.
+  const storedSnapshot = await loadStoredWeek1MonitorSnapshot({
+    season: 2025,
+    week: 1,
+  });
+  const dataModeStatus = mergeStoredIntoDataModeStatus(
+    loadWeek1DataModeStatus(),
+    storedSnapshot,
+  );
   const results = loadWeek1Results();
   const comparison = loadWeek1V1V2Comparison();
   const parlays = loadWeek1ParlayPreview();
   const gameEdge = loadWeek1GameEdgePreview();
-  const hasOutput = Boolean(pregame || results);
+  const hasOutput = Boolean(pregame || results || storedSnapshot);
+  // A successful stored run demotes the synthetic-fixture
+  // banner — the page primary state is the real backtest.
+  const storedReady =
+    Boolean(storedSnapshot && storedSnapshot.realWeek1BacktestReady) ||
+    Boolean(dataModeStatus && dataModeStatus.realWeek1BacktestReady);
 
   return (
     <div className="space-y-8">
-      {scheduleValidation && scheduleValidation.status !== "PASS" && (
+      {scheduleValidation && scheduleValidation.status !== "PASS" && !storedReady && (
         <SyntheticFixtureBanner validation={scheduleValidation} />
       )}
       <Hero
@@ -886,4 +907,42 @@ function Footnote() {
       </ul>
     </section>
   );
+}
+
+/**
+ * Merge a DB-backed stored snapshot into the file-shaped
+ * `Week1DataModeStatus`. The DB row is authoritative when
+ * available — it survives Railway redeploys that wipe the file
+ * mirror. Returns whichever shape the existing DataSourceMode
+ * panel already expects, so the page render is unchanged
+ * downstream.
+ */
+function mergeStoredIntoDataModeStatus(
+  fileStatus: Week1DataModeStatus | undefined,
+  stored: StoredWeek1MonitorSnapshot | undefined,
+): Week1DataModeStatus | undefined {
+  if (!stored) return fileStatus;
+  // DB wins. Reconstruct the file shape from the snapshot.
+  const scheduleReport = stored.scheduleValidationStatus
+    ? ({
+        status: stored.scheduleValidationStatus,
+        realWeek1BacktestReady: stored.realWeek1BacktestReady,
+        syntheticFixture: stored.syntheticFixture,
+      } as unknown as Week1DataModeStatus["scheduleReport"])
+    : (fileStatus?.scheduleReport ?? null);
+  return {
+    generatedAt: stored.generatedAt ?? fileStatus?.generatedAt ?? new Date().toISOString(),
+    season: 2025,
+    week: 1,
+    dataMode: "stored",
+    status: stored.status,
+    candidateCount: stored.candidateCount,
+    syntheticFixture: stored.syntheticFixture,
+    realWeek1BacktestReady: stored.realWeek1BacktestReady,
+    missingStoredOdds: stored.missingStoredOdds,
+    missingProcessedNfl: stored.missingProcessedNfl,
+    scheduleReport,
+    notes: stored.notes,
+    nextSteps: fileStatus?.nextSteps ?? [],
+  };
 }
