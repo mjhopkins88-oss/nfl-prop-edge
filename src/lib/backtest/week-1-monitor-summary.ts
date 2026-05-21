@@ -1042,14 +1042,16 @@ const SEASON_WEEK_RANGE = [
 ];
 
 /**
- * Load every stored week's snapshot for `season`. Iterates the
- * NFL regular-season weeks (1–18) and returns the snapshots
- * that came back populated. Order is preserved — Week 1 first,
- * Week 18 last. Missing weeks are silently dropped.
+ * Load every stored week's snapshot for `season`. When the
+ * persistence layer is available, a single bulk DB fetch
+ * returns the latest `StoredBacktestRun` per (season, week)
+ * across the whole season — no week list cap, future weeks
+ * appear automatically. When DB is unavailable, falls back to
+ * iterating per-week file mirrors so the local sandbox still
+ * works.
  *
- * Each per-week load goes through the existing
- * `loadStoredWeek1MonitorSnapshot` path so the DB-first,
- * file-fallback, auto-rehydration discipline is identical.
+ * `args.weeks` filters the result; default returns every week
+ * the data layer has rows for.
  */
 export async function loadAllStoredMonitorSnapshots(args: {
   season: number;
@@ -1057,6 +1059,45 @@ export async function loadAllStoredMonitorSnapshots(args: {
   weeks?: number[];
 }): Promise<StoredWeekSnapshot[]> {
   const client = args.client ?? (await getPersistenceClient());
+
+  if (client.isAvailable()) {
+    // Bulk fetch — one query for the whole season.
+    const all = await client.loadAllStoredBacktestRunsFromDb({
+      season: args.season,
+    });
+    if (all.ok && all.runs && all.runs.length > 0) {
+      const filter = args.weeks ? new Set(args.weeks) : undefined;
+      const results: StoredWeekSnapshot[] = [];
+      for (const run of all.runs) {
+        if (filter && !filter.has(run.week)) continue;
+        // Re-use the per-week loader so the DB row → snapshot
+        // mapping (graded payload, asOfReport, calibration,
+        // breakdowns) stays in one place. This is a second
+        // DB roundtrip per week but it's bounded by the
+        // number of stored weeks, not by SEASON_WEEK_RANGE.
+        const snap = await loadStoredWeek1MonitorSnapshot({
+          season: args.season,
+          week: run.week,
+          client,
+        });
+        if (snap) {
+          results.push({ ...snap, season: args.season, week: run.week });
+        }
+      }
+      // Always include any weeks the caller explicitly asked
+      // for that the DB didn't have a row for — they'll fall
+      // through to the file mirror below in the next iteration
+      // when DB is missing. But when DB returned rows, we
+      // trust the DB list and skip the file scan to avoid
+      // duplicates.
+      results.sort((a, b) => a.week - b.week);
+      return results;
+    }
+  }
+
+  // No DB available, or DB returned zero rows — fall back to a
+  // per-week scan. Limited to the explicit `weeks` list (or
+  // SEASON_WEEK_RANGE) so we don't read 18 files unnecessarily.
   const weeks = args.weeks ?? SEASON_WEEK_RANGE;
   const results: StoredWeekSnapshot[] = [];
   for (const week of weeks) {
