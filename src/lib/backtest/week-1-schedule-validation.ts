@@ -207,15 +207,37 @@ export function validateWeek1FixtureSchedule(
  * Full validation report — what the runner writes to
  * `data/backtests/2025/week-1-schedule-validation.fixture.json`
  * and what the page renders.
+ *
+ * `schedule` is the explicit per-week schedule the caller wants
+ * the candidates validated against. Week 1 callers can omit it
+ * to keep the legacy fixture-fallback behaviour. Weeks 2-N
+ * callers MUST pass the schedule loaded via
+ * `getRealWeekScheduleFromProcessedData({season, week})` so the
+ * validator compares against the correct week's games — not
+ * the static Week 1 fixture.
  */
 export function buildWeek1ScheduleValidationReport(args: {
   candidates: CandidateGame[];
   schedulePath?: string;
   scheduleSource?: string;
+  /** Optional schedule override. When supplied, the static
+   *  Week 1 fixture is NOT loaded — the validator uses these
+   *  games. Required for any week other than Week 1. */
+  schedule?: ExpectedWeek1Schedule | { games: ExpectedWeek1Game[] };
 }): ScheduleValidationReport {
-  const schedule = getExpectedWeek1Schedule({
-    schedulePath: args.schedulePath,
-  });
+  const schedule: ExpectedWeek1Schedule = args.schedule
+    ? "season" in args.schedule
+      ? args.schedule
+      : {
+          season: 2025,
+          week: 1,
+          sourceNote: "caller-supplied schedule",
+          lastUpdated: new Date().toISOString(),
+          games: args.schedule.games,
+        }
+    : getExpectedWeek1Schedule({
+        schedulePath: args.schedulePath,
+      });
   const candidateResults = validateCandidateGamesAgainstSchedule(
     args.candidates,
     schedule,
