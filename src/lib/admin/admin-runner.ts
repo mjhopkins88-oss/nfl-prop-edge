@@ -34,11 +34,26 @@ import {
   recordPaidSmokeAttempt,
   recordSmokeSuccess,
   recordWeek1Success,
+  recordWeek1SubsetSuccess,
   type AdminAction,
 } from "./admin-state";
 
 export const PAID_SMOKE_CONFIRM_TEXT = "RUN PAID SMOKE TEST";
-export const PAID_WEEK1_CONFIRM_TEXT = "RUN WEEK 1 PAID INGESTION";
+export const PAID_WEEK1_SUBSET_CONFIRM_TEXT = "RUN WEEK 1 SUBSET INGESTION";
+/**
+ * Full Week 1 carries the 647-credit estimate in the confirmation
+ * itself — the user has to type the number, not just a label.
+ * Anyone copy/pasting from the audit doc has to acknowledge the
+ * specific cost.
+ */
+export const PAID_WEEK1_CONFIRM_TEXT =
+  "RUN FULL WEEK 1 INGESTION 647 CREDITS";
+
+/** Hard-coded per-action credit ceilings. Never user-provided. */
+export const ADMIN_PAID_SMOKE_MAX_CREDITS = 50;
+export const ADMIN_WEEK1_SUBSET_MAX_CREDITS = 175;
+export const ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS = 4;
+export const ADMIN_WEEK1_FULL_MAX_CREDITS = 700;
 
 export interface AdminActionResult {
   action: AdminAction;
@@ -274,6 +289,79 @@ function writeNflverseResultFile(args: {
   return target;
 }
 
+// ---- per-paid-action result-file writers ------------------------------
+
+const WEEK1_SUBSET_RESULT_FILE = path.join(
+  "data",
+  "admin-ingestion",
+  "latest-odds-week1-subset-paid.json",
+);
+const WEEK1_FULL_RESULT_FILE = path.join(
+  "data",
+  "admin-ingestion",
+  "latest-odds-week1-full-paid.json",
+);
+
+/** Parse the `Wrote {path} (N rows)` lines emitted by the
+ *  prop-line script's live mode. */
+const WROTE_LINE_RE = /Wrote\s+(.+?)\s+\((\d+)\s+rows\)/g;
+function parseWrittenOutputFiles(stdout: string): string[] {
+  const out: string[] = [];
+  WROTE_LINE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WROTE_LINE_RE.exec(stdout)) !== null) out.push(m[1]);
+  return out;
+}
+
+interface OddsRunResultArgs {
+  repoRoot: string;
+  resultFile: string;
+  action: AdminAction;
+  startedAt: string;
+  finishedAt: string;
+  status: "success" | "failure";
+  parsed: ParsedCredits;
+  outputFilesWritten: string[];
+  /** True when the canonical Week 1 markets file is on disk after
+   *  the run. The current ingest script writes to the legacy flat
+   *  paths; this surfaces whether the canonical path is up-to-date. */
+  canonicalWeek1MarketsFileUpdated: boolean;
+  errorMessage?: string;
+  maxCreditsCap: number;
+  confirmText: string;
+}
+
+function writeOddsRunResultFile(args: OddsRunResultArgs): string {
+  const target = path.join(args.repoRoot, args.resultFile);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const payload = {
+    action: args.action,
+    startedAt: args.startedAt,
+    finishedAt: args.finishedAt,
+    status: args.status,
+    paidApiCallAttempted: true,
+    creditsEstimated: args.parsed.estimatedCredits ?? null,
+    creditsUsed: args.parsed.creditsUsed ?? null,
+    creditsRemaining:
+      args.parsed.creditsRemaining === undefined
+        ? null
+        : args.parsed.creditsRemaining,
+    budgetCeiling: args.maxCreditsCap,
+    confirmText: args.confirmText,
+    outputFilesWritten: args.outputFilesWritten,
+    canonicalWeek1MarketsFileUpdated: args.canonicalWeek1MarketsFileUpdated,
+    errorMessage: args.errorMessage ?? null,
+    guardrails: {
+      noTouchdownProps: true,
+      noAutomatedBetting: true,
+      noKalshiIntegration: true,
+      starterMarketsOnly: true,
+    },
+  };
+  fs.writeFileSync(target, JSON.stringify(payload, null, 2) + "\n");
+  return target;
+}
+
 // ---- per-action argv builders (fixed lists, no user input) ------------
 
 function ingestScriptPath(repoRoot: string): string {
@@ -380,6 +468,49 @@ function buildPaidSmokeSpec(repoRoot: string): SubprocessSpec {
   };
 }
 
+/**
+ * Smaller Week 1 ingestion — capped to 4 event-odds calls + a
+ * 175-credit ceiling. Fits under the 200-credit
+ * MAX_ODDS_API_CREDITS_PER_RUN policy. Lets us land a partial
+ * Week 1 set + verify the canonical price model without the
+ * full ~647 spend.
+ */
+function buildPaidWeek1SubsetSpec(repoRoot: string): SubprocessSpec {
+  return {
+    command: defaultTsxBin(repoRoot),
+    args: [
+      ingestScriptPath(repoRoot),
+      "--season",
+      "2025",
+      "--scope",
+      "week",
+      "--week",
+      "1",
+      "--source",
+      "csv",
+      "--input",
+      gamesCsvPath(repoRoot),
+      "--max-odds-requests",
+      String(ADMIN_WEEK1_SUBSET_MAX_ODDS_REQUESTS),
+      "--max-credits",
+      String(ADMIN_WEEK1_SUBSET_MAX_CREDITS),
+      "--budget",
+      String(ADMIN_WEEK1_SUBSET_MAX_CREDITS),
+      "--execute",
+    ],
+    env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
+    timeoutMs: 300_000,
+    cwd: repoRoot,
+  };
+}
+
+/**
+ * Full Week 1 ingestion. Pins --budget AND --max-credits to the
+ * hard-coded 700 ceiling (validateCreditBudget honours the
+ * override via maxCreditsOverride; the per-call guard reads
+ * --max-credits). 700 covers the audited 647-credit estimate
+ * with ~8% slack. Never accepts a user-supplied cap.
+ */
 function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
   return {
     command: defaultTsxBin(repoRoot),
@@ -395,10 +526,14 @@ function buildPaidWeek1Spec(repoRoot: string): SubprocessSpec {
       "csv",
       "--input",
       gamesCsvPath(repoRoot),
+      "--max-credits",
+      String(ADMIN_WEEK1_FULL_MAX_CREDITS),
+      "--budget",
+      String(ADMIN_WEEK1_FULL_MAX_CREDITS),
       "--execute",
     ],
     env: { ...process.env, ALLOW_REAL_ODDS_API_CALLS: "true" },
-    timeoutMs: 600_000,
+    timeoutMs: 900_000,
     cwd: repoRoot,
   };
 }
@@ -566,6 +701,68 @@ export async function runAdminAction(
       return result;
     }
 
+    case "odds-week1-subset-paid": {
+      const gate = checkPaidGates({
+        confirmText: args.confirmText,
+        expectedConfirm: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+        requirePriorSmoke: true,
+        repoRoot,
+      });
+      if (gate)
+        return recordSkip("odds-week1-subset-paid", gate, repoRoot);
+      const startedAt = new Date().toISOString();
+      const sub = await spawner(buildPaidWeek1SubsetSpec(repoRoot));
+      const finishedAt = new Date().toISOString();
+      const parsed = parseIngestionOutput(sub.stdout);
+      const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      const canonical = inspectStoredWeek1OddsOnDisk(repoRoot).canonical.present;
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: WEEK1_SUBSET_RESULT_FILE,
+        action: "odds-week1-subset-paid",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: canonical,
+        errorMessage: ok ? undefined : sub.timedOut ? "timed out" : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+        confirmText: PAID_WEEK1_SUBSET_CONFIRM_TEXT,
+      });
+      const result: AdminActionResult = {
+        action: "odds-week1-subset-paid",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Week 1 subset OK. Credits used=${parsed.creditsUsed ?? "?"} remaining=${parsed.creditsRemaining ?? "?"}.`
+          : sub.timedOut
+            ? "Week 1 subset timed out."
+            : `Week 1 subset failed with exit ${sub.exitCode}.`,
+        detail: truncateForUi(sub.stdout, sub.stderr),
+        data: {
+          creditsUsed: parsed.creditsUsed,
+          creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          canonicalWeek1MarketsFileUpdated: canonical,
+          maxCreditsCap: ADMIN_WEEK1_SUBSET_MAX_CREDITS,
+        },
+        creditsUsed: parsed.creditsUsed,
+        creditsRemaining: parsed.creditsRemaining,
+      };
+      if (ok) {
+        recordWeek1SubsetSuccess({ creditsUsed: parsed.creditsUsed, repoRoot });
+      }
+      recordActionResult({
+        action: "odds-week1-subset-paid",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
     case "paid-week1": {
       const gate = checkPaidGates({
         confirmText: args.confirmText,
@@ -574,9 +771,27 @@ export async function runAdminAction(
         repoRoot,
       });
       if (gate) return recordSkip("paid-week1", gate, repoRoot);
+      const startedAt = new Date().toISOString();
       const sub = await spawner(buildPaidWeek1Spec(repoRoot));
+      const finishedAt = new Date().toISOString();
       const parsed = parseIngestionOutput(sub.stdout);
       const ok = sub.exitCode === 0 && !sub.timedOut;
+      const outputFiles = parseWrittenOutputFiles(sub.stdout);
+      const canonical = inspectStoredWeek1OddsOnDisk(repoRoot).canonical.present;
+      writeOddsRunResultFile({
+        repoRoot,
+        resultFile: WEEK1_FULL_RESULT_FILE,
+        action: "paid-week1",
+        startedAt,
+        finishedAt,
+        status: ok ? "success" : "failure",
+        parsed,
+        outputFilesWritten: outputFiles,
+        canonicalWeek1MarketsFileUpdated: canonical,
+        errorMessage: ok ? undefined : sub.timedOut ? "timed out" : `exit ${sub.exitCode}`,
+        maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
+        confirmText: PAID_WEEK1_CONFIRM_TEXT,
+      });
       const result: AdminActionResult = {
         action: "paid-week1",
         ok,
@@ -590,6 +805,9 @@ export async function runAdminAction(
         data: {
           creditsUsed: parsed.creditsUsed,
           creditsRemaining: parsed.creditsRemaining,
+          outputFilesWritten: outputFiles,
+          canonicalWeek1MarketsFileUpdated: canonical,
+          maxCreditsCap: ADMIN_WEEK1_FULL_MAX_CREDITS,
         },
         creditsUsed: parsed.creditsUsed,
         creditsRemaining: parsed.creditsRemaining,

@@ -185,8 +185,26 @@ function main(): void {
     );
     check(
       r,
-      validation.reasons.some((s) => s.includes("MAX_ODDS_API_CREDITS_PER_RUN")),
-      "rejection should cite MAX_ODDS_API_CREDITS_PER_RUN",
+      validation.reasons.some((s) => /effective cap|MAX_ODDS_API_CREDITS_PER_RUN/i.test(s)),
+      `rejection should cite the cap, got: ${validation.reasons.join("; ")}`,
+    );
+    // Explicit higher cap should let the same estimate through —
+    // this is the path the admin runner uses for full Week 1.
+    const elevated = validateCreditBudget({
+      markets: 4,
+      regions: ALLOWED_ODDS_REGIONS,
+      estimatedCredits: plan.estimatedCredits,
+      maxCreditsOverride: 700,
+    });
+    check(
+      r,
+      elevated.ok === true,
+      `with maxCreditsOverride=700 the plan should pass, reasons: ${elevated.reasons.join(", ")}`,
+    );
+    check(
+      r,
+      elevated.budgetMax === 700,
+      `budgetMax should reflect the override, got ${elevated.budgetMax}`,
     );
     record(r);
     if (r.reasons.length === 0)
