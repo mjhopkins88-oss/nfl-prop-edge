@@ -14,6 +14,44 @@ export type VolatilityLevel = "low" | "medium" | "high";
 
 export const DEFAULT_EDGE_THRESHOLD = 0.04;
 
+/**
+ * Calibration blend — when the raw model probability is mixed
+ * with the market's no-vig probability before edge math runs.
+ * `rawModel * MODEL_WEIGHT + noVigMarket * MARKET_WEIGHT`.
+ * Pulls overconfident model picks toward the market.
+ */
+export const CALIBRATION_BLEND_WEIGHT_MODEL = 0.6;
+export const CALIBRATION_BLEND_WEIGHT_MARKET = 0.4;
+
+/**
+ * Realistic-confidence caps applied to the calibrated
+ * probability of either side. No prop pick can claim more than
+ * 70% (or less than 30%) confidence after calibration. Anti-
+ * overconfidence guardrail — the model is well-calibrated only
+ * inside this band, so we never bet on its tails.
+ */
+export const CALIBRATION_PROBABILITY_CAP = 0.7;
+export const CALIBRATION_PROBABILITY_FLOOR = 0.3;
+
+/**
+ * Blend raw model probability with no-vig market probability
+ * and clamp to the realistic band. Used for the OVER side; the
+ * UNDER side is `1 - calibratedOver` so the two sides stay
+ * coherent.
+ */
+export function calibrateModelProbability(args: {
+  rawModelProbability: number;
+  noVigMarketProbability: number;
+}): number {
+  const blended =
+    CALIBRATION_BLEND_WEIGHT_MODEL * args.rawModelProbability +
+    CALIBRATION_BLEND_WEIGHT_MARKET * args.noVigMarketProbability;
+  return Math.min(
+    CALIBRATION_PROBABILITY_CAP,
+    Math.max(CALIBRATION_PROBABILITY_FLOOR, blended),
+  );
+}
+
 const GATE_THRESHOLDS = {
   dataQuality: 0.55,
   roleStability: 0.55,
@@ -98,6 +136,16 @@ export interface PropDecisionScorecard {
   noVigUnderProbability: number;
   projectedMean: number;
   projectedStdDev: number;
+  /** RAW distribution probability — normalCdf((line − mean)/σ).
+   *  Surfaced for diagnostics; never used directly for edge or
+   *  qualification math. The calibrated value below is what
+   *  the model bets on. */
+  rawModelOverProbability: number;
+  rawModelUnderProbability: number;
+  /** CALIBRATED probability — `0.6 * raw + 0.4 * noVigMarket`,
+   *  clamped to [0.3, 0.7]. Edge = calibrated − no-vig market.
+   *  This is the field downstream callers (UI, parlay builder,
+   *  grading, calibration replay) should read. */
   modelOverProbability: number;
   modelUnderProbability: number;
   edgeOver: number;
@@ -256,9 +304,23 @@ export function buildPropDecisionScorecard(
   const adjustedStdDev = input.projectedStdDev * matchupStdDevMultiplier;
   const std = Math.max(adjustedStdDev, 1e-6);
   const z = (input.marketLine - input.projectedMean) / std;
-  const modelUnderProbability = clamp(normalCdf(z), 0, 1);
-  const modelOverProbability = 1 - modelUnderProbability;
+  // RAW distribution probabilities — what the projection engine
+  // produces on its own. Kept for diagnostics + logging.
+  const rawModelUnderProbability = clamp(normalCdf(z), 0, 1);
+  const rawModelOverProbability = 1 - rawModelUnderProbability;
+  // CALIBRATED probabilities — blend the raw signal with the
+  // market's no-vig assessment, then clamp to the realistic
+  // band. The calibrated OVER probability drives the UNDER via
+  // `1 - over` so the two sides stay coherent.
+  const modelOverProbability = calibrateModelProbability({
+    rawModelProbability: rawModelOverProbability,
+    noVigMarketProbability: noVigOverProbability,
+  });
+  const modelUnderProbability = 1 - modelOverProbability;
 
+  // Edge math runs off the CALIBRATED probability. Raw edge
+  // would be over-aggressive because the raw model is
+  // overconfident in its tails.
   const edgeOver = modelOverProbability - noVigOverProbability;
   const edgeUnder = modelUnderProbability - noVigUnderProbability;
   const selectedSide: Side = edgeOver >= edgeUnder ? "OVER" : "UNDER";
@@ -410,6 +472,8 @@ export function buildPropDecisionScorecard(
     noVigUnderProbability,
     projectedMean: input.projectedMean,
     projectedStdDev: input.projectedStdDev,
+    rawModelOverProbability,
+    rawModelUnderProbability,
     modelOverProbability,
     modelUnderProbability,
     edgeOver,

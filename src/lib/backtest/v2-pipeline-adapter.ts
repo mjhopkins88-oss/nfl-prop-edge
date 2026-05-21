@@ -302,6 +302,12 @@ function synthesizeScorecardFromV2(
     noVigUnderProbability: noVigUnder,
     projectedMean: featureRow.projectionMean,
     projectedStdDev: featureRow.projectionStdDev,
+    // V2 adapter builds the scorecard without going through the
+    // canonical model-scorecard pipeline, so it doesn't perform
+    // the raw/calibrated split. Surface the same value in both
+    // slots so downstream consumers see consistent data.
+    rawModelOverProbability: modelOver,
+    rawModelUnderProbability: modelUnder,
     modelOverProbability: modelOver,
     modelUnderProbability: modelUnder,
     edgeOver,
