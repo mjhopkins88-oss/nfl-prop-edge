@@ -20,6 +20,7 @@ import {
   isAllowRealOddsCalls,
   isOddsApiKeyConfigured,
 } from "@/lib/admin/admin-runner";
+import { getPersistenceClient } from "@/lib/persistence/week-1-persistence";
 import { buildReadinessReport } from "../../../../../../scripts/check-real-week-1-readiness";
 
 function readCalibrationResult(): Record<string, unknown> | null {
@@ -49,9 +50,117 @@ export async function GET(request: Request): Promise<NextResponse> {
     );
   }
 
-  const state = readAdminState();
+  const fileState = readAdminState();
   const stored = inspectStoredWeek1OddsOnDisk();
   const readiness = buildReadinessReport({ season: 2025, week: 1 });
+
+  // Persistence layer: load DB state (when DATABASE_URL is set)
+  // and merge it with the file state. DB wins when both exist —
+  // it's the durable source. File acts as cache.
+  const persistence = await getPersistenceClient();
+  const dbAvailable = persistence.isAvailable();
+  let stateSource: "postgres" | "file" | "missing" = "missing";
+  let oddsSource: "postgres-rehydration-pending" | "file" | "legacy" | "missing" =
+    "missing";
+  let backtestSource: "postgres" | "file" | "missing" = "missing";
+  let state = fileState;
+  let dbStateNote: string | null = null;
+  if (dbAvailable) {
+    const dbState = await persistence.loadAdminIngestionStateFromDb();
+    if (dbState.ok && dbState.state) {
+      // Merge DB state into file state, DB wins where set.
+      state = {
+        ...fileState,
+        smokeSucceededAt:
+          dbState.state.smokeSucceededAt ?? fileState.smokeSucceededAt,
+        smokeCreditsUsed:
+          dbState.state.smokeCreditsUsed ?? fileState.smokeCreditsUsed,
+        week1IngestionSucceededAt:
+          dbState.state.week1IngestionSucceededAt ??
+          fileState.week1IngestionSucceededAt,
+        week1SubsetSucceededAt:
+          dbState.state.week1SubsetSucceededAt ??
+          fileState.week1SubsetSucceededAt,
+        week1SubsetCreditsUsed:
+          dbState.state.week1SubsetCreditsUsed ??
+          fileState.week1SubsetCreditsUsed,
+        lastAction:
+          (dbState.state.lastAction as typeof fileState.lastAction) ??
+          fileState.lastAction,
+        lastTimestamp: dbState.state.lastTimestamp ?? fileState.lastTimestamp,
+        lastSummary: dbState.state.lastSummary ?? fileState.lastSummary,
+      };
+      stateSource = "postgres";
+    } else if (!dbState.ok) {
+      dbStateNote = dbState.error ?? "DB read failed";
+      stateSource =
+        fileState.smokeSucceededAt ||
+        fileState.week1IngestionSucceededAt ||
+        fileState.lastAction
+          ? "file"
+          : "missing";
+    } else {
+      stateSource =
+        fileState.smokeSucceededAt ||
+        fileState.week1IngestionSucceededAt ||
+        fileState.lastAction
+          ? "file"
+          : "missing";
+    }
+    // Odds source: file present, or DB has rows (would rehydrate
+    // on demand), or legacy fallback, or nothing.
+    if (stored.canonical.present) {
+      oddsSource = "file";
+    } else {
+      const oddsCheck = await persistence.loadCanonicalOddsRowsFromDb({
+        season: 2025,
+        week: 1,
+      });
+      if (oddsCheck.ok && oddsCheck.rows.length > 0) {
+        oddsSource = "postgres-rehydration-pending";
+      } else if (stored.legacy.present) {
+        oddsSource = "legacy";
+      }
+    }
+    const dbRun = await persistence.loadLatestStoredBacktestRunFromDb({
+      season: 2025,
+      week: 1,
+    });
+    backtestSource =
+      dbRun.ok && dbRun.run
+        ? "postgres"
+        : fs.existsSync(
+              path.join(
+                process.cwd(),
+                "data",
+                "backtests",
+                "2025",
+                "week-1-data-mode-status.fixture.json",
+              ),
+            )
+          ? "file"
+          : "missing";
+  } else {
+    stateSource =
+      fileState.smokeSucceededAt ||
+      fileState.week1IngestionSucceededAt ||
+      fileState.lastAction
+        ? "file"
+        : "missing";
+    if (stored.canonical.present) oddsSource = "file";
+    else if (stored.legacy.present) oddsSource = "legacy";
+    backtestSource = fs.existsSync(
+      path.join(
+        process.cwd(),
+        "data",
+        "backtests",
+        "2025",
+        "week-1-data-mode-status.fixture.json",
+      ),
+    )
+      ? "file"
+      : "missing";
+  }
 
   return NextResponse.json({
     ok: true,
@@ -82,6 +191,14 @@ export async function GET(request: Request): Promise<NextResponse> {
       lastPaidSmokeResult: state.lastPaidSmokeResult ?? null,
       lastPaidSmokeCreditsUsed: state.lastPaidSmokeCreditsUsed ?? null,
       lastPaidSmokeReason: state.lastPaidSmokeReason ?? null,
+    },
+    persistence: {
+      databaseUrlConfigured: typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.length > 0,
+      dbAvailable,
+      stateSource,
+      oddsSource,
+      backtestSource,
+      dbStateNote,
     },
     calibration: readCalibrationResult(),
     nextRecommendedAction: recommendNext({
