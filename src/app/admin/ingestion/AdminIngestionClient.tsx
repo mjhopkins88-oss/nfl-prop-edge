@@ -22,6 +22,7 @@ type ActionName =
   | "stored-backtest"
   | "grade-week1-stored"
   | "grade-week-stored"
+  | "edge-slice-diagnostic"
   | "verify-persistence";
 
 interface StatusResponse {
@@ -144,6 +145,9 @@ export function AdminIngestionClient() {
   const [selectedWeek, setSelectedWeek] = useState<number>(1);
   const [multiWeekSubsetConfirm, setMultiWeekSubsetConfirm] = useState("");
   const [multiWeekFullConfirm, setMultiWeekFullConfirm] = useState("");
+  // Edge-slice diagnostic — comma-separated weeks list. Default
+  // covers the same weeks the CLI script defaults to (1, 2).
+  const [edgeSliceWeeksInput, setEdgeSliceWeeksInput] = useState("1,2");
 
   const refreshStatus = useCallback(
     async (week?: number) => {
@@ -180,7 +184,12 @@ export function AdminIngestionClient() {
   }, [token, refreshStatus, selectedWeek]);
 
   const runAction = useCallback(
-    async (action: ActionName, confirmText?: string, week?: number) => {
+    async (
+      action: ActionName,
+      confirmText?: string,
+      week?: number,
+      weeks?: number[],
+    ) => {
       if (!token) {
         setStatusErr("Enter the admin token first.");
         return;
@@ -194,7 +203,7 @@ export function AdminIngestionClient() {
             "content-type": "application/json",
             "x-admin-ingest-token": token,
           },
-          body: JSON.stringify({ action, confirmText, week }),
+          body: JSON.stringify({ action, confirmText, week, weeks }),
         });
         const json = (await res.json()) as ActionResponse;
         setLastResult(json);
@@ -403,8 +412,110 @@ export function AdminIngestionClient() {
         onRun={runAction}
       />
 
+      <EdgeSliceDiagnosticSection
+        token={token}
+        busy={busy}
+        weeksInput={edgeSliceWeeksInput}
+        onWeeksChange={setEdgeSliceWeeksInput}
+        onRun={runAction}
+      />
+
       {lastResult ? <ResultPanel result={lastResult} /> : null}
     </div>
+  );
+}
+
+function EdgeSliceDiagnosticSection({
+  token,
+  busy,
+  weeksInput,
+  onWeeksChange,
+  onRun,
+}: {
+  token: string;
+  busy: ActionName | null;
+  weeksInput: string;
+  onWeeksChange: (s: string) => void;
+  onRun: (
+    action: ActionName,
+    confirmText?: string,
+    week?: number,
+    weeks?: number[],
+  ) => Promise<void>;
+}) {
+  const parsedWeeks = weeksInput
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 22);
+  return (
+    <section
+      className="rounded-lg border border-zinc-700 bg-zinc-900 p-4"
+      data-testid="admin-edge-slice-section"
+    >
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">
+        Edge Slice Diagnostic
+      </h2>
+      <p className="mt-1 text-xs text-zinc-500">
+        Read-only analysis. Reads the gate-0.40 calibration
+        candidates that the grade action already persists,
+        computes 5 edge-filtered slices (≥4%, ≥6%, ≥8%, ≥10%,
+        elite-only), and ranks them by ROI. Also reports
+        calibration error (model probability − actual hit
+        rate) per slice. No API call, no ingestion, no
+        re-grading. If a week has no calibration payload, the
+        report tells you to re-grade that week first.
+      </p>
+      <div className="mt-3 flex flex-wrap items-baseline gap-3">
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="edge-slice-weeks"
+        >
+          Weeks (comma-separated)
+        </label>
+        <input
+          id="edge-slice-weeks"
+          type="text"
+          value={weeksInput}
+          onChange={(e) => onWeeksChange(e.target.value)}
+          placeholder="1,2"
+          disabled={!token || busy !== null}
+          className="w-32 rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100"
+          data-testid="admin-edge-slice-weeks-input"
+        />
+        <span className="text-[10px] text-zinc-500">
+          Parsed:{" "}
+          {parsedWeeks.length > 0
+            ? parsedWeeks.map((w) => `W${w}`).join(", ")
+            : "(none — defaults to 1, 2)"}
+        </span>
+      </div>
+      <button
+        onClick={() =>
+          void onRun(
+            "edge-slice-diagnostic",
+            undefined,
+            undefined,
+            parsedWeeks.length > 0 ? parsedWeeks : undefined,
+          )
+        }
+        disabled={!token || busy !== null}
+        className={
+          "mt-3 rounded px-3 py-1.5 text-xs font-semibold " +
+          (!token || busy !== null
+            ? "bg-zinc-800 text-zinc-600"
+            : "bg-sea-600 text-white hover:bg-sea-500")
+        }
+        data-testid="admin-edge-slice-run-button"
+      >
+        {busy === "edge-slice-diagnostic"
+          ? "Running…"
+          : "Run Edge Slice Diagnostic"}
+      </button>
+      <p className="mt-2 text-[10px] text-zinc-500">
+        Output renders in the result panel below. Production
+        threshold (0.45) is unchanged.
+      </p>
+    </section>
   );
 }
 
@@ -452,7 +563,12 @@ function MultiWeekSection({
   fullConfirm: string;
   onSubsetConfirmChange: (s: string) => void;
   onFullConfirmChange: (s: string) => void;
-  onRun: (action: ActionName, confirmText?: string, week?: number) => Promise<void>;
+  onRun: (
+    action: ActionName,
+    confirmText?: string,
+    week?: number,
+    weeks?: number[],
+  ) => Promise<void>;
 }) {
   const expectedSubset = subsetConfirmTextFor(selectedWeek);
   const expectedFull = fullConfirmTextFor(selectedWeek);

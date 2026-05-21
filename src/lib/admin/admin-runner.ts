@@ -37,6 +37,8 @@ import {
   buildDiagnosticQualificationAudit,
   bucketScoresFromEvaluatedCandidates,
 } from "../backtest/diagnostic-qualification-audit";
+import { buildEdgeSliceReport } from "../backtest/edge-slice-diagnostic";
+import { loadAllStoredMonitorSnapshots } from "../backtest/week-1-monitor-summary";
 import {
   validateAsOfFairness,
   formatAsOfReport,
@@ -157,6 +159,9 @@ export interface AdminRunArgs {
    *  `grade-week-stored` actions. Defaults to 1 elsewhere so
    *  legacy Week 1 callers keep working unchanged. */
   week?: number;
+  /** Weeks list for actions that report across multiple weeks
+   *  (e.g., `edge-slice-diagnostic`). Defaults to [1, 2]. */
+  weeks?: number[];
   /** Repo root override for tests. */
   repoRoot?: string;
   /** Injected for tests; defaults to a real spawn-based runner. */
@@ -1841,6 +1846,56 @@ export async function runAdminAction(
       };
       recordActionResult({
         action: actionName,
+        result: "success",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "edge-slice-diagnostic": {
+      // Read-only analysis. Pulls the gate-0.40 calibration
+      // candidates persisted by prior `grade-week-stored` runs
+      // from Postgres (file fallback when DB is unavailable),
+      // computes the five edge-filtered slices + answers four
+      // questions about edge vs. ROI behaviour, and returns
+      // the same formatted output the CLI script prints.
+      //
+      // No paid API. No re-grading. No threshold changes.
+      // Persistence is consulted READ-ONLY — no writes.
+      const requestedWeeks = (() => {
+        if (Array.isArray(args.weeks) && args.weeks.length > 0) {
+          const clean = args.weeks
+            .filter((w) => Number.isFinite(w) && w >= 1 && w <= 22)
+            .map((w) => Math.trunc(w));
+          if (clean.length > 0) return clean;
+        }
+        return [1, 2];
+      })();
+      const snapshots = await loadAllStoredMonitorSnapshots({
+        season: 2025,
+        weeks: requestedWeeks,
+        client: persistence,
+      });
+      const report = buildEdgeSliceReport({
+        snapshots,
+        weeksRequested: requestedWeeks,
+      });
+      // The action is ok=true even when no calibration payload
+      // is found — that's a successful read returning the
+      // "no data, re-grade first" message. ok=false would
+      // make the admin UI render a failure banner; we want
+      // the diagnostic to surface either way.
+      const result: AdminActionResult = {
+        action: "edge-slice-diagnostic",
+        ok: true,
+        status: "success",
+        summary: report.headline,
+        detail: report.formatted,
+        data: { report },
+      };
+      recordActionResult({
+        action: "edge-slice-diagnostic",
         result: "success",
         summary: result.summary,
         repoRoot,

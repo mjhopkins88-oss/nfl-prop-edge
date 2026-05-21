@@ -39,6 +39,7 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "stored-backtest",
   "grade-week1-stored",
   "grade-week-stored",
+  "edge-slice-diagnostic",
   "verify-persistence",
 ];
 
@@ -79,11 +80,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     typeof weekRaw === "number" && Number.isFinite(weekRaw) && weekRaw >= 1
       ? Math.trunc(weekRaw)
       : undefined;
+  const weeksRaw = (body as { weeks?: unknown })?.weeks;
+  const weeks = Array.isArray(weeksRaw)
+    ? weeksRaw
+        .filter(
+          (w): w is number =>
+            typeof w === "number" && Number.isFinite(w) && w >= 1 && w <= 22,
+        )
+        .map((w) => Math.trunc(w))
+    : undefined;
   const result = await runAdminAction({
     action,
     confirmText:
       typeof confirmText === "string" ? confirmText : undefined,
     week,
+    weeks,
   });
 
   return NextResponse.json(result, {
