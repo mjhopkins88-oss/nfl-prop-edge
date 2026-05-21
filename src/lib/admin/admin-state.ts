@@ -23,6 +23,7 @@ export type AdminAction =
   | "paid-smoke"
   | "odds-week1-subset-paid"
   | "paid-week1"
+  | "migrate-odds-to-canonical"
   | "stored-backtest";
 
 export type AdminResult = "success" | "failure" | "skipped";

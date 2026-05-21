@@ -16,6 +16,7 @@ type ActionName =
   | "paid-smoke"
   | "odds-week1-subset-paid"
   | "paid-week1"
+  | "migrate-odds-to-canonical"
   | "stored-backtest";
 
 interface StatusResponse {
@@ -285,8 +286,26 @@ export function AdminIngestionClient() {
             busy={busy === "paid-week1"}
             onRun={() => void runAction("paid-week1", paidWeek1Confirm)}
           />
+          {status?.data?.storedWeek1OddsLegacyPresent &&
+          !status?.data?.storedWeek1OddsCanonicalPresent ? (
+            <div className="rounded border border-amber-700/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+              Legacy <code>data/processed/prop_markets.csv</code> is
+              present but canonical{" "}
+              <code>data/processed/odds/2025/week-1-prop-markets.csv</code>{" "}
+              is missing. Stored mode reads the canonical file. Run
+              the migration below to copy + enrich (no API call).
+            </div>
+          ) : null}
           <ActionRow
-            label="7. Run Week 1 stored backtest"
+            label="7. Migrate legacy odds → canonical Week 1 file"
+            description="Joins legacy prop_markets.csv + prop_quotes.csv against games.csv + rosters.csv. No API call."
+            buttonLabel="Migrate"
+            disabled={!token || busy !== null}
+            busy={busy === "migrate-odds-to-canonical"}
+            onRun={() => void runAction("migrate-odds-to-canonical")}
+          />
+          <ActionRow
+            label="8. Run Week 1 stored backtest"
             description="Pregame snapshot from stored data. No API call."
             disabled={!token || busy !== null}
             busy={busy === "stored-backtest"}
