@@ -175,6 +175,44 @@ export interface GradedSnapshot {
    *  clearly labeled "DIAGNOSTIC" section that is NEVER mixed
    *  with the live model's recommendations. */
   marketContextCalibration?: MarketContextCalibrationSnapshot;
+  /** As-of fairness validation report from the admin grading
+   *  action. Confirms no post-kickoff odds and no future stats
+   *  reached the model. */
+  asOfReport?: AsOfReportSnapshot;
+}
+
+export interface AsOfReportSnapshot {
+  ok: boolean;
+  season: number;
+  week: number;
+  candidatesChecked: number;
+  candidatesValid: number;
+  candidatesInvalid: number;
+  candidates?: Array<{
+    candidateId: string;
+    playerName: string;
+    team: string;
+    opponent: string;
+    gameId: string;
+    propType: string;
+    kickoffTime?: string;
+    snapshotTime?: string;
+    snapshotBeforeKickoff: boolean | "unknown";
+    historyRowsAttached: number;
+    historyWindowOk: boolean;
+    ok: boolean;
+  }>;
+  sampleInvalid?: Array<{
+    candidateId: string;
+    playerName: string;
+    propType: string;
+    kickoffTime?: string;
+    snapshotTime?: string;
+    snapshotBeforeKickoff: boolean | "unknown";
+    historyRowsAttached: number;
+    historyWindowOk: boolean;
+    violations: Array<{ code: string; detail: string }>;
+  }>;
 }
 
 export interface ScorecardAuditFeatureRow {
@@ -478,6 +516,8 @@ interface GradedFileShape {
   scorecardAudit?: ScorecardAuditSnapshot;
   /** Diagnostic-only marketContext gate calibration replay. */
   marketContextCalibration?: MarketContextCalibrationSnapshot;
+  /** As-of fairness validation report. */
+  asOfReport?: AsOfReportSnapshot;
   summary: {
     gradedAt?: string;
     /** Legacy headline fields — diagnostic only. */
@@ -795,6 +835,7 @@ function toGradedSnapshot(g: GradedFileShape | undefined): GradedSnapshot | unde
         },
     scorecardAudit: g.scorecardAudit,
     marketContextCalibration: g.marketContextCalibration,
+    asOfReport: g.asOfReport,
   };
 }
 
@@ -854,6 +895,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             gradedSample?: GradedSampleRow[];
             scorecardAudit?: ScorecardAuditSnapshot;
             marketContextCalibration?: MarketContextCalibrationSnapshot;
+            asOfReport?: AsOfReportSnapshot;
           }
         | null
         | undefined;
@@ -866,6 +908,7 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
             gradedSample: resultsJson.gradedSample,
             scorecardAudit: resultsJson.scorecardAudit,
             marketContextCalibration: resultsJson.marketContextCalibration,
+            asOfReport: resultsJson.asOfReport,
           })
         : undefined;
       const fileGraded = toGradedSnapshot(

@@ -70,6 +70,11 @@ export interface RealWeekCandidate {
   underOdds: number;
   sportsbook: string;
   kickoffTime?: string;
+  /** ISO timestamp of when the over/under odds were captured.
+   *  Populated from the stored Odds API snapshot. Must be <=
+   *  kickoffTime to count as a fair as-of historical bet —
+   *  see `validateAsOfFairness` in `as-of-validation.ts`. */
+  snapshotTime?: string;
   /** STORED_2025 to make it obvious in any debug payload. */
   dataMode: "STORED_2025";
   syntheticFixture: false;
@@ -380,6 +385,7 @@ export function buildRealWeek1CandidatesFromStoredData(
     underOdds: m.underOdds,
     sportsbook: m.sportsbook,
     kickoffTime: m.kickoffTime,
+    snapshotTime: m.snapshotTime,
     dataMode: "STORED_2025",
     syntheticFixture: false,
   }));
