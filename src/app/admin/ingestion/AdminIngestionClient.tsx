@@ -51,6 +51,27 @@ interface StatusResponse {
     lastPaidSmokeCreditsUsed: number | null;
     lastPaidSmokeReason: string | null;
   };
+  persistence?: {
+    databaseUrlConfigured: boolean;
+    dbAvailable: boolean;
+    prismaTablesReady: boolean;
+    pingError: string | null;
+    stateSource: string;
+    oddsSource: string;
+    backtestSource: string;
+    dbStateNote?: string;
+    counts: {
+      storedPropMarketRows: number;
+      storedBacktestRuns: number;
+      oddsIngestionRuns: number;
+      adminStateExists: boolean;
+    } | null;
+    rehydration?: {
+      rehydrated: boolean;
+      source: string;
+      rowsRestored?: number;
+    };
+  };
   calibration?: {
     perMarketEstimatedRate?: number;
     perMarketObservedRate?: number | null;
@@ -407,6 +428,63 @@ function StatusPanel({ status }: { status: StatusResponse }) {
         </p>
         {state?.lastSummary ? (
           <p className="text-zinc-300">{state.lastSummary}</p>
+        ) : null}
+        {status.persistence ? (
+          <div className="mt-3 rounded bg-zinc-800/70 p-3 text-[11px] text-zinc-300">
+            <div className="text-zinc-400 uppercase tracking-[0.14em] text-[10px]">
+              Postgres persistence
+            </div>
+            <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <p>
+                <span className="text-zinc-500">DATABASE_URL:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.databaseUrlConfigured ? "set" : "not set"}
+                </span>
+              </p>
+              <p>
+                <span className="text-zinc-500">Tables ready:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.prismaTablesReady ? "yes" : "no"}
+                </span>
+              </p>
+              <p>
+                <span className="text-zinc-500">Odds source:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.oddsSource}
+                </span>
+              </p>
+              <p>
+                <span className="text-zinc-500">Backtest source:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.backtestSource}
+                </span>
+              </p>
+              <p>
+                <span className="text-zinc-500">StoredPropMarket rows:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.counts?.storedPropMarketRows ?? "?"}
+                </span>
+              </p>
+              <p>
+                <span className="text-zinc-500">StoredBacktestRun rows:</span>{" "}
+                <span className="text-zinc-200">
+                  {status.persistence.counts?.storedBacktestRuns ?? "?"}
+                </span>
+              </p>
+            </div>
+            {status.persistence.rehydration?.rehydrated ? (
+              <p className="mt-2 text-zinc-400">
+                Auto-rehydrated{" "}
+                {status.persistence.rehydration.rowsRestored ?? "?"} odds rows
+                from Postgres at request time.
+              </p>
+            ) : null}
+            {status.persistence.pingError ? (
+              <p className="mt-2 text-amber-400">
+                Ping error: {status.persistence.pingError}
+              </p>
+            ) : null}
+          </div>
         ) : null}
         {status.nextRecommendedAction ? (
           <p className="mt-2 rounded bg-zinc-800 p-2 text-zinc-200">
