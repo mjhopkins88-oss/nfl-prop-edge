@@ -14,9 +14,13 @@ import {
 } from "@/lib/backtest/week-1-summary";
 import {
   loadStoredWeek1MonitorSnapshot,
+  loadAllStoredMonitorSnapshots,
+  aggregateStoredSeason,
   type GradedMarketBucket,
   type GradedLineBucket,
   type StoredWeek1MonitorSnapshot,
+  type StoredWeekSnapshot,
+  type StoredSeasonAggregate,
 } from "@/lib/backtest/week-1-monitor-summary";
 import { getWeek1StarterTestContext } from "@/lib/app-context";
 
@@ -24,6 +28,8 @@ export const dynamic = "force-dynamic";
 
 export default async function MonitorPage() {
   const stored = await loadStoredWeek1MonitorSnapshot({ season: 2025, week: 1 });
+  const allStoredWeeks = await loadAllStoredMonitorSnapshots({ season: 2025 });
+  const seasonAggregate = aggregateStoredSeason(allStoredWeeks);
   const fixture = loadFixtureBacktestSummary();
   const proxySummary = loadFixtureProxySummary();
   const compareLatest = loadFixtureComparisonSummary();
@@ -50,14 +56,28 @@ export default async function MonitorPage() {
     storedIsPrimary,
   });
 
-  const storedWeeks = stored ? [stored] : [];
+  // Prefer the multi-week loader's set when it produced rows;
+  // fall back to the single Week 1 snapshot. The two are
+  // consistent — Week 1 is always element 0 of the multi-week
+  // result when present.
+  const storedWeeks: StoredWeek1MonitorSnapshot[] =
+    allStoredWeeks.length > 0 ? allStoredWeeks : stored ? [stored] : [];
 
   return (
     <div className="space-y-8">
       <Hero readiness={readiness} storedIsPrimary={storedIsPrimary} />
       {stored ? <StoredWeek1Panel stored={stored} /> : null}
+      {allStoredWeeks.length > 0 ? (
+        <SeasonStoredWeeksTable
+          weeks={allStoredWeeks}
+          aggregate={seasonAggregate}
+        />
+      ) : null}
       {storedWeeks.length > 0 ? (
         <StoredWeeksAggregated storedWeeks={storedWeeks} />
+      ) : null}
+      {seasonAggregate.calibration.available ? (
+        <SeasonCalibrationAggregate aggregate={seasonAggregate} />
       ) : null}
       {stored?.graded ? (
         <StoredBreakdowns stored={stored} />
@@ -851,6 +871,240 @@ function aggregateStoredWeeks(
     bestRecommendedPropType,
     worstRecommendedPropType,
   };
+}
+
+function SeasonStoredWeeksTable({
+  weeks,
+  aggregate,
+}: {
+  weeks: StoredWeekSnapshot[];
+  aggregate: StoredSeasonAggregate;
+}) {
+  return (
+    <section
+      className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6"
+      data-testid="monitor-season-stored-weeks"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Season · stored weeks
+        </h2>
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ink-500">
+          {aggregate.weeksGraded}/{aggregate.weekCount} graded · season totals
+          across all Postgres rows
+        </span>
+      </div>
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+              <th className="pb-1 pr-2">Week</th>
+              <th className="pb-1 pr-2 text-right">Candidates</th>
+              <th className="pb-1 pr-2 text-right">Plays (model)</th>
+              <th className="pb-1 pr-2 text-right">W·L·P</th>
+              <th className="pb-1 pr-2 text-right">Hit</th>
+              <th className="pb-1 pr-2 text-right">ROI</th>
+              <th className="pb-1 pr-2 text-right">Units</th>
+              <th className="pb-1">Top disqualifier</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink-800">
+            {weeks.map((w) => {
+              const rec = w.graded?.recommendedPlays;
+              const topDisq =
+                w.graded?.scorecardAudit?.topDisqualifiers?.[0];
+              return (
+                <tr key={w.week} className="border-t border-white/40">
+                  <td className="py-1 pr-2 font-medium">
+                    W{w.week}
+                    {w.graded ? (
+                      <span className="ml-2 text-[10px] text-ink-500">
+                        graded
+                      </span>
+                    ) : (
+                      <span className="ml-2 text-[10px] text-amber-800">
+                        pregame
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {w.candidateCount}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {rec?.enabled ? rec.count : "0"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {rec?.enabled
+                      ? `${rec.wins} · ${rec.losses} · ${rec.pushes}`
+                      : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {rec?.enabled ? `${rec.hitRatePct.toFixed(1)}%` : "—"}
+                  </td>
+                  <td
+                    className={
+                      "py-1 pr-2 text-right tabular-nums " +
+                      (rec?.enabled
+                        ? rec.roiPct >= 0
+                          ? "text-sea-700"
+                          : "text-coral-700"
+                        : "")
+                    }
+                  >
+                    {rec?.enabled ? `${rec.roiPct.toFixed(1)}%` : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">
+                    {rec?.enabled ? rec.unitsProfit.toFixed(2) : "—"}
+                  </td>
+                  <td className="py-1 truncate text-ink-600">
+                    {topDisq ? `${topDisq.reason} ×${topDisq.count}` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            <tr className="border-t-2 border-ink-300 font-semibold">
+              <td className="py-1 pr-2">Season</td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {aggregate.totalCandidates}
+              </td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {aggregate.recommendedPlays.enabled
+                  ? aggregate.recommendedPlays.count
+                  : "0"}
+              </td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {aggregate.recommendedPlays.enabled
+                  ? `${aggregate.recommendedPlays.wins} · ${aggregate.recommendedPlays.losses} · ${aggregate.recommendedPlays.pushes}`
+                  : "—"}
+              </td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {aggregate.recommendedPlays.enabled
+                  ? `${aggregate.recommendedPlays.hitRatePct.toFixed(1)}%`
+                  : "—"}
+              </td>
+              <td
+                className={
+                  "py-1 pr-2 text-right tabular-nums " +
+                  (aggregate.recommendedPlays.enabled
+                    ? aggregate.recommendedPlays.roiPct >= 0
+                      ? "text-sea-700"
+                      : "text-coral-700"
+                    : "")
+                }
+              >
+                {aggregate.recommendedPlays.enabled
+                  ? `${aggregate.recommendedPlays.roiPct.toFixed(1)}%`
+                  : "—"}
+              </td>
+              <td className="py-1 pr-2 text-right tabular-nums">
+                {aggregate.recommendedPlays.enabled
+                  ? aggregate.recommendedPlays.unitsProfit.toFixed(2)
+                  : "—"}
+              </td>
+              <td className="py-1 text-[10px] text-ink-500">
+                {aggregate.recommendedPlays.enabled
+                  ? `avg edge ${aggregate.recommendedPlays.averageEdgePct.toFixed(1)}% · avg conf ${aggregate.recommendedPlays.averageConfidence.toFixed(2)}`
+                  : "no model recommendations yet"}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[10px] text-ink-500">
+        Per-week rows are the official production model output
+        (gate 0.45). The bottom row is the season aggregate
+        across all stored weeks. New weeks append automatically
+        when each (season, week) StoredBacktestRun lands in
+        Postgres — older weeks are never overwritten.
+      </p>
+    </section>
+  );
+}
+
+function SeasonCalibrationAggregate({
+  aggregate,
+}: {
+  aggregate: StoredSeasonAggregate;
+}) {
+  const c = aggregate.calibration;
+  return (
+    <section
+      className="rounded-2xl bg-amber-50/70 p-5 ring-1 ring-amber-200/60 sm:p-6"
+      data-testid="monitor-season-calibration-aggregate"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-amber-900">
+          Season · market-context calibration · DIAGNOSTIC ONLY
+        </h2>
+        <span className="rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-900 ring-1 ring-amber-200/80">
+          Production gate · {c.productionGate.toFixed(2)}
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] text-amber-900">
+        Rollup of the diagnostic gate replay across{" "}
+        {c.production.weekCount} stored week
+        {c.production.weekCount === 1 ? "" : "s"}. The 0.40 / 0.35 rows
+        describe candidates that WOULD have been recommended if
+        the marketContext gate were lowered — production stays at
+        0.45. Do not treat as live performance.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+              <th className="pb-1 pr-2">Gate</th>
+              <th className="pb-1 pr-2 text-right">Weeks</th>
+              <th className="pb-1 pr-2 text-right">Plays</th>
+              <th className="pb-1 pr-2 text-right">W·L·P</th>
+              <th className="pb-1 pr-2 text-right">Hit</th>
+              <th className="pb-1 pr-2 text-right">ROI</th>
+              <th className="pb-1 text-right">Units</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink-800">
+            {[c.production, c.gate040, c.gate035].map((g) => (
+              <tr key={g.gateThreshold} className="border-t border-white/40">
+                <td className="py-1 pr-2">
+                  {g.isProduction ? (
+                    <span className="text-sea-700 font-semibold">
+                      Production {g.gateThreshold.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-amber-900">
+                      Diagnostic {g.gateThreshold.toFixed(2)}
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.weekCount}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.qualifiedCount}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.wins} · {g.losses} · {g.pushes}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {g.hitRatePct.toFixed(1)}%
+                </td>
+                <td
+                  className={
+                    "py-1 pr-2 text-right tabular-nums " +
+                    (g.roiPct >= 0 ? "text-sea-700" : "text-coral-700")
+                  }
+                >
+                  {g.roiPct.toFixed(1)}%
+                </td>
+                <td className="py-1 text-right tabular-nums">
+                  {g.unitsProfit.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 function StoredWeeksAggregated({

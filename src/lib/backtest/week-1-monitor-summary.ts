@@ -913,3 +913,285 @@ export async function loadStoredWeek1MonitorSnapshot(args: {
   }
   return undefined;
 }
+
+// =====================================================================
+// Multi-week season loaders + aggregator
+// =====================================================================
+
+/**
+ * Snapshot of one stored backtest row, attached to its
+ * (season, week) coordinate. Used by the monitor's
+ * "all stored weeks" rollup.
+ */
+export interface StoredWeekSnapshot extends StoredWeek1MonitorSnapshot {
+  season: number;
+  week: number;
+}
+
+/**
+ * Aggregate a list of per-week snapshots into season-level
+ * totals. Pure function — does not mutate the inputs.
+ *
+ * Universe diagnostic numbers (totalCandidates, with-actual,
+ * OVER / UNDER hit) sum across weeks. Recommended-plays
+ * numbers (the model's actual bet count, hits, ROI, units)
+ * sum the same way. Calibration replays (production /
+ * gate040 / gate035) sum their respective qualified counts
+ * and units profit across weeks; hit / ROI are recomputed
+ * from the summed wins/losses so the rollup math matches
+ * what users see per-week.
+ */
+export interface StoredSeasonAggregate {
+  weeks: number[];
+  weekCount: number;
+  weeksGraded: number;
+  totalCandidates: number;
+  totalCandidatesWithActual: number;
+  /** Universe rollup — diagnostic only. */
+  universe: {
+    overWins: number;
+    overLosses: number;
+    underWins: number;
+    underLosses: number;
+    pushes: number;
+    overHitRatePct: number;
+    underHitRatePct: number;
+  };
+  /** Recommended-plays rollup — the model's actual betting
+   *  performance across stored weeks (production gate). */
+  recommendedPlays: {
+    enabled: boolean;
+    count: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    hitRatePct: number;
+    roiPct: number;
+    unitsProfit: number;
+    averageEdgePct: number;
+    averageConfidence: number;
+  };
+  /** Per-gate calibration rollup across all stored weeks. */
+  calibration: {
+    available: boolean;
+    productionGate: number;
+    production: SeasonGateRollup;
+    gate040: SeasonGateRollup;
+    gate035: SeasonGateRollup;
+  };
+}
+
+export interface SeasonGateRollup {
+  gateThreshold: number;
+  isProduction: boolean;
+  weekCount: number;
+  qualifiedCount: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  hitRatePct: number;
+  roiPct: number;
+  unitsProfit: number;
+}
+
+const SEASON_WEEK_RANGE = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+];
+
+/**
+ * Load every stored week's snapshot for `season`. Iterates the
+ * NFL regular-season weeks (1–18) and returns the snapshots
+ * that came back populated. Order is preserved — Week 1 first,
+ * Week 18 last. Missing weeks are silently dropped.
+ *
+ * Each per-week load goes through the existing
+ * `loadStoredWeek1MonitorSnapshot` path so the DB-first,
+ * file-fallback, auto-rehydration discipline is identical.
+ */
+export async function loadAllStoredMonitorSnapshots(args: {
+  season: number;
+  client?: PersistenceClient;
+  weeks?: number[];
+}): Promise<StoredWeekSnapshot[]> {
+  const client = args.client ?? (await getPersistenceClient());
+  const weeks = args.weeks ?? SEASON_WEEK_RANGE;
+  const results: StoredWeekSnapshot[] = [];
+  for (const week of weeks) {
+    const snap = await loadStoredWeek1MonitorSnapshot({
+      season: args.season,
+      week,
+      client,
+    });
+    if (snap) {
+      results.push({ ...snap, season: args.season, week });
+    }
+  }
+  return results;
+}
+
+function emptyGateRollup(
+  gate: number,
+  isProduction: boolean,
+): SeasonGateRollup {
+  return {
+    gateThreshold: gate,
+    isProduction,
+    weekCount: 0,
+    qualifiedCount: 0,
+    wins: 0,
+    losses: 0,
+    pushes: 0,
+    hitRatePct: 0,
+    roiPct: 0,
+    unitsProfit: 0,
+  };
+}
+
+function addGateRollup(
+  agg: SeasonGateRollup,
+  gate: NonNullable<
+    StoredWeek1MonitorSnapshot["graded"]
+  >["marketContextCalibration"] extends infer T
+    ? T extends { production: infer P }
+      ? P
+      : never
+    : never,
+): void {
+  if (!gate) return;
+  agg.weekCount += 1;
+  agg.qualifiedCount += gate.qualifiedCount;
+  agg.wins += gate.wins;
+  agg.losses += gate.losses;
+  agg.pushes += gate.pushes;
+  agg.unitsProfit += gate.unitsProfit;
+}
+
+function finalizeGateRollup(agg: SeasonGateRollup): SeasonGateRollup {
+  const decisive = agg.wins + agg.losses;
+  const graded = agg.wins + agg.losses + agg.pushes;
+  agg.hitRatePct = decisive > 0 ? (agg.wins / decisive) * 100 : 0;
+  agg.roiPct = graded > 0 ? (agg.unitsProfit / graded) * 100 : 0;
+  return agg;
+}
+
+export function aggregateStoredSeason(
+  snapshots: readonly StoredWeekSnapshot[],
+): StoredSeasonAggregate {
+  const weeks = snapshots.map((s) => s.week);
+  let totalCandidates = 0;
+  let totalCandidatesWithActual = 0;
+  let universeOverWins = 0;
+  let universeOverLosses = 0;
+  let universeUnderWins = 0;
+  let universeUnderLosses = 0;
+  let universePushes = 0;
+  let weeksGraded = 0;
+
+  let recPlaysEnabled = false;
+  let recPlaysCount = 0;
+  let recPlaysWins = 0;
+  let recPlaysLosses = 0;
+  let recPlaysPushes = 0;
+  let recPlaysUnitsProfit = 0;
+  let recPlaysEdgeSum = 0;
+  let recPlaysConfSum = 0;
+  let recPlaysWeighted = 0;
+
+  let calibrationAvailable = false;
+  const aggProd = emptyGateRollup(0.45, true);
+  const aggG040 = emptyGateRollup(0.4, false);
+  const aggG035 = emptyGateRollup(0.35, false);
+
+  for (const s of snapshots) {
+    totalCandidates += s.candidateCount;
+    const g = s.graded;
+    if (!g) continue;
+    weeksGraded += 1;
+    const u = g.universeDiagnostics;
+    totalCandidatesWithActual += u.candidatesWithActual;
+    universeOverWins += u.overSide.wins;
+    universeOverLosses += u.overSide.losses;
+    universeUnderWins += u.underSide.wins;
+    universeUnderLosses += u.underSide.losses;
+    universePushes += u.candidatesPushed;
+
+    if (g.recommendedPlays.enabled) {
+      recPlaysEnabled = true;
+      const r = g.recommendedPlays;
+      recPlaysCount += r.count;
+      recPlaysWins += r.wins;
+      recPlaysLosses += r.losses;
+      recPlaysPushes += r.pushes;
+      recPlaysUnitsProfit += r.unitsProfit;
+      recPlaysEdgeSum += r.averageEdgePct * r.count;
+      recPlaysConfSum += r.averageConfidence * r.count;
+      recPlaysWeighted += r.count;
+    }
+
+    if (g.marketContextCalibration) {
+      calibrationAvailable = true;
+      addGateRollup(aggProd, g.marketContextCalibration.production);
+      addGateRollup(aggG040, g.marketContextCalibration.gate040);
+      addGateRollup(aggG035, g.marketContextCalibration.gate035);
+    }
+  }
+  finalizeGateRollup(aggProd);
+  finalizeGateRollup(aggG040);
+  finalizeGateRollup(aggG035);
+
+  const recPlaysDecisive = recPlaysWins + recPlaysLosses;
+  const recPlaysGraded = recPlaysWins + recPlaysLosses + recPlaysPushes;
+  const universeOverDecisive = universeOverWins + universeOverLosses;
+  const universeUnderDecisive = universeUnderWins + universeUnderLosses;
+
+  return {
+    weeks,
+    weekCount: snapshots.length,
+    weeksGraded,
+    totalCandidates,
+    totalCandidatesWithActual,
+    universe: {
+      overWins: universeOverWins,
+      overLosses: universeOverLosses,
+      underWins: universeUnderWins,
+      underLosses: universeUnderLosses,
+      pushes: universePushes,
+      overHitRatePct:
+        universeOverDecisive > 0
+          ? (universeOverWins / universeOverDecisive) * 100
+          : 0,
+      underHitRatePct:
+        universeUnderDecisive > 0
+          ? (universeUnderWins / universeUnderDecisive) * 100
+          : 0,
+    },
+    recommendedPlays: {
+      enabled: recPlaysEnabled,
+      count: recPlaysCount,
+      wins: recPlaysWins,
+      losses: recPlaysLosses,
+      pushes: recPlaysPushes,
+      hitRatePct:
+        recPlaysDecisive > 0
+          ? (recPlaysWins / recPlaysDecisive) * 100
+          : 0,
+      roiPct:
+        recPlaysGraded > 0
+          ? (recPlaysUnitsProfit / recPlaysGraded) * 100
+          : 0,
+      unitsProfit: recPlaysUnitsProfit,
+      averageEdgePct:
+        recPlaysWeighted > 0 ? recPlaysEdgeSum / recPlaysWeighted : 0,
+      averageConfidence:
+        recPlaysWeighted > 0 ? recPlaysConfSum / recPlaysWeighted : 0,
+    },
+    calibration: {
+      available: calibrationAvailable,
+      productionGate: 0.45,
+      production: aggProd,
+      gate040: aggG040,
+      gate035: aggG035,
+    },
+  };
+}
+
