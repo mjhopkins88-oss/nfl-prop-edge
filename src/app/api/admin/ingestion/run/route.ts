@@ -33,9 +33,12 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "paid-smoke",
   "odds-week1-subset-paid",
   "paid-week1",
+  "paid-week-subset",
+  "paid-week-full",
   "migrate-odds-to-canonical",
   "stored-backtest",
   "grade-week1-stored",
+  "grade-week-stored",
   "verify-persistence",
 ];
 
@@ -71,10 +74,16 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const confirmText = (body as { confirmText?: unknown })?.confirmText;
+  const weekRaw = (body as { week?: unknown })?.week;
+  const week =
+    typeof weekRaw === "number" && Number.isFinite(weekRaw) && weekRaw >= 1
+      ? Math.trunc(weekRaw)
+      : undefined;
   const result = await runAdminAction({
     action,
     confirmText:
       typeof confirmText === "string" ? confirmText : undefined,
+    week,
   });
 
   return NextResponse.json(result, {

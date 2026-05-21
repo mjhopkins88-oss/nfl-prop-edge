@@ -23,9 +23,12 @@ export type AdminAction =
   | "paid-smoke"
   | "odds-week1-subset-paid"
   | "paid-week1"
+  | "paid-week-subset"
+  | "paid-week-full"
   | "migrate-odds-to-canonical"
   | "stored-backtest"
   | "grade-week1-stored"
+  | "grade-week-stored"
   | "verify-persistence";
 
 export type AdminResult = "success" | "failure" | "skipped";

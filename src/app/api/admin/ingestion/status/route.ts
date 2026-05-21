@@ -24,6 +24,7 @@ import {
   getPersistenceClient,
   rehydrateCanonicalOddsFromDbIfMissing,
 } from "@/lib/persistence/week-1-persistence";
+import { loadStoredWeek1MonitorSnapshot } from "@/lib/backtest/week-1-monitor-summary";
 import { buildReadinessReport } from "../../../../../../scripts/check-real-week-1-readiness";
 
 function readCalibrationResult(): Record<string, unknown> | null {
@@ -195,8 +196,65 @@ export async function GET(request: Request): Promise<NextResponse> {
       : "missing";
   }
 
+  // Per-week status — selected via ?week=N. When omitted or
+  // invalid, defaults to the global response only. Used by the
+  // admin UI's multi-week section so the operator can see the
+  // exact state for the week they're about to run.
+  const url = new URL(request.url);
+  const weekParam = url.searchParams.get("week");
+  const targetWeek = (() => {
+    if (!weekParam) return undefined;
+    const n = Number(weekParam);
+    if (!Number.isFinite(n) || n < 1 || n > 22) return undefined;
+    return Math.trunc(n);
+  })();
+  const selectedWeek = targetWeek
+    ? await (async () => {
+        const snap = await loadStoredWeek1MonitorSnapshot({
+          season: 2025,
+          week: targetWeek,
+          client: persistence,
+        });
+        if (!snap) {
+          return {
+            week: targetWeek,
+            present: false,
+            storedOddsPresent: false,
+            candidateCount: 0,
+            backtestReady: false,
+            gradingStatus: "unavailable" as const,
+            asOfOk: null as boolean | null,
+            asOfValid: 0,
+            asOfChecked: 0,
+            recommendedPlaysCount: 0,
+            note: "No stored backtest data for this week yet.",
+          };
+        }
+        return {
+          week: targetWeek,
+          present: true,
+          source: snap.source,
+          storedOddsPresent: snap.storedOddsPresent,
+          processedNflPresent: snap.processedNflPresent,
+          status: snap.status,
+          candidateCount: snap.candidateCount,
+          scheduleValidationStatus: snap.scheduleValidationStatus,
+          backtestReady: snap.realWeek1BacktestReady,
+          gradingStatus: snap.gradingStatus,
+          asOfOk: snap.graded?.asOfReport?.ok ?? null,
+          asOfValid: snap.graded?.asOfReport?.candidatesValid ?? 0,
+          asOfChecked: snap.graded?.asOfReport?.candidatesChecked ?? 0,
+          recommendedPlaysCount: snap.graded?.recommendedPlays.enabled
+            ? snap.graded.recommendedPlays.count
+            : 0,
+          note: null,
+        };
+      })()
+    : null;
+
   return NextResponse.json({
     ok: true,
+    selectedWeek,
     configuration: {
       oddsApiKeyConfigured: isOddsApiKeyConfigured(),
       adminTokenConfigured: isAdminTokenConfigured(),
