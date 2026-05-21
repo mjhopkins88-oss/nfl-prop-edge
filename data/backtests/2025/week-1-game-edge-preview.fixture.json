@@ -1,0 +1,353 @@
+{
+  "generatedAt": "2026-05-21T00:36:02.092Z",
+  "qualifiedCount": 6,
+  "upsetWatchCount": 0,
+  "passCount": 6,
+  "games": [
+    {
+      "gameId": "fixture-ge-001-pit-at-buf",
+      "homeTeam": "BUF",
+      "awayTeam": "PIT",
+      "recommendation": "AWAY_SPREAD",
+      "recommendationLabel": "Spread Value",
+      "selectedSide": "AWAY",
+      "selectedMarket": "SPREAD",
+      "marketHomeWinProbability": 0.71,
+      "marketAwayWinProbability": 0.29,
+      "modelHomeWinProbability": 0.68417,
+      "modelAwayWinProbability": 0.31583000000000006,
+      "homeMoneylineEdge": -3.8052222222222265,
+      "awayMoneylineEdge": -0.16303174603173876,
+      "spreadEdgeHome": -14.795481151709444,
+      "spreadEdgeAway": 10.033576389804677,
+      "upsetScore": 30,
+      "underdogSide": "AWAY",
+      "confidence": 0.727,
+      "riskScore": 0.7725,
+      "dataQualityScore": 0.695,
+      "reasons": [
+        "Away cover edge 10.0pp clears 4pp threshold",
+        "Key-number risk near 6.5 — cover edge fragile",
+        "Upset factor: Real underdog: market implies 29% win probability"
+      ],
+      "risks": [
+        "Spread near key number 6.5 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-002-bal-at-cle",
+      "homeTeam": "CLE",
+      "awayTeam": "BAL",
+      "recommendation": "HOME_SPREAD",
+      "recommendationLabel": "Spread Value",
+      "selectedSide": "HOME",
+      "selectedMarket": "SPREAD",
+      "marketHomeWinProbability": 0.32,
+      "marketAwayWinProbability": 0.68,
+      "modelHomeWinProbability": 0.3104,
+      "modelAwayWinProbability": 0.6896,
+      "homeMoneylineEdge": -2.8583050847457603,
+      "awayMoneylineEdge": -1.6282352941176526,
+      "spreadEdgeHome": 7.043772538734439,
+      "spreadEdgeAway": -11.805677300639205,
+      "upsetScore": 22.5,
+      "underdogSide": "HOME",
+      "confidence": 0.7143333333333334,
+      "riskScore": 0.6775,
+      "dataQualityScore": 0.7583333333333333,
+      "reasons": [
+        "Home cover edge 6.8pp clears 4pp threshold",
+        "Upset factor: Real underdog: market implies 32% win probability",
+        "Upset factor: Weather compresses scoring — favors underdog"
+      ],
+      "risks": [
+        "run_game_advantage: Home run-game advantage"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-003-was-at-phi",
+      "homeTeam": "PHI",
+      "awayTeam": "WAS",
+      "recommendation": "AWAY_SPREAD",
+      "recommendationLabel": "Spread Value",
+      "selectedSide": "AWAY",
+      "selectedMarket": "SPREAD",
+      "marketHomeWinProbability": 0.87,
+      "marketAwayWinProbability": 0.13,
+      "modelHomeWinProbability": 0.87,
+      "modelAwayWinProbability": 0.13,
+      "homeMoneylineEdge": 0.33333333333332993,
+      "awayMoneylineEdge": -4.857142857142857,
+      "spreadEdgeHome": -17.465043879169585,
+      "spreadEdgeAway": 12.703139117264817,
+      "upsetScore": 20,
+      "underdogSide": "AWAY",
+      "confidence": 0.7076666666666667,
+      "riskScore": 0.7525,
+      "dataQualityScore": 0.6666666666666666,
+      "reasons": [
+        "Away cover edge 12.7pp clears 4pp threshold",
+        "Upset factor: Real underdog: market implies 13% win probability",
+        "Upset factor: Spread is large enough to create natural value"
+      ],
+      "risks": []
+    },
+    {
+      "gameId": "fixture-ge-004-cin-at-bal",
+      "homeTeam": "BAL",
+      "awayTeam": "CIN",
+      "recommendation": "PASS",
+      "recommendationLabel": "Cover Watch",
+      "marketHomeWinProbability": 0.66,
+      "marketAwayWinProbability": 0.34,
+      "modelHomeWinProbability": 0.66,
+      "modelAwayWinProbability": 0.33999999999999997,
+      "homeMoneylineEdge": -0.6666666666666599,
+      "awayMoneylineEdge": -3.037037037037038,
+      "spreadEdgeHome": -8.40258263978374,
+      "spreadEdgeAway": 3.640677877878973,
+      "upsetScore": 17.5,
+      "underdogSide": "AWAY",
+      "confidence": 0.7586666666666667,
+      "riskScore": 0.8,
+      "dataQualityScore": 0.7466666666666667,
+      "reasons": [
+        "Spread edge 3.6pp below 4pp threshold",
+        "Upset factor: Real underdog: market implies 34% win probability",
+        "Upset factor: Underdog (away) has pass-rush advantage"
+      ],
+      "risks": []
+    },
+    {
+      "gameId": "fixture-ge-005-nyg-at-sf",
+      "homeTeam": "SF",
+      "awayTeam": "NYG",
+      "recommendation": "HOME_MONEYLINE",
+      "recommendationLabel": "Playable ML Value",
+      "selectedSide": "HOME",
+      "selectedMarket": "MONEYLINE",
+      "marketHomeWinProbability": 0.81,
+      "marketAwayWinProbability": 0.19,
+      "modelHomeWinProbability": 0.8855900000000001,
+      "modelAwayWinProbability": 0.1144099999999999,
+      "homeMoneylineEdge": 7.789769230769239,
+      "awayMoneylineEdge": -11.286272727272737,
+      "spreadEdgeHome": -1.4992342106442291,
+      "spreadEdgeAway": -3.262670551260538,
+      "upsetScore": 8,
+      "underdogSide": "AWAY",
+      "confidence": 0.6856666666666668,
+      "riskScore": 0.6975,
+      "dataQualityScore": 0.6666666666666666,
+      "reasons": [
+        "Home ML edge 7.6pp clears 3pp threshold",
+        "Upset factor: Real underdog: market implies 19% win probability",
+        "Upset factor: Spread is large enough to create natural value"
+      ],
+      "risks": [
+        "Favorite (home) has major trench advantage",
+        "Spread near key number 9.5 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-006-lar-at-sea",
+      "homeTeam": "SEA",
+      "awayTeam": "LAR",
+      "recommendation": "PASS",
+      "recommendationLabel": "Pass / Too Much Uncertainty",
+      "marketHomeWinProbability": 0.31,
+      "marketAwayWinProbability": 0.69,
+      "modelHomeWinProbability": 0.30893,
+      "modelAwayWinProbability": 0.6910700000000001,
+      "homeMoneylineEdge": -0.35700000000000176,
+      "awayMoneylineEdge": -3.1152222222222137,
+      "spreadEdgeHome": 9.0145951903007,
+      "spreadEdgeAway": -13.776499952205468,
+      "upsetScore": 9,
+      "underdogSide": "HOME",
+      "confidence": 0.49150000000000005,
+      "riskScore": 0.55875,
+      "dataQualityScore": 0.32,
+      "reasons": [
+        "Upset factor: Real underdog: market implies 31% win probability",
+        "Upset factor: Underdog (home) has pass-rush advantage",
+        "Upset factor: Weather compresses scoring — favors underdog"
+      ],
+      "risks": [
+        "pressure_advantage: Home pass-rush advantage on the road QB",
+        "Data quality 0.32 < 0.55 — capped at 2pp",
+        "Underdog (home) QB instability is a real concern"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-007-nyj-at-mia",
+      "homeTeam": "NYJ",
+      "awayTeam": "MIA",
+      "recommendation": "PASS",
+      "recommendationLabel": "Cover Watch",
+      "marketHomeWinProbability": 0.4,
+      "marketAwayWinProbability": 0.6,
+      "modelHomeWinProbability": 0.41728000000000004,
+      "modelAwayWinProbability": 0.5827199999999999,
+      "homeMoneylineEdge": 0.9116734693877582,
+      "awayMoneylineEdge": -4.690962962962974,
+      "spreadEdgeHome": 4.153373011295692,
+      "spreadEdgeAway": -8.915277773200458,
+      "upsetScore": 30.5,
+      "underdogSide": "HOME",
+      "confidence": 0.6606666666666666,
+      "riskScore": 0.6849999999999999,
+      "dataQualityScore": 0.6166666666666667,
+      "reasons": [
+        "Spread edge 3.8pp below 4pp threshold",
+        "Upset factor: Real underdog: market implies 40% win probability",
+        "Upset factor: Underdog (home) has pass-rush advantage"
+      ],
+      "risks": [
+        "Spread near key number 2.5 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-008-car-at-tb",
+      "homeTeam": "TB",
+      "awayTeam": "CAR",
+      "recommendation": "PASS",
+      "recommendationLabel": "Cover Watch",
+      "marketHomeWinProbability": 0.78,
+      "marketAwayWinProbability": 0.22,
+      "modelHomeWinProbability": 0.8054,
+      "modelAwayWinProbability": 0.1946,
+      "homeMoneylineEdge": 3.2672727272727298,
+      "awayMoneylineEdge": -6.85578947368421,
+      "spreadEdgeHome": -6.8736651915004,
+      "spreadEdgeAway": 2.1117604295956327,
+      "upsetScore": 20.5,
+      "underdogSide": "AWAY",
+      "confidence": 0.67,
+      "riskScore": 0.615,
+      "dataQualityScore": 0.71,
+      "reasons": [
+        "Spread edge 1.8pp below 4pp threshold",
+        "Upset factor: Real underdog: market implies 22% win probability",
+        "Upset factor: Underdog (away) has pass-rush advantage"
+      ],
+      "risks": [
+        "Underdog injury risk",
+        "Spread near key number 7 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-009-chi-at-det",
+      "homeTeam": "DET",
+      "awayTeam": "CHI",
+      "recommendation": "AWAY_SPREAD",
+      "recommendationLabel": "Spread Value",
+      "selectedSide": "AWAY",
+      "selectedMarket": "SPREAD",
+      "marketHomeWinProbability": 0.85,
+      "marketAwayWinProbability": 0.15,
+      "modelHomeWinProbability": 0.89276,
+      "modelAwayWinProbability": 0.10724,
+      "homeMoneylineEdge": 4.660615384615385,
+      "awayMoneylineEdge": -9.276000000000002,
+      "spreadEdgeHome": -17.27886080865827,
+      "spreadEdgeAway": 12.516956046753503,
+      "upsetScore": 10,
+      "underdogSide": "AWAY",
+      "confidence": 0.7241666666666667,
+      "riskScore": 0.7437499999999999,
+      "dataQualityScore": 0.7166666666666667,
+      "reasons": [
+        "Away cover edge 12.5pp clears 4pp threshold",
+        "Key-number risk near 13.5 — cover edge fragile",
+        "Upset factor: Real underdog: market implies 15% win probability"
+      ],
+      "risks": [
+        "Favorite (home) has major trench advantage",
+        "Spread near key number 13.5 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-010-gb-at-min",
+      "homeTeam": "MIN",
+      "awayTeam": "GB",
+      "recommendation": "PASS",
+      "recommendationLabel": "Cover Watch",
+      "marketHomeWinProbability": 0.58,
+      "marketAwayWinProbability": 0.42,
+      "modelHomeWinProbability": 0.58,
+      "modelAwayWinProbability": 0.42000000000000004,
+      "homeMoneylineEdge": -2.0000000000000018,
+      "awayMoneylineEdge": -1.4782608695652122,
+      "spreadEdgeHome": -8.64190280018342,
+      "spreadEdgeAway": 3.8799980382786536,
+      "upsetScore": 13.500000000000002,
+      "underdogSide": "AWAY",
+      "confidence": 0.7503333333333334,
+      "riskScore": 0.7825,
+      "dataQualityScore": 0.7433333333333333,
+      "reasons": [
+        "Spread edge 3.9pp below 4pp threshold",
+        "Upset factor: Real underdog: market implies 42% win probability",
+        "Upset factor: Underdog (away) has pass-rush advantage"
+      ],
+      "risks": [
+        "Spread near key number 2.5 — backdoor / pushed cover risk"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-011-mia-at-buf",
+      "homeTeam": "BUF",
+      "awayTeam": "MIA",
+      "recommendation": "AWAY_SPREAD",
+      "recommendationLabel": "Spread Value",
+      "selectedSide": "AWAY",
+      "selectedMarket": "SPREAD",
+      "marketHomeWinProbability": 0.66,
+      "marketAwayWinProbability": 0.34,
+      "modelHomeWinProbability": 0.6910200000000001,
+      "modelAwayWinProbability": 0.3089799999999999,
+      "homeMoneylineEdge": 1.3600645161290448,
+      "awayMoneylineEdge": -5.4656363636363725,
+      "spreadEdgeHome": -9.056806724858513,
+      "spreadEdgeAway": 4.2949019629537455,
+      "upsetScore": 11.5,
+      "underdogSide": "AWAY",
+      "confidence": 0.7135,
+      "riskScore": 0.7537499999999999,
+      "dataQualityScore": 0.68,
+      "reasons": [
+        "Away cover edge 4.3pp clears 4pp threshold",
+        "Upset factor: Real underdog: market implies 34% win probability",
+        "Upset factor: Underdog (away) has pass-rush advantage"
+      ],
+      "risks": [
+        "High game total — more possessions reduce compression"
+      ]
+    },
+    {
+      "gameId": "fixture-ge-012-tex-at-jax",
+      "homeTeam": "JAX",
+      "awayTeam": "TEX",
+      "recommendation": "PASS",
+      "recommendationLabel": "Pass / No Edge",
+      "marketHomeWinProbability": 0.52,
+      "marketAwayWinProbability": 0.48,
+      "modelHomeWinProbability": 0.52,
+      "modelAwayWinProbability": 0.48,
+      "homeMoneylineEdge": -1.4883720930232491,
+      "awayMoneylineEdge": -3.219512195121954,
+      "spreadEdgeHome": -4.978371951472759,
+      "spreadEdgeAway": 0.2164671895679926,
+      "upsetScore": 0,
+      "confidence": 0.761,
+      "riskScore": 0.8025,
+      "dataQualityScore": 0.75,
+      "reasons": [
+        "Moneyline and spread both within tolerance of market — no edge",
+        "Upset factor: Game is too close to a coin flip — no underdog spread to consider"
+      ],
+      "risks": []
+    }
+  ]
+}

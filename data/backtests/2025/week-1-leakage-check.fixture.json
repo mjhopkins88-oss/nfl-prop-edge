@@ -1,0 +1,13 @@
+{
+  "generatedAt": "2026-05-21T00:51:15.001Z",
+  "season": 2025,
+  "week": 1,
+  "pregameOnly": true,
+  "actualResultsVisibleToModel": false,
+  "leakageDetected": false,
+  "violations": [],
+  "notes": [
+    "Verified by buildWeekPregameSnapshot's outcome-strip pass.",
+    "Cross-checked by scripts/test-week-1-data-integrity.ts."
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-05-21T00:51:15.001Z",
+  "season": 2025,
+  "week": 1,
+  "algorithmMode": "V1_SCORECARD",
+  "pregameOnly": true,
+  "includedPropTypes": [
+    "PASSING_ATTEMPTS",
+    "PASSING_COMPLETIONS",
+    "RECEPTIONS",
+    "RUSHING_ATTEMPTS"
+  ],
+  "excludedPropTypes": [
+    "PASSING_YARDS",
+    "RECEIVING_YARDS",
+    "RUSHING_YARDS"
+  ],
+  "candidateCount": 8,
+  "candidatesByPropType": {
+    "PASSING_ATTEMPTS": 2,
+    "PASSING_COMPLETIONS": 2,
+    "RECEPTIONS": 2,
+    "RUSHING_ATTEMPTS": 2
+  },
+  "actualResultsVisibleToModel": false,
+  "touchdownPropsAllowed": false,
+  "dataSources": [
+    "stored nflverse-style historical stats (data/fixtures/backtest/week-1/player-week-stats.fixture.json)",
+    "stored historical Odds API quotes (data/fixtures/backtest/week-1/prop-quotes.fixture.json)",
+    "stored weather / stadium snapshots (data/fixtures/backtest/week-1/weather.fixture.json)",
+    "static coaching / proxy / matchup data"
+  ],
+  "notes": [
+    "Pregame phase uses only data strictly before season=2025 week=1.",
+    "No paid API calls made during this run.",
+    "No automated betting paths invoked.",
+    "Pregame outcomes are explicitly stripped (actualStat=null, result=PASS, profit=0)."
+  ]
+}

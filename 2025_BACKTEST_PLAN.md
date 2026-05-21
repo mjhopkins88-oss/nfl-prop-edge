@@ -295,6 +295,87 @@ Three branches based on the verdict:
    learned, and stop. Better to know than to act on a noisy
    read.
 
+## Schedule validation requirement
+
+Fixture games are not the real Week 1 schedule until proven
+otherwise. Every Week 1 starter-test run cross-checks the input
+`(away, home)` pairs against the authoritative slate in
+`data/fixtures/nfl/2025-week-1-schedule.fixture.json` and emits
+`data/backtests/2025/week-1-schedule-validation.fixture.json`
+with one of three statuses:
+
+| Status | Meaning |
+|---|---|
+| `PASS` | Every candidate game is a real 2025 Week 1 matchup. `realWeek1BacktestReady = true`. |
+| `FAIL` | At least one candidate is not in the real Week 1 slate. `realWeek1BacktestReady = false`. |
+| `SYNTHETIC_ONLY` | All candidates are synthetic placeholders (no overlap with the real slate). `realWeek1BacktestReady = false`. |
+
+When status is not `PASS`:
+
+- `/backtest/week-1` renders a red **"Synthetic Week 1 Fixture
+  — Schedule does not match real 2025 Week 1"** banner.
+- The page hero is renamed
+  **"Week 1 2025 Pipeline Test (Synthetic Fixture)"** and any
+  results section is tagged **"Not real 2025 Week 1"**.
+- The locked-recommendations file carries
+  `realWeek1BacktestReady: false` so no downstream consumer can
+  treat the run as real Week 1 performance.
+
+**Fixture data can test pipeline mechanics. Fixture data is not
+proof of real Week 1 performance.** Real Week 1 simulation
+requires all four:
+
+1. Correct 2025 Week 1 schedule (the static fixture committed in
+   `data/fixtures/nfl/2025-week-1-schedule.fixture.json` — done).
+2. Stored pregame odds snapshots from the controlled Odds API
+   historical pull, keyed to the real Week 1 gameIds.
+3. Processed NFL historical features
+   (`data/processed/nfl/*.csv`) populated from the nflverse
+   ingestion script.
+4. No postgame results visible to the pregame snapshot —
+   continues to be enforced by the leakage check.
+
+Synthetic fixtures stay clearly labeled synthetic until #2 and
+#3 are wired in. The smoke test → one-week test cadence in the
+runbook above does not change.
+
+## Transition from synthetic fixture to real stored Week 1
+
+The runner now has two data modes:
+
+| `--data-mode` | What it reads | Schedule validation | `realWeek1BacktestReady` |
+|---|---|---|---|
+| `fixture` (default) | `data/fixtures/backtest/week-1/*.fixture.json` (KC@BAL, BUF@MIA placeholders) | `SYNTHETIC_ONLY` | `false` |
+| `stored` | `data/processed/odds/{season}/week-{N}-*.csv` + `data/processed/nfl/*.csv` | `PASS` once both inputs are present and reference real Week 1 game IDs | `true` only when stored mode returns `READY` |
+
+Stored mode never falls back to the synthetic fixture path. If
+either input is missing, the runner writes
+`data/backtests/2025/week-1-data-mode-status.fixture.json` with
+`status: "MISSING_STORED_ODDS"` / `"MISSING_PROCESSED_NFL"` and
+the page surfaces a yellow "Real Week 1 stored data not loaded
+yet" panel with the next-command hints.
+
+Fixture mode validates pipeline mechanics. Fixture mode is
+**not** proof of real Week 1 performance. Real Week 1
+simulation requires all four:
+
+1. Correct 2025 Week 1 schedule —
+   `data/fixtures/nfl/2025-week-1-schedule.fixture.json` is
+   committed and authoritative until processed
+   `data/processed/nfl/games.csv` lands.
+2. Stored pregame Odds API snapshots under
+   `data/processed/odds/{season}/week-{N}-prop-markets.csv` +
+   `week-{N}-prop-quotes.csv`. The loader also accepts the
+   legacy flat `data/processed/prop_markets.csv` layout.
+3. Processed NFL historical features
+   (`data/processed/nfl/player_week_stats.csv` etc.) populated
+   by the nflverse ingestion script.
+4. Schedule validator must return `PASS`. The leakage check
+   must continue to return zero violations.
+
+`realWeek1BacktestReady` must be `true` before any Week 1
+performance numbers are interpreted as model output.
+
 ## Operating reminders
 
 - Backtest must use stored / committed data only — no paid

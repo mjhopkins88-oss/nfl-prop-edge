@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   loadWeek1DataAudit,
+  loadWeek1DataModeStatus,
   loadWeek1GameEdgePreview,
   loadWeek1LeakageCheck,
   loadWeek1LockedRecommendations,
@@ -9,6 +10,7 @@ import {
   loadWeek1ParlayPreview,
   loadWeek1Pregame,
   loadWeek1Results,
+  loadWeek1ScheduleValidation,
   loadWeek1V1V2Comparison,
 } from "@/lib/backtest/week-1-summary";
 
@@ -19,6 +21,8 @@ export default function Week1StarterTestPage() {
   const oddsCoverage = loadWeek1OddsCoverage();
   const nflCoverage = loadWeek1NflDataCoverage();
   const leakage = loadWeek1LeakageCheck();
+  const scheduleValidation = loadWeek1ScheduleValidation();
+  const dataModeStatus = loadWeek1DataModeStatus();
   const results = loadWeek1Results();
   const comparison = loadWeek1V1V2Comparison();
   const parlays = loadWeek1ParlayPreview();
@@ -27,9 +31,18 @@ export default function Week1StarterTestPage() {
 
   return (
     <div className="space-y-8">
-      <Hero />
+      {scheduleValidation && scheduleValidation.status !== "PASS" && (
+        <SyntheticFixtureBanner validation={scheduleValidation} />
+      )}
+      <Hero
+        scheduleStatus={scheduleValidation?.status}
+      />
       {!hasOutput && <RunHint />}
       <PregameInputs />
+      {dataModeStatus && <DataSourceModeSection status={dataModeStatus} />}
+      {scheduleValidation && (
+        <ScheduleValidationSection validation={scheduleValidation} />
+      )}
       {(dataAudit || oddsCoverage || nflCoverage || leakage) && (
         <DataIntegritySection
           dataAudit={dataAudit}
@@ -40,7 +53,14 @@ export default function Week1StarterTestPage() {
       )}
       {locked && <LockedSnapshotSection locked={locked} />}
       {pregame && <PregameCandidates pregame={pregame} />}
-      {results && <ResultsSection results={results} />}
+      {results && (
+        <ResultsSection
+          results={results}
+          syntheticFixture={
+            scheduleValidation?.syntheticFixture ?? false
+          }
+        />
+      )}
       {comparison && <V1V2Section comparison={comparison} />}
       {parlays && <ParlaySection parlays={parlays} />}
       {gameEdge && <GameEdgeSection gameEdge={gameEdge} />}
@@ -49,7 +69,11 @@ export default function Week1StarterTestPage() {
   );
 }
 
-function Hero() {
+function Hero({
+  scheduleStatus,
+}: {
+  scheduleStatus?: "PASS" | "FAIL" | "SYNTHETIC_ONLY";
+}) {
   return (
     <section>
       <div className="flex flex-wrap items-center gap-2">
@@ -60,9 +84,20 @@ function Hero() {
         <span className="inline-flex items-center gap-2 rounded-full bg-sea-50 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-sea-800 ring-1 ring-sea-200/80">
           Fixture / Stored Data
         </span>
+        {scheduleStatus && scheduleStatus !== "PASS" && (
+          <span
+            className="inline-flex items-center gap-2 rounded-full bg-rose-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-coral-700 ring-1 ring-coral-300/60"
+            data-testid="hero-synthetic-chip"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-coral-500" />
+            Synthetic Fixture ({scheduleStatus.replace("_", " ").toLowerCase()})
+          </span>
+        )}
       </div>
       <h1 className="mt-3 text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">
-        Week 1 2025 Starter Test
+        {scheduleStatus === "PASS"
+          ? "Week 1 2025 Starter Test"
+          : "Week 1 2025 Pipeline Test (Synthetic Fixture)"}
       </h1>
       <p className="mt-2 max-w-3xl text-sm text-ink-700">
         Pregame model view using only data available before Week 1.
@@ -73,6 +108,139 @@ function Hero() {
         </code>{" "}
         so the existing fixture backtest is unchanged.
       </p>
+    </section>
+  );
+}
+
+function SyntheticFixtureBanner({
+  validation,
+}: {
+  validation: NonNullable<ReturnType<typeof loadWeek1ScheduleValidation>>;
+}) {
+  return (
+    <section
+      className="rounded-2xl bg-rose-50/80 p-4 ring-1 ring-coral-300/70 backdrop-blur"
+      data-testid="synthetic-fixture-banner"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-coral-700">
+            Synthetic Week 1 Fixture — Schedule does not match real 2025 Week 1
+          </div>
+          <p className="mt-1 max-w-2xl text-xs text-coral-700">
+            {validation.invalidCandidateGames} of {validation.candidateGames}{" "}
+            candidate {validation.candidateGames === 1 ? "game does" : "games do"}{" "}
+            not appear in the real 2025 Week 1 slate
+            ({validation.expectedGames} games). These are test fixtures for
+            pipeline validation only — they are not real 2025 Week 1 plays.
+          </p>
+          <p className="mt-1 text-[11px] text-coral-700">
+            <strong>realWeek1BacktestReady = false.</strong> Real Week 1 odds
+            not loaded yet. Run stored odds ingestion + nflverse processing
+            before a real Week 1 simulation.
+          </p>
+        </div>
+        <Link
+          href="/diagnostics"
+          className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-coral-700 ring-1 ring-coral-300/60 transition hover:bg-rose-100"
+        >
+          Open diagnostics →
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function ScheduleValidationSection({
+  validation,
+}: {
+  validation: NonNullable<ReturnType<typeof loadWeek1ScheduleValidation>>;
+}) {
+  const statusClass =
+    validation.status === "PASS"
+      ? "bg-sea-50 text-sea-800 ring-sea-200/70"
+      : validation.status === "FAIL"
+        ? "bg-rose-50 text-coral-700 ring-coral-300/60"
+        : "bg-amber-50 text-amber-900 ring-amber-200/70";
+  return (
+    <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Schedule validation
+        </h2>
+        <span
+          className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ring-1 ${statusClass}`}
+        >
+          Status · {validation.status}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Schedule source"
+          value="Static NFL schedule fixture"
+          sub={validation.scheduleSource}
+        />
+        <Stat
+          label="Expected games"
+          value={`${validation.expectedGames}`}
+          sub="2025 NFL Week 1 slate"
+        />
+        <Stat
+          label="Candidate games"
+          value={`${validation.candidateGames}`}
+          sub="loaded by the runner"
+        />
+        <Stat
+          label="Valid · invalid"
+          value={`${validation.validCandidateGames} · ${validation.invalidCandidateGames}`}
+          sub={validation.realWeek1BacktestReady ? "Real-week ready" : "Not real-week ready"}
+        />
+      </div>
+      {validation.candidates.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                <th className="pb-2 pr-3">Candidate</th>
+                <th className="pb-2 pr-3">Result</th>
+                <th className="pb-2">Reason / match</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink-800">
+              {validation.candidates.map((c) => (
+                <tr key={c.gameId} className="border-t border-white/40">
+                  <td className="py-2 pr-3 font-medium">
+                    {c.awayTeam} @ {c.homeTeam}
+                  </td>
+                  <td className="py-2 pr-3">
+                    <span
+                      className={
+                        c.valid
+                          ? "rounded-full bg-sea-50 px-2 py-0.5 text-[10px] font-semibold text-sea-800 ring-1 ring-sea-200/60"
+                          : "rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-coral-700 ring-1 ring-coral-300/60"
+                      }
+                    >
+                      {c.valid ? "valid" : "invalid"}
+                    </span>
+                  </td>
+                  <td className="py-2 text-[11px] text-ink-600">
+                    {c.valid
+                      ? `matches ${c.matchedRealGameId}`
+                      : c.reason ?? "(no reason)"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {validation.notes.length > 0 && (
+        <ul className="mt-3 space-y-0.5 text-[11px] text-ink-600">
+          {validation.notes.map((n) => (
+            <li key={n}>· {n}</li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -223,14 +391,32 @@ function PregameCandidates({
 
 function ResultsSection({
   results,
+  syntheticFixture,
 }: {
   results: NonNullable<ReturnType<typeof loadWeek1Results>>;
+  syntheticFixture: boolean;
 }) {
   return (
     <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
-      <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
-        Graded Week 1 results
-      </h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          {syntheticFixture
+            ? "Pipeline output (synthetic fixture)"
+            : "Graded Week 1 results"}
+        </h2>
+        {syntheticFixture && (
+          <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-coral-700 ring-1 ring-coral-300/60">
+            Not real 2025 Week 1
+          </span>
+        )}
+      </div>
+      {syntheticFixture && (
+        <p className="mt-2 text-[11px] text-coral-700">
+          These numbers come from synthetic fixture games that do not appear
+          in the real 2025 Week 1 slate. Treat as pipeline-mechanics output
+          only — do not interpret as model performance.
+        </p>
+      )}
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
           label="Wins · Losses · Pushes"
@@ -576,6 +762,85 @@ function LockedSnapshotSection({
         Locked snapshot is the source of truth for grading — Week 1 actuals
         cannot retroactively change these picks.
       </p>
+    </section>
+  );
+}
+
+function DataSourceModeSection({
+  status,
+}: {
+  status: NonNullable<ReturnType<typeof loadWeek1DataModeStatus>>;
+}) {
+  const isReady = status.realWeek1BacktestReady;
+  const modeChip =
+    status.dataMode === "stored"
+      ? isReady
+        ? "bg-sea-50 text-sea-800 ring-sea-200/70"
+        : "bg-amber-50 text-amber-900 ring-amber-200/70"
+      : "bg-amber-50 text-amber-900 ring-amber-200/70";
+  return (
+    <section className="glass-strong rounded-2xl p-5 ring-1 ring-white/40 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-ink-700">
+          Data source mode
+        </h2>
+        <span
+          className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ring-1 ${modeChip}`}
+          data-testid="data-mode-chip"
+        >
+          {status.dataMode} · {status.status}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Synthetic fixture"
+          value={status.syntheticFixture ? "Yes" : "No"}
+          sub={status.syntheticFixture ? "Pipeline test only" : "Real candidates"}
+        />
+        <Stat
+          label="Real Week 1 ready"
+          value={status.realWeek1BacktestReady ? "Yes" : "No"}
+          sub={
+            status.realWeek1BacktestReady
+              ? "Schedule passes + data loaded"
+              : "Switch to stored mode after ingestion"
+          }
+        />
+        <Stat
+          label="Missing stored odds"
+          value={status.missingStoredOdds ? "Yes" : "No"}
+        />
+        <Stat
+          label="Missing processed NFL"
+          value={status.missingProcessedNfl ? "Yes" : "No"}
+        />
+      </div>
+      {!isReady && (
+        <div className="mt-4 rounded-xl bg-amber-50/80 p-3 ring-1 ring-amber-200/60">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-900">
+            Real Week 1 stored data not loaded yet
+          </div>
+          {status.notes.length > 0 && (
+            <ul className="mt-1 space-y-0.5 text-[11px] text-amber-900">
+              {status.notes.slice(0, 4).map((n) => (
+                <li key={n}>· {n}</li>
+              ))}
+            </ul>
+          )}
+          {status.nextSteps.length > 0 && (
+            <div className="mt-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900">
+                Next steps
+              </div>
+              <ol className="mt-1 list-inside list-decimal space-y-0.5 font-mono text-[10px] text-amber-900">
+                {status.nextSteps.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

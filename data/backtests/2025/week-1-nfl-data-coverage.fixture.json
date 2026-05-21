@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-05-21T00:51:15.001Z",
+  "season": 2025,
+  "week": 1,
+  "uniquePlayerProps": 8,
+  "players": [
+    {
+      "playerName": "Patrick Mahomes",
+      "team": "KC",
+      "propType": "PASSING_ATTEMPTS"
+    },
+    {
+      "playerName": "Patrick Mahomes",
+      "team": "KC",
+      "propType": "PASSING_COMPLETIONS"
+    },
+    {
+      "playerName": "Travis Kelce",
+      "team": "KC",
+      "propType": "RECEPTIONS"
+    },
+    {
+      "playerName": "Isiah Pacheco",
+      "team": "KC",
+      "propType": "RUSHING_ATTEMPTS"
+    },
+    {
+      "playerName": "Josh Allen",
+      "team": "BUF",
+      "propType": "PASSING_ATTEMPTS"
+    },
+    {
+      "playerName": "Josh Allen",
+      "team": "BUF",
+      "propType": "PASSING_COMPLETIONS"
+    },
+    {
+      "playerName": "Stefon Diggs",
+      "team": "BUF",
+      "propType": "RECEPTIONS"
+    },
+    {
+      "playerName": "James Cook",
+      "team": "BUF",
+      "propType": "RUSHING_ATTEMPTS"
+    }
+  ],
+  "source": "stored fixture (data/fixtures/backtest/week-1/player-week-stats.fixture.json)",
+  "historyWindow": "strict-before season=2025 week=1 (includes prior 2024 weeks)",
+  "note": "Fixture / Stored Data — not a real nflverse pull."
+}

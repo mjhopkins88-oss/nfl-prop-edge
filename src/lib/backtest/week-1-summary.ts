@@ -346,3 +346,58 @@ export function loadWeek1LeakageCheck(): Week1LeakageCheck | undefined {
     "week-1-leakage-check.fixture.json",
   );
 }
+
+export interface Week1ScheduleValidation {
+  generatedAt: string;
+  season: number;
+  week: number;
+  scheduleSource: string;
+  expectedGames: number;
+  candidateGames: number;
+  validCandidateGames: number;
+  invalidCandidateGames: number;
+  status: "PASS" | "FAIL" | "SYNTHETIC_ONLY";
+  realWeek1BacktestReady: boolean;
+  syntheticFixture: boolean;
+  candidates: Array<{
+    gameId: string;
+    homeTeam: string;
+    awayTeam: string;
+    valid: boolean;
+    matchedRealGameId?: string;
+    reason?: string;
+  }>;
+  notes: string[];
+}
+
+export function loadWeek1ScheduleValidation():
+  | Week1ScheduleValidation
+  | undefined {
+  return readJsonIfExists<Week1ScheduleValidation>(
+    "week-1-schedule-validation.fixture.json",
+  );
+}
+
+export interface Week1DataModeStatus {
+  generatedAt: string;
+  season: number;
+  week: number;
+  dataMode: "fixture" | "stored";
+  status: string;
+  candidateCount: number;
+  syntheticFixture: boolean;
+  realWeek1BacktestReady: boolean;
+  missingStoredOdds: boolean;
+  missingProcessedNfl: boolean;
+  scheduleReport?: Week1ScheduleValidation | null;
+  notes: string[];
+  nextSteps: string[];
+}
+
+export function loadWeek1DataModeStatus():
+  | Week1DataModeStatus
+  | undefined {
+  return readJsonIfExists<Week1DataModeStatus>(
+    "week-1-data-mode-status.fixture.json",
+  );
+}

@@ -55,6 +55,12 @@ data/backtests/**
 !data/backtests/.gitkeep
 !data/backtests/2025/
 !data/backtests/2025/.gitkeep
+# Week 1 starter-test fixture outputs ship with the repo so the
+# deployed /backtest/week-1 page has data on a fresh build.
+!data/backtests/2025/week-1-*.fixture.json
+
+# Build-time deployment manifest — regenerated on every build.
+data/deployment-manifest.json
 data/cache/**
 !data/cache/.gitkeep
 
