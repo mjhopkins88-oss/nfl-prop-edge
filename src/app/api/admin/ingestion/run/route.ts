@@ -33,6 +33,7 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "paid-smoke",
   "odds-week1-subset-paid",
   "paid-week1",
+  "migrate-odds-to-canonical",
   "stored-backtest",
 ];
 

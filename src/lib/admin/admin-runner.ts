@@ -29,6 +29,10 @@ import path from "node:path";
 import { buildReadinessReport } from "../../../scripts/check-real-week-1-readiness";
 import { buildRealWeek1CandidatesFromStoredData } from "../backtest/real-week-candidate-builder";
 import {
+  canonicalMarketsPath,
+  migrateLegacyToCanonical,
+} from "../ingestion/canonical-odds-writer";
+import {
   hasPriorSmokeSuccess,
   recordActionResult,
   recordPaidSmokeAttempt,
@@ -815,6 +819,79 @@ export async function runAdminAction(
       if (ok) recordWeek1Success(repoRoot);
       recordActionResult({
         action: "paid-week1",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "migrate-odds-to-canonical": {
+      // Pure file-IO. No paid call. Requires only the admin
+      // token; no Odds API gates and no confirmText — this
+      // action just copies bytes between paths.
+      const r = migrateLegacyToCanonical({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      const ok = r.status === "READY";
+      const target = canonicalMarketsPath({
+        season: 2025,
+        week: 1,
+        processedRoot: path.join(repoRoot, "data", "processed"),
+      });
+      const resultFile = path.join(
+        repoRoot,
+        "data",
+        "admin-ingestion",
+        "latest-odds-migration.json",
+      );
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(
+        resultFile,
+        JSON.stringify(
+          {
+            action: "migrate-odds-to-canonical",
+            ranAt: new Date().toISOString(),
+            status: r.status,
+            target: r.target ?? target,
+            rowsWritten: r.rowsWritten ?? 0,
+            diagnostics: r.diagnostics ?? null,
+            sourcesInspected: r.sourcesInspected,
+            paidApiCallAttempted: false,
+            guardrails: {
+              noOddsApiCall: true,
+              noTouchdownProps: true,
+              noAutomatedBetting: true,
+              noKalshiIntegration: true,
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      const result: AdminActionResult = {
+        action: "migrate-odds-to-canonical",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Migration OK. Wrote ${r.rowsWritten} canonical rows to ${r.target}.`
+          : `Migration ${r.status}. No canonical file written.`,
+        detail:
+          `sourcesInspected:\n  ${r.sourcesInspected.join("\n  ")}` +
+          (r.diagnostics
+            ? `\ndiagnostics: ${JSON.stringify(r.diagnostics)}`
+            : ""),
+        data: {
+          status: r.status,
+          target: r.target,
+          rowsWritten: r.rowsWritten,
+          diagnostics: r.diagnostics,
+        },
+      };
+      recordActionResult({
+        action: "migrate-odds-to-canonical",
         result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,

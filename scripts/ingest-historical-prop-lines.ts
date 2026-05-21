@@ -76,6 +76,24 @@ import {
 } from "../src/lib/ingestion/odds-api";
 import { validateCreditBudget } from "../src/lib/ingestion/credit-estimator";
 import {
+  buildCanonicalOddsRows,
+  writeCanonicalOddsCsv,
+} from "../src/lib/ingestion/canonical-odds-writer";
+import { parseCsvRows } from "../src/lib/ingestion/nflverse";
+
+function parseCanonRosters(
+  text: string,
+): { playerName: string; team: string; season: number }[] {
+  return parseCsvRows(text)
+    .filter((r) => r.playerName && r.team && r.season)
+    .map((r) => ({
+      playerName: r.playerName,
+      team: r.team,
+      season: Number(r.season),
+    }))
+    .filter((r) => Number.isFinite(r.season));
+}
+import {
   buildCacheKey,
   getCachedResponse,
   hasCachedResponse,
@@ -1275,6 +1293,62 @@ async function main(argv: string[]): Promise<number> {
 
   log("info", `Wrote ${marketsPath} (${nMarkets} rows)`);
   log("info", `Wrote ${quotesPath} (${nQuotes} rows)`);
+
+  // Also write the canonical per-week file the stored backtest
+  // expects. Joins allMarkets + allQuotes against the same games
+  // we already loaded, plus rosters (if present) to resolve
+  // player → team. Skipped when --weeks spans more than one
+  // week (the per-week schema is single-week).
+  try {
+    const seasons = new Set(games.map((g) => g.season));
+    const weeks = new Set(games.map((g) => g.week));
+    if (seasons.size === 1 && weeks.size === 1) {
+      const onlySeason = [...seasons][0]!;
+      const onlyWeek = [...weeks][0]!;
+      const rostersCsv = path.join(process.cwd(), "data", "processed", "nfl", "rosters.csv");
+      const rosters = fs.existsSync(rostersCsv)
+        ? parseCanonRosters(fs.readFileSync(rostersCsv, "utf8"))
+        : undefined;
+      const built = buildCanonicalOddsRows({
+        markets: allMarkets.map((m) => ({
+          market_key: m.market_key,
+          game_id: m.game_id,
+          player_name: m.player_name,
+          prop_type: m.prop_type,
+          line: m.line,
+          snapshot_time: m.snapshot_time,
+        })),
+        quotes: allQuotes.map((q) => ({
+          market_key: q.market_key,
+          book_name: q.book_name,
+          over_price: q.over_price,
+          under_price: q.under_price,
+          quote_time: q.quote_time,
+        })),
+        games: games.map((g) => ({
+          gameId: g.gameId,
+          season: g.season,
+          week: g.week,
+          startTimeUtc: g.kickoffISO,
+          homeTeam: g.homeTeamAbbr,
+          awayTeam: g.awayTeamAbbr,
+        })),
+        rosters,
+      });
+      const wrote = writeCanonicalOddsCsv({
+        rows: built.rows,
+        season: onlySeason,
+        week: onlyWeek,
+      });
+      log(
+        "info",
+        `Wrote ${wrote.target} (${wrote.rowsWritten} canonical rows; quotes=${built.diagnostics.quotesProcessed} dropMissingTeam=${built.diagnostics.droppedMissingTeam} dropMissingGame=${built.diagnostics.droppedMissingGame})`,
+      );
+    }
+  } catch (err) {
+    log("warn", `Canonical writer failed (continuing): ${(err as Error).message}`);
+  }
+
   log(
     "info",
     `Done. Credits estimated=${creditsUsedEstimated} actual=${creditsUsedActual} remaining=${lastRemaining ?? "?"} budget=${args.budget}. ` +
