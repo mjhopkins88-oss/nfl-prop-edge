@@ -1038,11 +1038,16 @@ async function main(argv: string[]): Promise<number> {
     maxAllowedCredits: args.budget,
   });
 
-  // Hard policy check from src/config/api-budget.ts.
+  // Hard policy check from src/config/api-budget.ts. When the
+  // caller explicitly raised the cap via --max-credits (only the
+  // admin runner does this, with hard-coded values per action),
+  // the validator honours that override instead of the global
+  // constant.
   const validation = validateCreditBudget({
     markets: INGESTION_MARKETS.length,
     regions: [...ALLOWED_ODDS_REGIONS],
     estimatedCredits: plan.estimatedCredits,
+    maxCreditsOverride: args.maxCredits,
   });
   if (!validation.ok) {
     log(

@@ -14,6 +14,7 @@ type ActionName =
   | "run-nflverse-ingestion"
   | "dry-run"
   | "paid-smoke"
+  | "odds-week1-subset-paid"
   | "paid-week1"
   | "stored-backtest";
 
@@ -75,13 +76,18 @@ interface ActionResponse {
 }
 
 const PAID_SMOKE_CONFIRM = "RUN PAID SMOKE TEST";
-const PAID_WEEK1_CONFIRM = "RUN WEEK 1 PAID INGESTION";
+const PAID_WEEK1_SUBSET_CONFIRM = "RUN WEEK 1 SUBSET INGESTION";
+const PAID_WEEK1_CONFIRM = "RUN FULL WEEK 1 INGESTION 647 CREDITS";
+const FULL_WEEK1_ESTIMATED_CREDITS = 647;
+const STANDARD_RUN_CAP = 200;
+const FULL_WEEK1_ELEVATED_CAP = 700;
 
 export function AdminIngestionClient() {
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
   const [paidSmokeConfirm, setPaidSmokeConfirm] = useState("");
+  const [paidWeek1SubsetConfirm, setPaidWeek1SubsetConfirm] = useState("");
   const [paidWeek1Confirm, setPaidWeek1Confirm] = useState("");
   const [busy, setBusy] = useState<ActionName | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
@@ -243,8 +249,29 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("paid-smoke", paidSmokeConfirm)}
           />
           <PaidActionRow
-            label="5. Run paid Week 1 ingestion"
-            description="Locked unless the paid smoke test has succeeded first."
+            label="5. Run paid Week 1 subset ingestion"
+            description="Limited subset under 200 credits (≤4 event-odds calls, 175-credit cap). Requires paid smoke success."
+            confirmExpected={PAID_WEEK1_SUBSET_CONFIRM}
+            confirmValue={paidWeek1SubsetConfirm}
+            onConfirmChange={setPaidWeek1SubsetConfirm}
+            disabled={
+              !token ||
+              busy !== null ||
+              !status?.configuration?.allowRealOddsApiCalls ||
+              !status?.configuration?.oddsApiKeyConfigured ||
+              !status?.state?.smokeSucceededAt
+            }
+            busy={busy === "odds-week1-subset-paid"}
+            onRun={() =>
+              void runAction(
+                "odds-week1-subset-paid",
+                paidWeek1SubsetConfirm,
+              )
+            }
+          />
+          <PaidActionRow
+            label="6. Run paid full Week 1 ingestion"
+            description={`Estimated ~${FULL_WEEK1_ESTIMATED_CREDITS} credits. Hard cap raised to ${FULL_WEEK1_ELEVATED_CAP}. Requires exact high-cost confirmation.`}
             confirmExpected={PAID_WEEK1_CONFIRM}
             confirmValue={paidWeek1Confirm}
             onConfirmChange={setPaidWeek1Confirm}
@@ -259,7 +286,7 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("paid-week1", paidWeek1Confirm)}
           />
           <ActionRow
-            label="6. Run Week 1 stored backtest"
+            label="7. Run Week 1 stored backtest"
             description="Pregame snapshot from stored data. No API call."
             disabled={!token || busy !== null}
             busy={busy === "stored-backtest"}
@@ -350,6 +377,17 @@ function StatusPanel({ status }: { status: StatusResponse }) {
             {status.nextRecommendedAction}
           </p>
         ) : null}
+        <p className="mt-2 text-[11px] text-zinc-500">
+          Estimated full Week 1 cost:{" "}
+          <span className="text-zinc-300">
+            {FULL_WEEK1_ESTIMATED_CREDITS} credits
+          </span>{" "}
+          · current standard cap:{" "}
+          <span className="text-zinc-300">{STANDARD_RUN_CAP}</span>{" "}
+          · full ingestion requires elevated cap (
+          <span className="text-zinc-300">{FULL_WEEK1_ELEVATED_CAP}</span>) and
+          exact confirmation.
+        </p>
       </div>
     </section>
   );

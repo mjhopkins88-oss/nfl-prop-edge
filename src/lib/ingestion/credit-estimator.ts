@@ -121,6 +121,14 @@ export interface BudgetValidationInput {
   estimatedCredits: number;
   /** Optional: current `x-requests-remaining` from the most recent call. */
   creditsRemaining?: number;
+  /**
+   * Optional explicit per-run cap. When provided, this overrides
+   * the global `MAX_ODDS_API_CREDITS_PER_RUN` constant. Only the
+   * admin runner uses this — it pins hard-coded caps per action
+   * (50 for calibration, 175 for week1-subset, 700 for week1-full),
+   * never user input.
+   */
+  maxCreditsOverride?: number;
 }
 
 export interface BudgetValidationResult {
@@ -137,13 +145,19 @@ export interface BudgetValidationResult {
  * Refuses (ok=false, with reasons) if any of:
  *   - markets > MAX_MARKETS_PER_REQUEST
  *   - any region not in ALLOWED_ODDS_REGIONS
- *   - estimatedCredits > MAX_ODDS_API_CREDITS_PER_RUN
+ *   - estimatedCredits > effectiveCap (the lower of
+ *     `maxCreditsOverride` and the global constant when no
+ *     override is set)
  *   - creditsRemaining (if supplied) - estimatedCredits < MIN_ODDS_API_CREDITS_REMAINING
  */
 export function validateCreditBudget(
   input: BudgetValidationInput,
 ): BudgetValidationResult {
   const reasons: string[] = [];
+  const effectiveCap =
+    typeof input.maxCreditsOverride === "number"
+      ? input.maxCreditsOverride
+      : MAX_ODDS_API_CREDITS_PER_RUN;
 
   if (input.markets > MAX_MARKETS_PER_REQUEST) {
     reasons.push(
@@ -157,9 +171,12 @@ export function validateCreditBudget(
       );
     }
   }
-  if (input.estimatedCredits > MAX_ODDS_API_CREDITS_PER_RUN) {
+  if (input.estimatedCredits > effectiveCap) {
     reasons.push(
-      `estimated ${input.estimatedCredits} credits > MAX_ODDS_API_CREDITS_PER_RUN=${MAX_ODDS_API_CREDITS_PER_RUN}`,
+      `estimated ${input.estimatedCredits} credits > effective cap ${effectiveCap}` +
+        (typeof input.maxCreditsOverride === "number"
+          ? ` (overridden from MAX_ODDS_API_CREDITS_PER_RUN=${MAX_ODDS_API_CREDITS_PER_RUN})`
+          : ""),
     );
   }
   if (
@@ -176,7 +193,7 @@ export function validateCreditBudget(
     ok: reasons.length === 0,
     reasons,
     estimatedCredits: input.estimatedCredits,
-    budgetMax: MAX_ODDS_API_CREDITS_PER_RUN,
+    budgetMax: effectiveCap,
     minRemainingFloor: MIN_ODDS_API_CREDITS_REMAINING,
   };
 }
