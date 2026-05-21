@@ -1,0 +1,184 @@
+{
+  "season": 2025,
+  "week": 1,
+  "sourceNote": "2025 NFL regular-season Week 1 schedule, hand-transcribed from a verified public schedule source. Schedule only — no final scores, no winners. Used for fixture validation against synthetic placeholders.",
+  "lastUpdated": "2026-05-21",
+  "games": [
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-dal-at-phi",
+      "awayTeam": "DAL",
+      "homeTeam": "PHI",
+      "kickoffTime": "2025-09-05T00:20:00Z",
+      "venue": "Lincoln Financial Field",
+      "neutralSite": false,
+      "sourceNote": "NFL Kickoff Game (Thursday night)."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-kc-at-lac",
+      "awayTeam": "KC",
+      "homeTeam": "LAC",
+      "kickoffTime": "2025-09-06T00:00:00Z",
+      "venue": "Arena Corinthians, São Paulo",
+      "neutralSite": true,
+      "sourceNote": "NFL São Paulo Game (Friday night) — neutral site in Brazil."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-tb-at-atl",
+      "awayTeam": "TB",
+      "homeTeam": "ATL",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Mercedes-Benz Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-cin-at-cle",
+      "awayTeam": "CIN",
+      "homeTeam": "CLE",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Huntington Bank Field",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-mia-at-ind",
+      "awayTeam": "MIA",
+      "homeTeam": "IND",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Lucas Oil Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-car-at-jax",
+      "awayTeam": "CAR",
+      "homeTeam": "JAX",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "EverBank Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-lv-at-ne",
+      "awayTeam": "LV",
+      "homeTeam": "NE",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Gillette Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-ari-at-no",
+      "awayTeam": "ARI",
+      "homeTeam": "NO",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Caesars Superdome",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-pit-at-nyj",
+      "awayTeam": "PIT",
+      "homeTeam": "NYJ",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "MetLife Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-nyg-at-was",
+      "awayTeam": "NYG",
+      "homeTeam": "WAS",
+      "kickoffTime": "2025-09-07T17:00:00Z",
+      "venue": "Northwest Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday early window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-ten-at-den",
+      "awayTeam": "TEN",
+      "homeTeam": "DEN",
+      "kickoffTime": "2025-09-07T20:05:00Z",
+      "venue": "Empower Field at Mile High",
+      "neutralSite": false,
+      "sourceNote": "Sunday late window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-sf-at-sea",
+      "awayTeam": "SF",
+      "homeTeam": "SEA",
+      "kickoffTime": "2025-09-07T20:05:00Z",
+      "venue": "Lumen Field",
+      "neutralSite": false,
+      "sourceNote": "Sunday late window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-det-at-gb",
+      "awayTeam": "DET",
+      "homeTeam": "GB",
+      "kickoffTime": "2025-09-07T20:25:00Z",
+      "venue": "Lambeau Field",
+      "neutralSite": false,
+      "sourceNote": "Sunday late window — divisional opener."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-hou-at-lar",
+      "awayTeam": "HOU",
+      "homeTeam": "LAR",
+      "kickoffTime": "2025-09-07T20:25:00Z",
+      "venue": "SoFi Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday late window."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-bal-at-buf",
+      "awayTeam": "BAL",
+      "homeTeam": "BUF",
+      "kickoffTime": "2025-09-08T00:20:00Z",
+      "venue": "Highmark Stadium",
+      "neutralSite": false,
+      "sourceNote": "Sunday Night Football."
+    },
+    {
+      "season": 2025,
+      "week": 1,
+      "gameId": "2025-w1-min-at-chi",
+      "awayTeam": "MIN",
+      "homeTeam": "CHI",
+      "kickoffTime": "2025-09-09T00:15:00Z",
+      "venue": "Soldier Field",
+      "neutralSite": false,
+      "sourceNote": "Monday Night Football."
+    }
+  ]
+}

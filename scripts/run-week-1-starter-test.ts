@@ -17,6 +17,12 @@ import {
   runWeekSimulation,
   type WeekSimulationResult,
 } from "../src/lib/backtest/week-simulation";
+import {
+  buildWeek1ScheduleValidationReport,
+  type CandidateGame,
+  type ScheduleValidationReport,
+} from "../src/lib/backtest/week-1-schedule-validation";
+import { loadBacktestFixtures } from "../src/lib/backtest/data-loader";
 
 const WEEK_1_FIXTURE_ROOT = path.join(
   process.cwd(),
@@ -135,6 +141,7 @@ function fmtPct(value: number): string {
  */
 function writeLockedPregameRecommendations(args: {
   pregame: ReturnType<typeof buildWeekPregameSnapshot>;
+  scheduleReport: ScheduleValidationReport;
   outputDir: string;
 }): void {
   const locked = args.pregame.candidates.map((c) => ({
@@ -165,8 +172,28 @@ function writeLockedPregameRecommendations(args: {
     totalCandidates: locked.length,
     lockedQualifiedCount: lockedQualified,
     lockedPasses: locked.length - lockedQualified,
+    scheduleValidationStatus: args.scheduleReport.status,
+    scheduleSource: args.scheduleReport.scheduleSource,
+    syntheticFixture: args.scheduleReport.syntheticFixture,
+    realWeek1BacktestReady: args.scheduleReport.realWeek1BacktestReady,
+    invalidCandidateGames: args.scheduleReport.invalidCandidateGames,
     recommendations: locked,
   });
+}
+
+/**
+ * Write the schedule-validation report itself to a standalone
+ * fixture so the page can render the "Schedule Validation" panel
+ * without re-doing the work.
+ */
+function writeScheduleValidation(args: {
+  scheduleReport: ScheduleValidationReport;
+  outputDir: string;
+}): void {
+  writeJson(
+    path.join(args.outputDir, "week-1-schedule-validation.fixture.json"),
+    args.scheduleReport,
+  );
 }
 
 /**
@@ -375,11 +402,29 @@ function main(): number {
     fixtureRoot: WEEK_1_FIXTURE_ROOT,
   });
   writeJson(path.join(OUTPUT_DIR, "week-1-pregame.fixture.json"), pregame);
+  // Schedule validation — load the runner's input games and
+  // check every (away, home) pair against the real 2025 Week 1
+  // schedule. Status feeds the locked recommendations file +
+  // the UI banner. No paid API call.
+  const inputFixtures = loadBacktestFixtures(WEEK_1_FIXTURE_ROOT);
+  const candidateGames: CandidateGame[] = inputFixtures.games.map((g) => ({
+    gameId: g.id,
+    homeTeam: g.homeTeamAbbr,
+    awayTeam: g.awayTeamAbbr,
+  }));
+  const scheduleReport = buildWeek1ScheduleValidationReport({
+    candidates: candidateGames,
+  });
+  writeScheduleValidation({ scheduleReport, outputDir: OUTPUT_DIR });
   // Companion pregame artifacts read by the Week 1 page +
   // Monitor's data-integrity panels. None of these depend on
   // Week-1 outcomes — they're computed from the pregame snapshot
   // and are always safe to write.
-  writeLockedPregameRecommendations({ pregame, outputDir: OUTPUT_DIR });
+  writeLockedPregameRecommendations({
+    pregame,
+    scheduleReport,
+    outputDir: OUTPUT_DIR,
+  });
   writeDataAudit({ pregame, outputDir: OUTPUT_DIR });
   writeOddsCoverage({ pregame, outputDir: OUTPUT_DIR });
   writeNflDataCoverage({ pregame, outputDir: OUTPUT_DIR });

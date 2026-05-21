@@ -1,0 +1,35 @@
+{
+  "generatedAt": "2026-05-21T00:36:02.066Z",
+  "season": 2025,
+  "week": 1,
+  "scheduleSource": "data/fixtures/nfl/2025-week-1-schedule.fixture.json",
+  "expectedGames": 16,
+  "candidateGames": 2,
+  "validCandidateGames": 0,
+  "invalidCandidateGames": 2,
+  "status": "SYNTHETIC_ONLY",
+  "realWeek1BacktestReady": false,
+  "syntheticFixture": true,
+  "candidates": [
+    {
+      "gameId": "fixture-kc-at-bal-w1",
+      "homeTeam": "BAL",
+      "awayTeam": "KC",
+      "valid": false,
+      "reason": "KC did not play BAL in 2025 Week 1"
+    },
+    {
+      "gameId": "fixture-buf-at-mia-w1",
+      "homeTeam": "MIA",
+      "awayTeam": "BUF",
+      "valid": false,
+      "reason": "BUF did not play MIA in 2025 Week 1"
+    }
+  ],
+  "notes": [
+    "All candidate games are synthetic placeholders — no overlap with the real 2025 Week 1 schedule.",
+    "Real Week 1 backtest is NOT ready — wire processed Odds API + nflverse data and re-run.",
+    "Real Week 1 odds not loaded yet.",
+    "Run stored odds ingestion before real Week 1 simulation."
+  ]
+}

@@ -2,7 +2,7 @@
   "season": 2025,
   "week": 1,
   "algorithmMode": "V1_SCORECARD",
-  "generatedAt": "2026-05-20T23:59:46.968Z",
+  "generatedAt": "2026-05-21T00:36:02.092Z",
   "evaluatedProps": [
     {
       "id": "2025-w1-fixture-w1-pm-mahomes-passatt",
@@ -135,7 +135,7 @@
           "summary": "KC 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 88, uncertainty penalty 8. Default profile for teams without explicitly encoded 2026 staff transition signal."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.068Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-mahomes-passcomp",
@@ -268,7 +268,7 @@
           "summary": "KC 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 88, uncertainty penalty 8. Default profile for teams without explicitly encoded 2026 staff transition signal."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-kelce-receptions",
@@ -406,7 +406,7 @@
           "summary": "KC 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 88, uncertainty penalty 8. Default profile for teams without explicitly encoded 2026 staff transition signal."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-pacheco-rushatt",
@@ -544,7 +544,7 @@
           "summary": "KC 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 88, uncertainty penalty 8. Default profile for teams without explicitly encoded 2026 staff transition signal."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-allen-passatt",
@@ -682,7 +682,7 @@
           "summary": "BUF 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 80, uncertainty penalty 18. Treat offense as mostly stable; defensive/staff title changes should not materially change offensive prop priors."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-allen-passcomp",
@@ -820,7 +820,7 @@
           "summary": "BUF 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 80, uncertainty penalty 18. Treat offense as mostly stable; defensive/staff title changes should not materially change offensive prop priors."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-diggs-receptions",
@@ -958,7 +958,7 @@
           "summary": "BUF 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 80, uncertainty penalty 18. Treat offense as mostly stable; defensive/staff title changes should not materially change offensive prop priors."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     },
     {
       "id": "2025-w1-fixture-w1-pm-cook-rushatt",
@@ -1095,7 +1095,7 @@
           "summary": "BUF 2026 (Weeks 1-4): blend favors prior-year team (70%). Continuity 80, uncertainty penalty 18. Treat offense as mostly stable; defensive/staff title changes should not materially change offensive prop priors."
         }
       },
-      "createdAt": "2026-05-20T23:59:46.951Z"
+      "createdAt": "2026-05-21T00:36:02.069Z"
     }
   ],
   "qualifiedBets": [

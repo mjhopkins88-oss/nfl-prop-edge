@@ -344,9 +344,56 @@ function main(): void {
     else console.log(`[7] FAIL — simulation week boundary`);
   }
 
+  // 8. Candidate games either pass schedule validation OR the
+  //    run is clearly labeled synthetic. A synthetic run with
+  //    realWeek1BacktestReady=true would be the worst possible
+  //    state — that combination must be impossible.
+  {
+    const r = makeReport(
+      "candidates pass schedule validation OR are labeled synthetic",
+    );
+    // Import lazily so the rest of this script doesn't depend on
+    // the validator module being parsable in older snapshots.
+    const {
+      buildWeek1ScheduleValidationReport,
+    } = require("../src/lib/backtest/week-1-schedule-validation") as typeof import("../src/lib/backtest/week-1-schedule-validation");
+    const { loadBacktestFixtures: load } = require(
+      "../src/lib/backtest/data-loader",
+    ) as typeof import("../src/lib/backtest/data-loader");
+    const fixtures = load(WEEK_1_FIXTURE_ROOT);
+    const report = buildWeek1ScheduleValidationReport({
+      candidates: fixtures.games.map((g) => ({
+        gameId: g.id,
+        homeTeam: g.homeTeamAbbr,
+        awayTeam: g.awayTeamAbbr,
+      })),
+    });
+    const labeledSynthetic =
+      report.status !== "PASS" &&
+      report.syntheticFixture === true &&
+      report.realWeek1BacktestReady === false;
+    const passes = report.status === "PASS";
+    check(
+      r,
+      passes || labeledSynthetic,
+      `schedule status=${report.status} but syntheticFixture=${report.syntheticFixture}, realWeek1BacktestReady=${report.realWeek1BacktestReady}`,
+    );
+    check(
+      r,
+      !(report.status !== "PASS" && report.realWeek1BacktestReady === true),
+      "INVARIANT VIOLATED: realWeek1BacktestReady=true while status≠PASS",
+    );
+    record(r);
+    if (r.reasons.length === 0)
+      console.log(
+        `[8] PASS — schedule status=${report.status}, realWeek1BacktestReady=${report.realWeek1BacktestReady}`,
+      );
+    else console.log("[8] FAIL — synthetic labelling invariant");
+  }
+
   console.log("");
   if (FAILURES.length === 0) {
-    console.log("All 7 Week 1 data-integrity assertions passed.");
+    console.log("All 8 Week 1 data-integrity assertions passed.");
   } else {
     console.log(`${FAILURES.length} assertion(s) failed:`);
     for (const f of FAILURES) {

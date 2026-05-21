@@ -346,3 +346,34 @@ export function loadWeek1LeakageCheck(): Week1LeakageCheck | undefined {
     "week-1-leakage-check.fixture.json",
   );
 }
+
+export interface Week1ScheduleValidation {
+  generatedAt: string;
+  season: number;
+  week: number;
+  scheduleSource: string;
+  expectedGames: number;
+  candidateGames: number;
+  validCandidateGames: number;
+  invalidCandidateGames: number;
+  status: "PASS" | "FAIL" | "SYNTHETIC_ONLY";
+  realWeek1BacktestReady: boolean;
+  syntheticFixture: boolean;
+  candidates: Array<{
+    gameId: string;
+    homeTeam: string;
+    awayTeam: string;
+    valid: boolean;
+    matchedRealGameId?: string;
+    reason?: string;
+  }>;
+  notes: string[];
+}
+
+export function loadWeek1ScheduleValidation():
+  | Week1ScheduleValidation
+  | undefined {
+  return readJsonIfExists<Week1ScheduleValidation>(
+    "week-1-schedule-validation.fixture.json",
+  );
+}

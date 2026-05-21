@@ -1,12 +1,17 @@
 {
-  "generatedAt": "2026-05-20T23:59:46.948Z",
+  "generatedAt": "2026-05-21T00:36:02.064Z",
   "season": 2025,
   "week": 1,
   "algorithmMode": "V1_SCORECARD",
-  "lockedAt": "2026-05-20T23:59:46.948Z",
+  "lockedAt": "2026-05-21T00:36:02.064Z",
   "totalCandidates": 8,
   "lockedQualifiedCount": 2,
   "lockedPasses": 6,
+  "scheduleValidationStatus": "SYNTHETIC_ONLY",
+  "scheduleSource": "data/fixtures/nfl/2025-week-1-schedule.fixture.json",
+  "syntheticFixture": true,
+  "realWeek1BacktestReady": false,
+  "invalidCandidateGames": 2,
   "recommendations": [
     {
       "propMarketId": "2025-w1-fixture-w1-pm-mahomes-passatt",
