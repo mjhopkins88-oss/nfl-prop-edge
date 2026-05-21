@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 
 type ActionName =
   | "readiness-check"
+  | "run-nflverse-ingestion"
   | "dry-run"
   | "paid-smoke"
   | "paid-week1"
@@ -184,14 +185,22 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("readiness-check")}
           />
           <ActionRow
-            label="2. Run smoke dry-run"
+            label="2. Run free nflverse ingestion"
+            description="Downloads public nflverse data and writes processed NFL files. No Odds API call."
+            buttonLabel="Run NFL ingestion"
+            disabled={!token || busy !== null}
+            busy={busy === "run-nflverse-ingestion"}
+            onRun={() => void runAction("run-nflverse-ingestion")}
+          />
+          <ActionRow
+            label="3. Run smoke dry-run"
             description="Plan + estimated credits. No API call."
             disabled={!token || busy !== null}
             busy={busy === "dry-run"}
             onRun={() => void runAction("dry-run")}
           />
           <PaidActionRow
-            label="3. Run paid smoke test"
+            label="4. Run paid smoke test"
             description="One snapshot. Requires ALLOW_REAL_ODDS_API_CALLS=true and confirmation text."
             confirmExpected={PAID_SMOKE_CONFIRM}
             confirmValue={paidSmokeConfirm}
@@ -206,7 +215,7 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("paid-smoke", paidSmokeConfirm)}
           />
           <PaidActionRow
-            label="4. Run paid Week 1 ingestion"
+            label="5. Run paid Week 1 ingestion"
             description="Locked unless the paid smoke test has succeeded first."
             confirmExpected={PAID_WEEK1_CONFIRM}
             confirmValue={paidWeek1Confirm}
@@ -222,7 +231,7 @@ export function AdminIngestionClient() {
             onRun={() => void runAction("paid-week1", paidWeek1Confirm)}
           />
           <ActionRow
-            label="5. Run Week 1 stored backtest"
+            label="6. Run Week 1 stored backtest"
             description="Pregame snapshot from stored data. No API call."
             disabled={!token || busy !== null}
             busy={busy === "stored-backtest"}
@@ -350,12 +359,14 @@ function ActionRow({
   disabled,
   busy,
   onRun,
+  buttonLabel = "Run",
 }: {
   label: string;
   description: string;
   disabled: boolean;
   busy: boolean;
   onRun: () => void;
+  buttonLabel?: string;
 }) {
   return (
     <div className="flex flex-col gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 py-2 md:flex-row md:items-center md:justify-between">
@@ -368,7 +379,7 @@ function ActionRow({
         disabled={disabled}
         className="rounded bg-zinc-700 px-3 py-1.5 text-sm text-zinc-100 hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {busy ? "Running…" : "Run"}
+        {busy ? "Running…" : buttonLabel}
       </button>
     </div>
   );
