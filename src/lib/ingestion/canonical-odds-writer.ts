@@ -89,8 +89,19 @@ export interface CanonicalWriterInputs {
     homeTeam: string;
     awayTeam: string;
   }[];
-  /** Optional roster lookup — playerName → team. When absent,
-   *  the canonical row's team/opponent stay empty. */
+  /** Optional per-week player stats. Used as the PRIMARY
+   *  player → team source because rosters are end-of-season
+   *  snapshots and miss mid-season trades. A row in
+   *  player_week_stats is the actual team the player played
+   *  for that week. */
+  playerWeekStats?: {
+    playerName: string;
+    team: string;
+    season: number;
+    week: number;
+  }[];
+  /** Optional roster lookup — playerName → team. Fallback only;
+   *  used when player_week_stats has no matching entry. */
   rosters?: {
     playerName: string;
     team: string;
@@ -106,6 +117,24 @@ export interface CanonicalBuildResult {
     droppedMissingMarket: number;
     droppedMissingGame: number;
     droppedMissingTeam: number;
+    droppedInvalidTeamForGame: number;
+    droppedAmbiguousTeam: number;
+    /** First 20 drop events with enough detail to debug a
+     *  schedule-validation failure post-hoc. */
+    droppedSample: {
+      reason:
+        | "missing-market"
+        | "missing-game"
+        | "missing-team"
+        | "invalid-team-for-game"
+        | "ambiguous-team";
+      gameId?: string;
+      expectedTeams?: string[];
+      inferredTeam?: string;
+      playerName?: string;
+      propType?: string;
+      sportsbook?: string;
+    }[];
   };
 }
 
@@ -155,11 +184,29 @@ export function buildCanonicalOddsRows(
     normalizedGameById.set(canonicalId, normalized);
   }
 
+  // Per-week player → team lookup (the PRIMARY source). One
+  // entry per (playerName, season, week) → set of teams seen.
+  // Per-week stats reflect the team the player ACTUALLY played
+  // for in that week, so they handle mid-season trades that the
+  // end-of-season rosters file would miss.
+  const playerTeamByWeek = new Map<string, Set<string>>();
+  const weekKey = (n: string, s: number, w: number): string =>
+    `${n}|${s}|${w}`;
+  for (const r of inputs.playerWeekStats ?? []) {
+    const team = normalizeTeamAbbreviation(r.team);
+    if (!team) continue;
+    const key = weekKey(r.playerName, r.season, r.week);
+    const set = playerTeamByWeek.get(key) ?? new Set<string>();
+    set.add(team);
+    playerTeamByWeek.set(key, set);
+  }
+
   // Player → team lookup, partitioned by season for stability.
   // Within a season, multiple rosters rows for the same player +
   // team (different weeks) collapse to one entry. Team values are
   // normalized as they're indexed so the resolver can match
-  // against the normalized game.
+  // against the normalized game. FALLBACK only — used when no
+  // per-week stat row exists for the player.
   const playerTeamBySeason = new Map<number, Map<string, Set<string>>>();
   for (const r of inputs.rosters ?? []) {
     const team = normalizeTeamAbbreviation(r.team);
@@ -175,32 +222,80 @@ export function buildCanonicalOddsRows(
     seasonMap.set(r.playerName, set);
   }
 
+  type TeamResolution =
+    | { team: string; status: "ok" }
+    | { team: ""; status: "missing" | "invalid" | "ambiguous" };
+
+  /**
+   * Strict participant-aware resolver. Only returns a team when
+   * it is one of the two teams in THIS game. A player whose
+   * roster entry shows a team that isn't a participant is
+   * dropped — never silently labelled with the wrong team.
+   *
+   *   · "missing"   — player not in rosters for this season at
+   *                   all (canonical writer just doesn't know
+   *                   who they are)
+   *   · "invalid"   — rosters knows the player but every team
+   *                   they appear on is NOT a participant of
+   *                   the actual game (e.g., Adonai Mitchell
+   *                   listed on NYJ but the prop is for the
+   *                   MIA @ IND game)
+   *   · "ambiguous" — player appears on BOTH the home and away
+   *                   team in the rosters (extremely rare —
+   *                   mid-season trade between the two teams in
+   *                   the same week). Drop rather than guess.
+   *   · "ok"        — exactly one of home/away matches.
+   */
   function resolveTeam(args: {
     playerName: string;
     season: number;
+    week: number;
     gameHome: string;
     gameAway: string;
-  }): string {
+  }): TeamResolution {
+    // Primary: per-week stats. The player actually played for
+    // that team that week, so this is authoritative.
+    const weekCandidates = playerTeamByWeek.get(
+      weekKey(args.playerName, args.season, args.week),
+    );
+    if (weekCandidates && weekCandidates.size > 0) {
+      const hasHome = weekCandidates.has(args.gameHome);
+      const hasAway = weekCandidates.has(args.gameAway);
+      if (hasHome && hasAway) return { team: "", status: "ambiguous" };
+      if (hasHome) return { team: args.gameHome, status: "ok" };
+      if (hasAway) return { team: args.gameAway, status: "ok" };
+      // Per-week stats exist but place the player on a team that
+      // isn't in this game. This is real signal (the player
+      // didn't actually play in this game) — drop.
+      return { team: "", status: "invalid" };
+    }
+    // Fallback: season-level rosters.
     const seasonMap = playerTeamBySeason.get(args.season);
     const candidates = seasonMap?.get(args.playerName);
-    if (!candidates || candidates.size === 0) return "";
-    // Common case: one team. Use it.
-    if (candidates.size === 1) {
-      return [...candidates][0]!;
+    if (!candidates || candidates.size === 0) {
+      return { team: "", status: "missing" };
     }
-    // Player switched teams mid-season. Pick the one that matches
-    // this game's home/away pair.
-    if (candidates.has(args.gameHome)) return args.gameHome;
-    if (candidates.has(args.gameAway)) return args.gameAway;
-    return "";
+    const hasHome = candidates.has(args.gameHome);
+    const hasAway = candidates.has(args.gameAway);
+    if (hasHome && hasAway) return { team: "", status: "ambiguous" };
+    if (hasHome) return { team: args.gameHome, status: "ok" };
+    if (hasAway) return { team: args.gameAway, status: "ok" };
+    return { team: "", status: "invalid" };
   }
 
   const out: CanonicalPropRow[] = [];
-  const diag = {
+  const diag: CanonicalBuildResult["diagnostics"] = {
     quotesProcessed: 0,
     droppedMissingMarket: 0,
     droppedMissingGame: 0,
     droppedMissingTeam: 0,
+    droppedInvalidTeamForGame: 0,
+    droppedAmbiguousTeam: 0,
+    droppedSample: [],
+  };
+  const SAMPLE_CAP = 20;
+  const recordDrop = (entry: CanonicalBuildResult["diagnostics"]["droppedSample"][number]): void => {
+    if (diag.droppedSample.length < SAMPLE_CAP) diag.droppedSample.push(entry);
   };
 
   for (const q of inputs.quotes) {
@@ -208,24 +303,95 @@ export function buildCanonicalOddsRows(
     const m = marketsByKey.get(q.market_key);
     if (!m) {
       diag.droppedMissingMarket += 1;
+      recordDrop({
+        reason: "missing-market",
+        sportsbook: q.book_name,
+      });
       continue;
     }
     const g = normalizedGameById.get(m.game_id);
     if (!g) {
       diag.droppedMissingGame += 1;
+      recordDrop({
+        reason: "missing-game",
+        playerName: m.player_name,
+        propType: m.prop_type,
+        sportsbook: q.book_name,
+      });
       continue;
     }
-    const team = resolveTeam({
+    const resolved = resolveTeam({
       playerName: m.player_name,
       season: g.season,
+      week: g.week,
       gameHome: g.homeTeam,
       gameAway: g.awayTeam,
     });
-    if (!team) {
-      diag.droppedMissingTeam += 1;
+    if (resolved.status !== "ok") {
+      // Count by reason so the migration result can explain
+      // exactly why rows were dropped.
+      const seasonMap = playerTeamBySeason.get(g.season);
+      const inferred = seasonMap?.get(m.player_name);
+      const inferredTeam =
+        inferred && inferred.size > 0 ? [...inferred].join("/") : undefined;
+      if (resolved.status === "missing") {
+        diag.droppedMissingTeam += 1;
+        recordDrop({
+          reason: "missing-team",
+          gameId: g.gameId,
+          expectedTeams: [g.awayTeam, g.homeTeam],
+          playerName: m.player_name,
+          propType: m.prop_type,
+          sportsbook: q.book_name,
+        });
+      } else if (resolved.status === "invalid") {
+        diag.droppedInvalidTeamForGame += 1;
+        recordDrop({
+          reason: "invalid-team-for-game",
+          gameId: g.gameId,
+          expectedTeams: [g.awayTeam, g.homeTeam],
+          inferredTeam,
+          playerName: m.player_name,
+          propType: m.prop_type,
+          sportsbook: q.book_name,
+        });
+      } else {
+        diag.droppedAmbiguousTeam += 1;
+        recordDrop({
+          reason: "ambiguous-team",
+          gameId: g.gameId,
+          expectedTeams: [g.awayTeam, g.homeTeam],
+          inferredTeam,
+          playerName: m.player_name,
+          propType: m.prop_type,
+          sportsbook: q.book_name,
+        });
+      }
       continue;
     }
+    const team = resolved.team;
     const opponent = team === g.homeTeam ? g.awayTeam : g.homeTeam;
+    // Final defence-in-depth: the writer never emits a row
+    // where team/opponent aren't valid participants or where
+    // team === opponent. resolveTeam already guarantees this,
+    // but the assert is cheap.
+    if (
+      (team !== g.homeTeam && team !== g.awayTeam) ||
+      (opponent !== g.homeTeam && opponent !== g.awayTeam) ||
+      team === opponent
+    ) {
+      diag.droppedInvalidTeamForGame += 1;
+      recordDrop({
+        reason: "invalid-team-for-game",
+        gameId: g.gameId,
+        expectedTeams: [g.awayTeam, g.homeTeam],
+        inferredTeam: `${team}/${opponent}`,
+        playerName: m.player_name,
+        propType: m.prop_type,
+        sportsbook: q.book_name,
+      });
+      continue;
+    }
     // The canonical `marketKey` is the short Odds API key
     // (player_pass_attempts etc.) — that's what the stored
     // loader's lookup expects. The legacy `market_key` column is
@@ -368,6 +534,7 @@ export function migrateLegacyToCanonical(args: {
   legacyQuotesPath?: string;
   gamesCsvPath?: string;
   rostersCsvPath?: string;
+  playerWeekStatsCsvPath?: string;
 }): MigrationResult {
   const root = args.processedRoot ?? path.join(process.cwd(), "data", "processed");
   const legacyMarkets =
@@ -378,7 +545,15 @@ export function migrateLegacyToCanonical(args: {
     args.gamesCsvPath ?? path.join(root, "nfl", "games.csv");
   const rostersCsv =
     args.rostersCsvPath ?? path.join(root, "nfl", "rosters.csv");
-  const sourcesInspected = [legacyMarkets, legacyQuotes, gamesCsv, rostersCsv];
+  const playerWeekStatsCsv =
+    args.playerWeekStatsCsvPath ?? path.join(root, "nfl", "player_week_stats.csv");
+  const sourcesInspected = [
+    legacyMarkets,
+    legacyQuotes,
+    gamesCsv,
+    rostersCsv,
+    playerWeekStatsCsv,
+  ];
 
   if (!fs.existsSync(legacyMarkets)) {
     return { status: "MISSING_LEGACY_MARKETS", sourcesInspected };
@@ -437,11 +612,33 @@ export function migrateLegacyToCanonical(args: {
       }))
     : undefined;
 
+  // Per-week stats — the authoritative source for which team
+  // a player ACTUALLY played for in a given week. Filtered to
+  // the target (season, week) at load time so the writer's
+  // weekly map stays small.
+  const playerWeekStats = fs.existsSync(playerWeekStatsCsv)
+    ? parseCsvRows(fs.readFileSync(playerWeekStatsCsv, "utf8"))
+        .map((r) => ({
+          playerName: r.playerName,
+          team: r.team,
+          season: Number(r.season),
+          week: Number(r.week),
+        }))
+        .filter(
+          (r) =>
+            r.season === args.season &&
+            r.week === args.week &&
+            r.playerName &&
+            r.team,
+        )
+    : undefined;
+
   const built = buildCanonicalOddsRows({
     markets,
     quotes,
     games,
     rosters,
+    playerWeekStats,
   });
 
   const inWeek = built.rows.filter(

@@ -1309,6 +1309,29 @@ async function main(argv: string[]): Promise<number> {
       const rosters = fs.existsSync(rostersCsv)
         ? parseCanonRosters(fs.readFileSync(rostersCsv, "utf8"))
         : undefined;
+      const playerWeekStatsCsv = path.join(
+        process.cwd(),
+        "data",
+        "processed",
+        "nfl",
+        "player_week_stats.csv",
+      );
+      const playerWeekStats = fs.existsSync(playerWeekStatsCsv)
+        ? parseCsvRows(fs.readFileSync(playerWeekStatsCsv, "utf8"))
+            .map((r) => ({
+              playerName: r.playerName,
+              team: r.team,
+              season: Number(r.season),
+              week: Number(r.week),
+            }))
+            .filter(
+              (r) =>
+                r.season === onlySeason &&
+                r.week === onlyWeek &&
+                r.playerName &&
+                r.team,
+            )
+        : undefined;
       const built = buildCanonicalOddsRows({
         markets: allMarkets.map((m) => ({
           market_key: m.market_key,
@@ -1334,6 +1357,7 @@ async function main(argv: string[]): Promise<number> {
           awayTeam: g.awayTeamAbbr,
         })),
         rosters,
+        playerWeekStats,
       });
       const wrote = writeCanonicalOddsCsv({
         rows: built.rows,
@@ -1342,7 +1366,7 @@ async function main(argv: string[]): Promise<number> {
       });
       log(
         "info",
-        `Wrote ${wrote.target} (${wrote.rowsWritten} canonical rows; quotes=${built.diagnostics.quotesProcessed} dropMissingTeam=${built.diagnostics.droppedMissingTeam} dropMissingGame=${built.diagnostics.droppedMissingGame})`,
+        `Wrote ${wrote.target} (${wrote.rowsWritten} canonical rows; quotes=${built.diagnostics.quotesProcessed} dropMissingTeam=${built.diagnostics.droppedMissingTeam} dropInvalidTeam=${built.diagnostics.droppedInvalidTeamForGame} dropAmbiguousTeam=${built.diagnostics.droppedAmbiguousTeam} dropMissingGame=${built.diagnostics.droppedMissingGame})`,
       );
     }
   } catch (err) {
