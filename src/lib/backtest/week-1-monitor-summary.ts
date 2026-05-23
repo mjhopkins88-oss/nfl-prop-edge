@@ -384,6 +384,8 @@ export interface MarketContextCalibrationCandidate {
   edge: number;
   confidence: number;
   riskScore: number;
+  dataQualityScore?: number;
+  volatilityLevel?: "low" | "medium" | "high";
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   productionQualified: boolean;
