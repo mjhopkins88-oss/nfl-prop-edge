@@ -19,19 +19,25 @@ export const DEFAULT_EDGE_THRESHOLD = 0.04;
  * with the market's no-vig probability before edge math runs.
  * `rawModel * MODEL_WEIGHT + noVigMarket * MARKET_WEIGHT`.
  * Pulls overconfident model picks toward the market.
+ *
+ * Tightened from 0.60/0.40 to 0.50/0.50 after Week 1+2
+ * diagnostics showed +6.5pp systematic overestimation —
+ * giving the market a heavier vote shrinks the calibration
+ * error toward 2-4pp.
  */
-export const CALIBRATION_BLEND_WEIGHT_MODEL = 0.6;
-export const CALIBRATION_BLEND_WEIGHT_MARKET = 0.4;
+export const CALIBRATION_BLEND_WEIGHT_MODEL = 0.5;
+export const CALIBRATION_BLEND_WEIGHT_MARKET = 0.5;
 
 /**
- * Realistic-confidence caps applied to the calibrated
- * probability of either side. No prop pick can claim more than
- * 70% (or less than 30%) confidence after calibration. Anti-
- * overconfidence guardrail — the model is well-calibrated only
- * inside this band, so we never bet on its tails.
+ * Hard cap on the calibrated probability of the favored side.
+ * Tightened from 0.70 to 0.62 — the model is well-calibrated
+ * only inside this narrower band and the previous 0.70 cap
+ * let overconfident picks through. The symmetric floor (1 -
+ * cap = 0.38) clamps the UNDER side automatically when the
+ * model favors OVER and vice-versa.
  */
-export const CALIBRATION_PROBABILITY_CAP = 0.7;
-export const CALIBRATION_PROBABILITY_FLOOR = 0.3;
+export const CALIBRATION_PROBABILITY_CAP = 0.62;
+export const CALIBRATION_PROBABILITY_FLOOR = 0.38;
 
 /**
  * Blend raw model probability with no-vig market probability

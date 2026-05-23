@@ -83,13 +83,13 @@ function main(): void {
     const r = makeReport("calibration constants exported");
     check(
       r,
-      CALIBRATION_BLEND_WEIGHT_MODEL === 0.6,
-      `MODEL weight=${CALIBRATION_BLEND_WEIGHT_MODEL}, expected 0.6`,
+      CALIBRATION_BLEND_WEIGHT_MODEL === 0.5,
+      `MODEL weight=${CALIBRATION_BLEND_WEIGHT_MODEL}, expected 0.5`,
     );
     check(
       r,
-      CALIBRATION_BLEND_WEIGHT_MARKET === 0.4,
-      `MARKET weight=${CALIBRATION_BLEND_WEIGHT_MARKET}, expected 0.4`,
+      CALIBRATION_BLEND_WEIGHT_MARKET === 0.5,
+      `MARKET weight=${CALIBRATION_BLEND_WEIGHT_MARKET}, expected 0.5`,
     );
     check(
       r,
@@ -100,13 +100,13 @@ function main(): void {
     );
     check(
       r,
-      CALIBRATION_PROBABILITY_CAP === 0.7,
-      `cap=${CALIBRATION_PROBABILITY_CAP}, expected 0.7`,
+      CALIBRATION_PROBABILITY_CAP === 0.62,
+      `cap=${CALIBRATION_PROBABILITY_CAP}, expected 0.62`,
     );
     check(
       r,
-      CALIBRATION_PROBABILITY_FLOOR === 0.3,
-      `floor=${CALIBRATION_PROBABILITY_FLOOR}, expected 0.3`,
+      CALIBRATION_PROBABILITY_FLOOR === 0.38,
+      `floor=${CALIBRATION_PROBABILITY_FLOOR}, expected 0.38`,
     );
     record(r);
     if (r.reasons.length === 0)
@@ -114,48 +114,48 @@ function main(): void {
     else console.log("[1] FAIL — constants");
   }
 
-  // 2. Blend math: 0.6 × raw + 0.4 × market.
-  //    raw = 0.65, market = 0.50 → 0.6×0.65 + 0.4×0.50 = 0.59.
+  // 2. Blend math: 0.5 × raw + 0.5 × market.
+  //    raw = 0.65, market = 0.50 → 0.5×0.65 + 0.5×0.50 = 0.575.
   {
-    const r = makeReport("blend math: 60/40");
+    const r = makeReport("blend math: 50/50");
     const v = calibrateModelProbability({
       rawModelProbability: 0.65,
       noVigMarketProbability: 0.5,
     });
-    check(r, Math.abs(v - 0.59) < 1e-9, `calibrated=${v}, expected 0.59`);
+    check(r, Math.abs(v - 0.575) < 1e-9, `calibrated=${v}, expected 0.575`);
     record(r);
     if (r.reasons.length === 0)
-      console.log("[2] PASS — blend math (60/40)");
+      console.log("[2] PASS — blend math (50/50)");
     else console.log("[2] FAIL — blend");
   }
 
-  // 3. Cap at 0.70 when raw is high.
-  //    raw = 0.95, market = 0.55 → blend = 0.79 → clamp to 0.70.
+  // 3. Cap at 0.62 when raw is high.
+  //    raw = 0.95, market = 0.55 → blend = 0.75 → clamp to 0.62.
   {
-    const r = makeReport("cap at 0.70 for over-confident raw");
+    const r = makeReport("cap at 0.62 for over-confident raw");
     const v = calibrateModelProbability({
       rawModelProbability: 0.95,
       noVigMarketProbability: 0.55,
     });
-    check(r, Math.abs(v - 0.7) < 1e-9, `calibrated=${v}, expected 0.70 (cap)`);
+    check(r, Math.abs(v - 0.62) < 1e-9, `calibrated=${v}, expected 0.62 (cap)`);
     record(r);
     if (r.reasons.length === 0)
-      console.log("[3] PASS — cap at 0.70");
+      console.log("[3] PASS — cap at 0.62");
     else console.log("[3] FAIL — cap");
   }
 
-  // 4. Floor at 0.30 when raw is low.
-  //    raw = 0.05, market = 0.45 → blend = 0.21 → clamp to 0.30.
+  // 4. Floor at 0.38 when raw is low.
+  //    raw = 0.05, market = 0.45 → blend = 0.25 → clamp to 0.38.
   {
-    const r = makeReport("floor at 0.30 for under-confident raw");
+    const r = makeReport("floor at 0.38 for under-confident raw");
     const v = calibrateModelProbability({
       rawModelProbability: 0.05,
       noVigMarketProbability: 0.45,
     });
-    check(r, Math.abs(v - 0.3) < 1e-9, `calibrated=${v}, expected 0.30 (floor)`);
+    check(r, Math.abs(v - 0.38) < 1e-9, `calibrated=${v}, expected 0.38 (floor)`);
     record(r);
     if (r.reasons.length === 0)
-      console.log("[4] PASS — floor at 0.30");
+      console.log("[4] PASS — floor at 0.38");
     else console.log("[4] FAIL — floor");
   }
 
