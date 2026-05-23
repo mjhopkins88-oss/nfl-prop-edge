@@ -18,6 +18,7 @@ type ActionName =
   | "paid-week1"
   | "paid-week-subset"
   | "paid-week-full"
+  | "paid-season-full"
   | "migrate-odds-to-canonical"
   | "stored-backtest"
   | "grade-week1-stored"
@@ -154,6 +155,12 @@ export function AdminIngestionClient() {
   // current sandbox state (only W1-W2 ingested).
   const [seasonStartWeekInput, setSeasonStartWeekInput] = useState("1");
   const [seasonEndWeekInput, setSeasonEndWeekInput] = useState("2");
+  // Paid-season-full inputs — startWeek + endWeek + the
+  // season-wide confirmation string. Confirm is REQUIRED for
+  // execute mode; empty = dry-run preview only.
+  const [paidSeasonStartInput, setPaidSeasonStartInput] = useState("1");
+  const [paidSeasonEndInput, setPaidSeasonEndInput] = useState("8");
+  const [paidSeasonConfirm, setPaidSeasonConfirm] = useState("");
 
   const refreshStatus = useCallback(
     async (week?: number) => {
@@ -445,6 +452,18 @@ export function AdminIngestionClient() {
         onRun={runAction}
       />
 
+      <PaidSeasonFullSection
+        token={token}
+        busy={busy}
+        startWeekInput={paidSeasonStartInput}
+        endWeekInput={paidSeasonEndInput}
+        confirmText={paidSeasonConfirm}
+        onStartWeekChange={setPaidSeasonStartInput}
+        onEndWeekChange={setPaidSeasonEndInput}
+        onConfirmChange={setPaidSeasonConfirm}
+        onRun={runAction}
+      />
+
       {lastResult ? <ResultPanel result={lastResult} /> : null}
     </div>
   );
@@ -665,6 +684,158 @@ function SeasonStoredBacktestSection({
         edge threshold (4%) and marketContext gate (0.45) are
         unchanged.
       </p>
+    </section>
+  );
+}
+
+function PaidSeasonFullSection({
+  token,
+  busy,
+  startWeekInput,
+  endWeekInput,
+  confirmText,
+  onStartWeekChange,
+  onEndWeekChange,
+  onConfirmChange,
+  onRun,
+}: {
+  token: string;
+  busy: ActionName | null;
+  startWeekInput: string;
+  endWeekInput: string;
+  confirmText: string;
+  onStartWeekChange: (s: string) => void;
+  onEndWeekChange: (s: string) => void;
+  onConfirmChange: (s: string) => void;
+  onRun: (
+    action: ActionName,
+    confirmText?: string,
+    week?: number,
+    weeks?: number[],
+    seasonRange?: { season?: number; startWeek?: number; endWeek?: number },
+  ) => Promise<void>;
+}) {
+  const parsedStart = Number(startWeekInput.trim());
+  const parsedEnd = Number(endWeekInput.trim());
+  const startOk =
+    Number.isFinite(parsedStart) && parsedStart >= 1 && parsedStart <= 22;
+  const endOk =
+    Number.isFinite(parsedEnd) && parsedEnd >= 1 && parsedEnd <= 22;
+  const rangeOk = startOk && endOk && parsedStart <= parsedEnd;
+  return (
+    <section
+      className="rounded-lg border border-coral-700/40 bg-zinc-900 p-4"
+      data-testid="admin-paid-season-full-section"
+    >
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-coral-300">
+        Paid Season Full Ingestion (gated)
+      </h2>
+      <p className="mt-1 text-xs text-zinc-400">
+        Bulk historical odds ingestion for [startWeek, endWeek].
+        <strong className="text-coral-300"> DEFAULT IS DRY-RUN.</strong>{" "}
+        Without a confirm string, this just reports which weeks are
+        missing in <code>StoredPropMarket</code> + the total credit
+        estimate. To actually fire paid API calls, all of the
+        following must be true: <code>ALLOW_REAL_ODDS_API_CALLS=true</code>,
+        <code>ODDS_API_KEY</code> set, a prior <code>paid-smoke</code>
+        success, AND the exact season-wide confirm string (which
+        embeds the computed total credit number) typed verbatim.
+        Only MISSING weeks get ingested — present weeks are skipped.
+        Hard cap: 10 000 credits per execute.
+      </p>
+      <div className="mt-3 flex flex-wrap items-baseline gap-3">
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="paid-season-start-week"
+        >
+          Start week
+        </label>
+        <input
+          id="paid-season-start-week"
+          type="number"
+          min={1}
+          max={22}
+          value={startWeekInput}
+          onChange={(e) => onStartWeekChange(e.target.value)}
+          disabled={!token || busy !== null}
+          className="w-20 rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100"
+          data-testid="admin-paid-season-start-week-input"
+        />
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="paid-season-end-week"
+        >
+          End week
+        </label>
+        <input
+          id="paid-season-end-week"
+          type="number"
+          min={1}
+          max={22}
+          value={endWeekInput}
+          onChange={(e) => onEndWeekChange(e.target.value)}
+          disabled={!token || busy !== null}
+          className="w-20 rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100"
+          data-testid="admin-paid-season-end-week-input"
+        />
+      </div>
+      <div className="mt-3">
+        <label
+          className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="paid-season-confirm"
+        >
+          Season-wide confirm (empty = dry-run preview)
+        </label>
+        <input
+          id="paid-season-confirm"
+          type="text"
+          value={confirmText}
+          onChange={(e) => onConfirmChange(e.target.value)}
+          placeholder='e.g. RUN FULL SEASON 2025 W1-W8 INGESTION 5176 CREDITS'
+          disabled={!token || busy !== null}
+          className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100 placeholder:text-zinc-600"
+          data-testid="admin-paid-season-confirm-input"
+        />
+        <p className="mt-1 text-[10px] text-zinc-500">
+          Leave empty to run a dry-run preview. The preview tells
+          you the exact confirm string to copy back here to
+          execute.
+        </p>
+      </div>
+      <button
+        onClick={() =>
+          void onRun(
+            "paid-season-full",
+            confirmText.trim() === "" ? undefined : confirmText.trim(),
+            undefined,
+            undefined,
+            rangeOk
+              ? {
+                  startWeek: parsedStart,
+                  endWeek: parsedEnd,
+                }
+              : undefined,
+          )
+        }
+        disabled={!token || busy !== null || !rangeOk}
+        className={
+          "mt-3 rounded px-3 py-1.5 text-xs font-semibold " +
+          (!token || busy !== null || !rangeOk
+            ? "bg-zinc-800 text-zinc-600"
+            : confirmText.trim() === ""
+              ? "bg-sea-600 text-white hover:bg-sea-500"
+              : "bg-coral-700 text-white hover:bg-coral-600")
+        }
+        data-testid="admin-paid-season-full-run-button"
+      >
+        {busy === "paid-season-full"
+          ? confirmText.trim() === ""
+            ? "Previewing…"
+            : "Spending credits…"
+          : confirmText.trim() === ""
+            ? "Dry-run: Preview Coverage + Credit Estimate"
+            : "Execute Paid Season Full Ingestion"}
+      </button>
     </section>
   );
 }
