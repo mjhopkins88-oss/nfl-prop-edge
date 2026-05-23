@@ -30,6 +30,7 @@ import type { PropType } from "../types";
 import type { RealWeekCandidate } from "./real-week-candidate-builder";
 import type { GradedCandidate } from "./week-1-grading";
 import { rawMarketContextScore } from "./stored-candidate-scorecard";
+import type { SignalFeatures } from "./signal-features";
 
 export const PRODUCTION_MARKET_CONTEXT_GATE = 0.45;
 
@@ -55,6 +56,11 @@ export interface CalibrationCandidate {
    *  New field — older persisted calibrations won't carry it;
    *  the composite ranking treats `undefined` as medium (0.50). */
   volatilityLevel?: "low" | "medium" | "high";
+  /** Diagnostic mispricing features computed from the
+   *  candidate's strict-before history. Surfaced for the
+   *  signal-quality audit; never feeds qualification. Optional
+   *  so older persisted calibrations still load. */
+  signalFeatures?: SignalFeatures;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   /** Was already qualified in production? When true, the
@@ -298,6 +304,7 @@ function buildGateResult(args: {
       riskScore: s.riskScore,
       dataQualityScore: s.dataQualityScore,
       volatilityLevel: s.volatilityLevel,
+      signalFeatures: s.signalFeatures,
       marketContextScoreClamped: s.marketContextScore,
       marketContextScoreRaw: rawMarketContextScore(c),
       productionQualified: s.qualified,

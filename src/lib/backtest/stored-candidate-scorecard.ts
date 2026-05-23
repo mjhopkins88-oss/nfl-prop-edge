@@ -40,6 +40,10 @@ import { selectedEdge, selectedModelProbability } from "../model/prop-opportunit
 import type { NflPlayerWeekStat } from "../ingestion/nflverse-types";
 import type { PropType } from "../types";
 import type { RealWeekCandidate } from "./real-week-candidate-builder";
+import {
+  computeSignalFeatures,
+  type SignalFeatures,
+} from "./signal-features";
 
 const RECENT_WINDOW = 3;
 
@@ -85,6 +89,11 @@ export interface StoredCandidateScorecard {
   failReasons: string[];
   projectedMean: number;
   projectedStdDev: number;
+  /** Diagnostic mispricing features computed from the
+   *  candidate's strict-before player history. Never feeds
+   *  qualification — used only by the edge-slice diagnostic to
+   *  identify which signals predict winning bets. */
+  signalFeatures?: SignalFeatures;
 }
 
 export interface EvaluatedRealWeekCandidate extends RealWeekCandidate {
@@ -338,7 +347,20 @@ export function applyScorecardToCandidates(args: {
       weekCandidates,
     });
     const decision = buildPropDecisionScorecard(scorecardInput);
-    out.push({ ...c, scorecard: projectionToScorecard({ scorecard: decision }) });
+    const scorecard = projectionToScorecard({ scorecard: decision });
+    // Diagnostic mispricing features — pure analysis surface,
+    // never fed back into qualification. Computed off the same
+    // strict-before history the scorecard already consumed.
+    scorecard.signalFeatures = computeSignalFeatures({
+      propType: c.propType,
+      overOdds: c.overOdds,
+      underOdds: c.underOdds,
+      modelEdge: scorecard.edge,
+      currentSeason: c.season,
+      currentWeek: c.week,
+      history,
+    });
+    out.push({ ...c, scorecard });
   }
   return out;
 }
