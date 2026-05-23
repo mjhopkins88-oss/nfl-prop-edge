@@ -28,9 +28,72 @@ export interface EdgeSliceCandidate {
   edge: number;
   modelProbability: number;
   marketProbability: number;
+  confidence: number;
+  dataQualityScore: number;
+  /** Numeric volatility score derived from the scorecard's
+   *  volatilityLevel: low → 0.25, medium → 0.50, high → 0.75.
+   *  Defaults to 0.50 (medium) when the scorecard didn't carry
+   *  a level. Used by the composite ranking — lower volatility
+   *  contributes more to the score via `(1 - volatilityScore)`. */
+  volatilityScore: number;
+  /** `true` when the calibration candidate carried an explicit
+   *  volatilityLevel (i.e. came from a recent scorecard pass).
+   *  Older persisted calibrations default to medium and set
+   *  this to `false`. */
+  volatilityLevelPresent: boolean;
+  /** `true` when the calibration candidate carried an explicit
+   *  dataQualityScore. Older persisted calibrations default to
+   *  0.50 and set this to `false`. */
+  dataQualityScorePresent: boolean;
   outcome: "WIN" | "LOSS" | "PUSH" | "NO_DATA";
   profitPerUnit: number;
   productionQualified: boolean;
+  /** Composite score for the diagnostic ranking. See
+   *  `computeCompositeScore` for the exact formula. */
+  compositeScore: number;
+}
+
+const DEFAULT_DATA_QUALITY = 0.5;
+const DEFAULT_VOLATILITY_SCORE = 0.5;
+
+/** Map the scorecard's categorical volatilityLevel into a
+ *  numeric score. Lower number = lower volatility = better. */
+export function volatilityScoreFromLevel(
+  level: "low" | "medium" | "high" | undefined,
+): number {
+  if (level === "low") return 0.25;
+  if (level === "high") return 0.75;
+  // medium and undefined both map to 0.50 — the user explicitly
+  // asked for the "missing → neutral 0.50" fallback.
+  return 0.5;
+}
+
+/**
+ * Composite straight-bet ranking score. Higher = better. The
+ * weights match the spec the user proposed:
+ *
+ *   compositeScore =
+ *       calibratedEdge       × 0.40
+ *     + confidenceScore      × 0.20
+ *     + dataQualityScore     × 0.20
+ *     + (1 - volatilityScore) × 0.20
+ *
+ * Inputs are expected on a roughly 0..1 scale. Edge can exceed
+ * 1 in theory but in practice the calibration cap keeps it
+ * inside ±0.25 — the composite is meaningful, not bounded.
+ */
+export function computeCompositeScore(args: {
+  calibratedEdge: number;
+  confidenceScore: number;
+  dataQualityScore: number;
+  volatilityScore: number;
+}): number {
+  return (
+    args.calibratedEdge * 0.4 +
+    args.confidenceScore * 0.2 +
+    args.dataQualityScore * 0.2 +
+    (1 - args.volatilityScore) * 0.2
+  );
 }
 
 export interface EdgeSliceMetrics {
@@ -48,6 +111,8 @@ export interface EdgeSliceMetrics {
   avgImpliedProbPct: number;
   avgModelProbPct: number;
   calibrationErrorPp: number;
+  /** Optional — populated on composite-ranking slices only. */
+  avgCompositeScore?: number;
 }
 
 export interface EdgeSliceReport {
@@ -60,6 +125,27 @@ export interface EdgeSliceReport {
   weeksWithoutCalibration: number[];
   candidateCount: number;
   slices: EdgeSliceMetrics[];
+  /** Diagnostic-only composite ranking slices. Ranks the
+   *  gate-0.40 candidate pool by `compositeScore` and reports
+   *  performance for the top 10 / 15 / 20 / 25 picks — answers
+   *  "does ranking by composite beat the edge ≥ 4% baseline?".
+   *  Never changes production thresholds. */
+  compositeSlices: EdgeSliceMetrics[];
+  /** Per-candidate composite-score input stats so an operator
+   *  can audit how the composite was built without re-running
+   *  the report. Populated when at least one candidate carried
+   *  the new (dataQuality + volatility) signals. */
+  compositeInputs: {
+    /** Count of candidates that carried an explicit
+     *  dataQualityScore — older persisted calibrations default
+     *  to 0.50. */
+    candidatesWithDataQuality: number;
+    /** Count of candidates that carried an explicit
+     *  volatilityLevel — older persisted calibrations default
+     *  to medium (0.50). */
+    candidatesWithVolatility: number;
+    candidatesTotal: number;
+  };
   answers: {
     roiImprovesWithEdge: "yes" | "no" | "mixed" | "insufficient-data";
     anyPositiveRoi: boolean;
@@ -71,6 +157,12 @@ export interface EdgeSliceReport {
       | "mixed"
       | "insufficient-data";
     profitableEdgeThresholdPct: number | null;
+    /** Comparative answer — does ranking the gate-0.40 pool by
+     *  compositeScore (top N) outperform the existing edge ≥ 4%
+     *  filter? `yes` when any composite slice beats the
+     *  baseline's ROI; `no` when none does; `tie` when at
+     *  least one matches it within 0.1pp. */
+    compositeBeatsEdgeBaseline: "yes" | "no" | "tie" | "insufficient-data";
   };
   /** Plain-English headline summary for the admin action's
    *  `summary` field. */
@@ -89,6 +181,19 @@ export function pickCandidatesFromSnapshots(
     const cal = snap.graded?.marketContextCalibration;
     if (!cal) continue;
     for (const c of cal.gate040.candidates) {
+      const dataQualityScorePresent =
+        typeof c.dataQualityScore === "number";
+      const volatilityLevelPresent = c.volatilityLevel !== undefined;
+      const dataQualityScore = dataQualityScorePresent
+        ? (c.dataQualityScore as number)
+        : DEFAULT_DATA_QUALITY;
+      const volatilityScore = volatilityScoreFromLevel(c.volatilityLevel);
+      const compositeScore = computeCompositeScore({
+        calibratedEdge: c.edge,
+        confidenceScore: c.confidence,
+        dataQualityScore,
+        volatilityScore,
+      });
       out.push({
         week: snap.week,
         candidateId: c.candidateId,
@@ -97,9 +202,15 @@ export function pickCandidatesFromSnapshots(
         edge: c.edge,
         modelProbability: c.modelProbability,
         marketProbability: c.marketProbability,
+        confidence: c.confidence,
+        dataQualityScore,
+        volatilityScore,
+        volatilityLevelPresent,
+        dataQualityScorePresent,
         outcome: c.outcome,
         profitPerUnit: c.profitPerUnit,
         productionQualified: c.productionQualified,
+        compositeScore,
       });
     }
   }
@@ -110,6 +221,9 @@ function computeSlice(args: {
   label: string;
   edgeFloor: number | null;
   candidates: EdgeSliceCandidate[];
+  /** When true, also computes avgCompositeScore — used by the
+   *  top-N composite slices. */
+  withComposite?: boolean;
 }): EdgeSliceMetrics {
   let wins = 0;
   let losses = 0;
@@ -119,6 +233,7 @@ function computeSlice(args: {
   let sumEdge = 0;
   let sumModelProb = 0;
   let sumMarketProb = 0;
+  let sumComposite = 0;
   for (const c of args.candidates) {
     if (c.outcome === "WIN") wins += 1;
     else if (c.outcome === "LOSS") losses += 1;
@@ -128,13 +243,14 @@ function computeSlice(args: {
     sumEdge += c.edge;
     sumModelProb += c.modelProbability;
     sumMarketProb += c.marketProbability;
+    sumComposite += c.compositeScore;
   }
   const decisive = wins + losses;
   const graded = wins + losses + pushes;
   const n = args.candidates.length;
   const hitRatePct = decisive > 0 ? (wins / decisive) * 100 : 0;
   const avgModelProbPct = n > 0 ? (sumModelProb / n) * 100 : 0;
-  return {
+  const metrics: EdgeSliceMetrics = {
     label: args.label,
     edgeFloor: args.edgeFloor,
     plays: n,
@@ -150,6 +266,41 @@ function computeSlice(args: {
     avgModelProbPct,
     calibrationErrorPp: avgModelProbPct - hitRatePct,
   };
+  if (args.withComposite) {
+    metrics.avgCompositeScore = n > 0 ? sumComposite / n : 0;
+  }
+  return metrics;
+}
+
+/**
+ * Build the top-N-by-composite-score slices. The candidate
+ * pool is the same gate-0.40 set the edge-floor slices read.
+ * For each N in [10, 15, 20, 25] we sort the pool by
+ * compositeScore desc, take the top N, and compute the slice
+ * metrics — exact same arithmetic the edge-floor slices use,
+ * so the two families are directly comparable.
+ */
+export function buildCompositeSlices(args: {
+  candidates: ReadonlyArray<EdgeSliceCandidate>;
+  ns?: number[];
+}): EdgeSliceMetrics[] {
+  const ranked = [...args.candidates].sort(
+    (a, b) => b.compositeScore - a.compositeScore,
+  );
+  const ns = args.ns ?? [10, 15, 20, 25];
+  const slices: EdgeSliceMetrics[] = [];
+  for (const n of ns) {
+    const top = ranked.slice(0, n);
+    slices.push(
+      computeSlice({
+        label: `top ${n} by compositeScore`,
+        edgeFloor: null,
+        candidates: top,
+        withComposite: true,
+      }),
+    );
+  }
+  return slices;
 }
 
 function pad(s: string | number, n: number, align: "L" | "R" = "L"): string {
@@ -186,11 +337,16 @@ function formatSlice(s: EdgeSliceMetrics): string {
   return lines.join("\n");
 }
 
-function buildAnswers(slices: ReadonlyArray<EdgeSliceMetrics>): EdgeSliceReport["answers"] {
+function buildAnswers(args: {
+  slices: ReadonlyArray<EdgeSliceMetrics>;
+  compositeSlices: ReadonlyArray<EdgeSliceMetrics>;
+}): EdgeSliceReport["answers"] {
+  const slices = args.slices;
   const edgeOrdered = slices
     .filter((s) => s.edgeFloor !== null)
     .sort((a, b) => (a.edgeFloor ?? 0) - (b.edgeFloor ?? 0));
-  const populated = slices.filter((s) => s.plays > 0);
+  const allSlices = [...slices, ...args.compositeSlices];
+  const populated = allSlices.filter((s) => s.plays > 0);
   const best = populated.length === 0
     ? null
     : [...populated].sort((a, b) => b.roiPct - a.roiPct)[0];
@@ -225,6 +381,28 @@ function buildAnswers(slices: ReadonlyArray<EdgeSliceMetrics>): EdgeSliceReport[
       break;
     }
   }
+  // Composite vs edge-baseline comparison. The baseline is the
+  // `edge ≥ 4%` slice (the operator's current production-style
+  // floor). We compare its ROI to each top-N composite slice;
+  // the answer is `yes` when any composite slice beats it by
+  // more than 0.1pp, `tie` when at least one matches it within
+  // 0.1pp, `no` otherwise.
+  const baseline = slices.find((s) => s.edgeFloor === 0.04);
+  let compositeBeatsEdgeBaseline: EdgeSliceReport["answers"]["compositeBeatsEdgeBaseline"] =
+    "insufficient-data";
+  const populatedComposites = args.compositeSlices.filter((s) => s.plays > 0);
+  if (baseline && baseline.plays > 0 && populatedComposites.length > 0) {
+    let beats = false;
+    let ties = false;
+    for (const c of populatedComposites) {
+      const diff = c.roiPct - baseline.roiPct;
+      if (diff > 0.1) beats = true;
+      else if (Math.abs(diff) <= 0.1) ties = true;
+    }
+    if (beats) compositeBeatsEdgeBaseline = "yes";
+    else if (ties) compositeBeatsEdgeBaseline = "tie";
+    else compositeBeatsEdgeBaseline = "no";
+  }
   return {
     roiImprovesWithEdge,
     anyPositiveRoi: populated.some((s) => s.roiPct > 0),
@@ -232,6 +410,7 @@ function buildAnswers(slices: ReadonlyArray<EdgeSliceMetrics>): EdgeSliceReport[
     bestSliceRoiPct: best ? best.roiPct : null,
     systematicOverestimation,
     profitableEdgeThresholdPct,
+    compositeBeatsEdgeBaseline,
   };
 }
 
@@ -241,6 +420,8 @@ function formatReport(args: {
   weeksWithoutCalibration: number[];
   candidateCount: number;
   slices: EdgeSliceMetrics[];
+  compositeSlices: EdgeSliceMetrics[];
+  compositeInputs: EdgeSliceReport["compositeInputs"];
   answers: EdgeSliceReport["answers"];
 }): string {
   const lines: string[] = [];
@@ -293,6 +474,61 @@ function formatReport(args: {
     lines.push("");
   }
 
+  // Composite ranking section — diagnostic-only. The same
+  // gate-0.40 candidate pool ranked by `compositeScore` rather
+  // than the edge floor. Helps the operator see whether
+  // top-N-by-composite would have outperformed the existing
+  // edge ≥ 4% baseline.
+  lines.push(
+    "=== Composite ranking · DIAGNOSTIC ONLY · no threshold change ===",
+  );
+  lines.push(
+    `compositeScore = calibratedEdge×0.40 + confidence×0.20 + dataQuality×0.20 + (1−volatilityScore)×0.20`,
+  );
+  lines.push(
+    `Composite inputs available: dataQuality=${args.compositeInputs.candidatesWithDataQuality}/${args.compositeInputs.candidatesTotal} candidates, volatility=${args.compositeInputs.candidatesWithVolatility}/${args.compositeInputs.candidatesTotal} candidates. ` +
+      `Missing values default to 0.50 (neutral) so old persisted calibrations still rank without crashing.`,
+  );
+  lines.push("");
+  lines.push(
+    pad("Slice", 36) +
+      pad("Plays", 7, "R") +
+      pad("W-L", 10, "R") +
+      pad("Hit", 8, "R") +
+      pad("ROI", 9, "R") +
+      pad("Units", 9, "R") +
+      pad("Edge", 8, "R") +
+      pad("ModelP", 9, "R") +
+      pad("CalErr", 9, "R") +
+      pad("AvgComp", 9, "R"),
+  );
+  lines.push("-".repeat(113));
+  for (const s of args.compositeSlices) {
+    lines.push(
+      pad(s.label, 36) +
+        pad(s.plays, 7, "R") +
+        pad(`${s.wins}-${s.losses}`, 10, "R") +
+        pad(`${s.hitRatePct.toFixed(1)}%`, 8, "R") +
+        pad(`${s.roiPct >= 0 ? "+" : ""}${s.roiPct.toFixed(1)}%`, 9, "R") +
+        pad(`${s.unitsProfit >= 0 ? "+" : ""}${s.unitsProfit.toFixed(2)}`, 9, "R") +
+        pad(`${s.avgEdgePct.toFixed(1)}%`, 8, "R") +
+        pad(`${s.avgModelProbPct.toFixed(1)}%`, 9, "R") +
+        pad(
+          `${s.calibrationErrorPp >= 0 ? "+" : ""}${s.calibrationErrorPp.toFixed(1)}pp`,
+          9,
+          "R",
+        ) +
+        pad(
+          s.avgCompositeScore !== undefined
+            ? s.avgCompositeScore.toFixed(3)
+            : "—",
+          9,
+          "R",
+        ),
+    );
+  }
+  lines.push("");
+
   lines.push("=== Answers ===");
   lines.push(
     `1. Does ROI improve as edge threshold increases? ${args.answers.roiImprovesWithEdge.toUpperCase()}`,
@@ -314,6 +550,9 @@ function formatReport(args: {
         ? `≥ ${args.answers.profitableEdgeThresholdPct}%`
         : "NONE — no edge slice in this set produced positive ROI"
     }`,
+  );
+  lines.push(
+    `5. Does composite ranking beat the edge ≥ 4% baseline?    ${args.answers.compositeBeatsEdgeBaseline.toUpperCase()}`,
   );
   lines.push(
     "\n--- DIAGNOSTIC ONLY · production threshold (0.45) unchanged · read-only · no APIs called · no re-grading. ---",
@@ -377,17 +616,29 @@ export function buildEdgeSliceReport(args: {
       candidates: candidates.filter((c) => c.productionQualified),
     }),
   ];
-  const answers = buildAnswers(slices);
+  const compositeSlices = buildCompositeSlices({ candidates });
+  const compositeInputs: EdgeSliceReport["compositeInputs"] = {
+    candidatesWithDataQuality: candidates.filter(
+      (c) => c.dataQualityScorePresent,
+    ).length,
+    candidatesWithVolatility: candidates.filter(
+      (c) => c.volatilityLevelPresent,
+    ).length,
+    candidatesTotal: candidates.length,
+  };
+  const answers = buildAnswers({ slices, compositeSlices });
   const headline =
     weeksWithCalibration.length === 0
       ? `No calibration data found for the requested weeks. Re-grade ${args.weeksRequested.map((w) => `W${w}`).join(", ")} first to persist marketContextCalibration.`
-      : `Edge slices over ${candidates.length} plays from ${weeksWithCalibration.map((w) => `W${w}`).join(", ")}. Best slice: ${answers.bestSliceLabel ?? "(none)"} → ROI ${answers.bestSliceRoiPct !== null ? `${answers.bestSliceRoiPct >= 0 ? "+" : ""}${answers.bestSliceRoiPct.toFixed(1)}%` : "(no graded plays)"}. Systematic overestimation: ${answers.systematicOverestimation.toUpperCase()}.`;
+      : `Edge slices over ${candidates.length} plays from ${weeksWithCalibration.map((w) => `W${w}`).join(", ")}. Best slice: ${answers.bestSliceLabel ?? "(none)"} → ROI ${answers.bestSliceRoiPct !== null ? `${answers.bestSliceRoiPct >= 0 ? "+" : ""}${answers.bestSliceRoiPct.toFixed(1)}%` : "(no graded plays)"}. Composite vs edge ≥ 4%: ${answers.compositeBeatsEdgeBaseline.toUpperCase()}. Systematic overestimation: ${answers.systematicOverestimation.toUpperCase()}.`;
   const formatted = formatReport({
     weeksRequested: args.weeksRequested,
     weeksWithCalibration,
     weeksWithoutCalibration,
     candidateCount: candidates.length,
     slices,
+    compositeSlices,
+    compositeInputs,
     answers,
   });
   return {
@@ -400,6 +651,8 @@ export function buildEdgeSliceReport(args: {
     weeksWithoutCalibration,
     candidateCount: candidates.length,
     slices,
+    compositeSlices,
+    compositeInputs,
     answers,
     headline,
     formatted,

@@ -47,6 +47,14 @@ export interface CalibrationCandidate {
   edge: number;
   confidence: number;
   riskScore: number;
+  /** Data-quality bucket score the scorecard saw (0..1). New
+   *  field — older persisted calibrations won't carry it; the
+   *  composite ranking falls back to a 0.50 neutral default. */
+  dataQualityScore?: number;
+  /** Volatility level the scorecard assigned to this projection.
+   *  New field — older persisted calibrations won't carry it;
+   *  the composite ranking treats `undefined` as medium (0.50). */
+  volatilityLevel?: "low" | "medium" | "high";
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   /** Was already qualified in production? When true, the
@@ -288,6 +296,8 @@ function buildGateResult(args: {
       edge: s.edge,
       confidence: s.confidence,
       riskScore: s.riskScore,
+      dataQualityScore: s.dataQualityScore,
+      volatilityLevel: s.volatilityLevel,
       marketContextScoreClamped: s.marketContextScore,
       marketContextScoreRaw: rawMarketContextScore(c),
       productionQualified: s.qualified,
