@@ -43,7 +43,10 @@ import {
   validateAsOfFairness,
   formatAsOfReport,
 } from "../backtest/as-of-validation";
-import { loadProcessedPlayerWeekStatsStrict } from "../backtest/processed-nfl-loader";
+import {
+  loadProcessedPlayerWeekStatsStrict,
+  loadProcessedTeamWeekStatsStrict,
+} from "../backtest/processed-nfl-loader";
 import {
   applyScorecardToCandidates,
   buildPlayerHistoryByName,
@@ -1597,9 +1600,19 @@ export async function runAdminAction(
         week,
         playerWeekStats: stats.rows,
       });
+      // Team week stats are optional — loaded best-effort to
+      // enable the WR receptions PROE diagnostic signal. When
+      // the file is missing we just skip it and the signal
+      // falls back to neutral.
+      const teamStats = loadProcessedTeamWeekStatsStrict(
+        path.join(repoRoot, "data", "processed", "nfl"),
+      );
+      const teamHistory =
+        teamStats.status === "READY" ? teamStats.rows : undefined;
       const evaluatedCandidates = applyScorecardToCandidates({
         candidates: built.candidates,
         playerHistoryByName,
+        teamHistory,
       });
       // As-of fairness validation. Confirms every candidate's
       // odds were captured BEFORE kickoff and every attached

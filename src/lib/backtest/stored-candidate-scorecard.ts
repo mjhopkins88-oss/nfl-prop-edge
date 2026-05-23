@@ -37,9 +37,20 @@ import {
   type ProjectionContext,
 } from "../model/prop-projection-engine";
 import { selectedEdge, selectedModelProbability } from "../model/prop-opportunity";
-import type { NflPlayerWeekStat } from "../ingestion/nflverse-types";
+import type {
+  NflPlayerWeekStat,
+  NflTeamWeekStat,
+} from "../ingestion/nflverse-types";
 import type { PropType } from "../types";
 import type { RealWeekCandidate } from "./real-week-candidate-builder";
+import {
+  computeSignalFeatures,
+  type SignalFeatures,
+} from "./signal-features";
+import {
+  computeWrReceptionsSignals,
+  type WrReceptionsSignals,
+} from "./wr-receptions-signals";
 
 const RECENT_WINDOW = 3;
 
@@ -85,6 +96,15 @@ export interface StoredCandidateScorecard {
   failReasons: string[];
   projectedMean: number;
   projectedStdDev: number;
+  /** Diagnostic mispricing features computed from the
+   *  candidate's strict-before player history. Never feeds
+   *  qualification — used only by the edge-slice diagnostic to
+   *  identify which signals predict winning bets. */
+  signalFeatures?: SignalFeatures;
+  /** WR-receptions-specific diagnostic signals. Populated
+   *  only when the candidate is a WR RECEPTIONS prop with
+   *  enough strict-before history. Never feeds qualification. */
+  wrReceptionsSignals?: WrReceptionsSignals;
 }
 
 export interface EvaluatedRealWeekCandidate extends RealWeekCandidate {
@@ -327,6 +347,11 @@ function projectionToScorecard(args: {
 export function applyScorecardToCandidates(args: {
   candidates: readonly RealWeekCandidate[];
   playerHistoryByName: Map<string, NflPlayerWeekStat[]>;
+  /** Optional team week history (strict-before) — when
+   *  threaded through, enables team-pass-rate features such
+   *  as the WR receptions PROE signal. Tests and the synthetic
+   *  runner can omit it; the WR signal falls back to neutral. */
+  teamHistory?: ReadonlyArray<NflTeamWeekStat>;
 }): EvaluatedRealWeekCandidate[] {
   const weekCandidates = args.candidates;
   const out: EvaluatedRealWeekCandidate[] = [];
@@ -338,7 +363,31 @@ export function applyScorecardToCandidates(args: {
       weekCandidates,
     });
     const decision = buildPropDecisionScorecard(scorecardInput);
-    out.push({ ...c, scorecard: projectionToScorecard({ scorecard: decision }) });
+    const scorecard = projectionToScorecard({ scorecard: decision });
+    // Diagnostic mispricing features — pure analysis surface,
+    // never fed back into qualification. Computed off the same
+    // strict-before history the scorecard already consumed.
+    scorecard.signalFeatures = computeSignalFeatures({
+      propType: c.propType,
+      overOdds: c.overOdds,
+      underOdds: c.underOdds,
+      modelEdge: scorecard.edge,
+      currentSeason: c.season,
+      currentWeek: c.week,
+      history,
+    });
+    // WR-receptions-only diagnostic signals. Returns undefined
+    // (and is skipped) when the candidate isn't a WR receptions
+    // prop with sufficient history — keeps the audit cheap.
+    scorecard.wrReceptionsSignals = computeWrReceptionsSignals({
+      propType: c.propType,
+      team: c.team,
+      currentSeason: c.season,
+      currentWeek: c.week,
+      history,
+      teamHistory: args.teamHistory,
+    });
+    out.push({ ...c, scorecard });
   }
   return out;
 }

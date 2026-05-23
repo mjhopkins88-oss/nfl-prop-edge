@@ -18,7 +18,17 @@ import type {
   CalibrationCandidate,
   MarketContextCalibrationReplay,
 } from "./market-context-calibration";
+import type { SignalFeatures } from "./signal-features";
+import {
+  buildSignalQualityReport,
+  type SignalQualityReport,
+} from "./signal-quality-audit";
 import type { StoredWeekSnapshot } from "./week-1-monitor-summary";
+import type { WrReceptionsSignals } from "./wr-receptions-signals";
+import {
+  buildWrReceptionsAnalysis,
+  type WrReceptionsAnalysisReport,
+} from "./wr-receptions-analysis";
 
 export interface EdgeSliceCandidate {
   week: number;
@@ -51,6 +61,17 @@ export interface EdgeSliceCandidate {
   /** Composite score for the diagnostic ranking. See
    *  `computeCompositeScore` for the exact formula. */
   compositeScore: number;
+  /** Diagnostic mispricing features computed from the
+   *  candidate's strict-before history. Optional so older
+   *  persisted calibrations without the field still load —
+   *  the signal-quality audit reports the carry rate so the
+   *  operator can see how many candidates had the signal. */
+  signalFeatures?: SignalFeatures;
+  /** WR-receptions-only diagnostic signals. Populated only
+   *  when the candidate is a WR receptions prop with enough
+   *  history; the WR receptions analysis layer filters on
+   *  presence of this field. */
+  wrReceptionsSignals?: WrReceptionsSignals;
 }
 
 const DEFAULT_DATA_QUALITY = 0.5;
@@ -164,6 +185,21 @@ export interface EdgeSliceReport {
      *  least one matches it within 0.1pp. */
     compositeBeatsEdgeBaseline: "yes" | "no" | "tie" | "insufficient-data";
   };
+  /** Diagnostic-only signal-quality audit. Buckets each of the
+   *  six mispricing features into low/medium/high terciles and
+   *  reports plays / W-L / hit / ROI / units / avg edge / avg
+   *  model prob / calibration error per bucket. Also reports
+   *  four combination slices the operator explicitly asked for.
+   *  Never feeds production qualification. */
+  signalQuality: SignalQualityReport;
+  /** Diagnostic-only WR receptions signal analysis. Filters
+   *  to WR receptions only and buckets each of the new WR-
+   *  specific mispricing signals (roleChange, route
+   *  participation, target-share volatility, PROE, market
+   *  lag) plus four named combinations. Surfaces the verdict
+   *  "edge found vs not" against pool baseline. Never feeds
+   *  production qualification. */
+  wrReceptionsAnalysis: WrReceptionsAnalysisReport;
   /** Plain-English headline summary for the admin action's
    *  `summary` field. */
   headline: string;
@@ -211,6 +247,8 @@ export function pickCandidatesFromSnapshots(
         profitPerUnit: c.profitPerUnit,
         productionQualified: c.productionQualified,
         compositeScore,
+        signalFeatures: c.signalFeatures,
+        wrReceptionsSignals: c.wrReceptionsSignals,
       });
     }
   }
@@ -423,6 +461,8 @@ function formatReport(args: {
   compositeSlices: EdgeSliceMetrics[];
   compositeInputs: EdgeSliceReport["compositeInputs"];
   answers: EdgeSliceReport["answers"];
+  signalQuality: SignalQualityReport;
+  wrReceptionsAnalysis: WrReceptionsAnalysisReport;
 }): string {
   const lines: string[] = [];
   lines.push(
@@ -529,6 +569,11 @@ function formatReport(args: {
   }
   lines.push("");
 
+  lines.push(args.signalQuality.formatted);
+  lines.push("");
+  lines.push(args.wrReceptionsAnalysis.formatted);
+  lines.push("");
+
   lines.push("=== Answers ===");
   lines.push(
     `1. Does ROI improve as edge threshold increases? ${args.answers.roiImprovesWithEdge.toUpperCase()}`,
@@ -627,6 +672,8 @@ export function buildEdgeSliceReport(args: {
     candidatesTotal: candidates.length,
   };
   const answers = buildAnswers({ slices, compositeSlices });
+  const signalQuality = buildSignalQualityReport({ candidates });
+  const wrReceptionsAnalysis = buildWrReceptionsAnalysis({ candidates });
   const headline =
     weeksWithCalibration.length === 0
       ? `No calibration data found for the requested weeks. Re-grade ${args.weeksRequested.map((w) => `W${w}`).join(", ")} first to persist marketContextCalibration.`
@@ -640,6 +687,8 @@ export function buildEdgeSliceReport(args: {
     compositeSlices,
     compositeInputs,
     answers,
+    signalQuality,
+    wrReceptionsAnalysis,
   });
   return {
     diagnosticOnly: true,
@@ -654,6 +703,8 @@ export function buildEdgeSliceReport(args: {
     compositeSlices,
     compositeInputs,
     answers,
+    signalQuality,
+    wrReceptionsAnalysis,
     headline,
     formatted,
   };

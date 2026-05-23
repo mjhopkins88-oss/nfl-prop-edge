@@ -386,6 +386,28 @@ export interface MarketContextCalibrationCandidate {
   riskScore: number;
   dataQualityScore?: number;
   volatilityLevel?: "low" | "medium" | "high";
+  signalFeatures?: {
+    roleChangeScore: number;
+    usageMomentumScore: number;
+    volatilityScore: number;
+    volatilityBucket: "low" | "medium" | "high" | "unknown";
+    distributionBiasScore: number;
+    scriptSensitivityScore: number;
+    marketResistanceScore: number;
+    historyRowsUsed: number;
+    hasNeutralFallback: boolean;
+  };
+  wrReceptionsSignals?: {
+    roleChange: number;
+    routeParticipationSlope: number;
+    targetShareVolatility: number;
+    teamProe: number;
+    defensiveMatchup?: number;
+    historyRowsUsed: number;
+    hasNeutralFallback: boolean;
+    defensiveMatchupAvailable: boolean;
+    teamHistoryAvailable: boolean;
+  };
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   productionQualified: boolean;
