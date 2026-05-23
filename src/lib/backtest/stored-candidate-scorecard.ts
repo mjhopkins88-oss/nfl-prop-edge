@@ -117,6 +117,13 @@ export interface StoredCandidateScorecard {
    *  current season). Surfaced for the rookie mispricing
    *  diagnostic. Never feeds qualification. */
   isRookie?: boolean;
+  /** True when `isRookie` is true AND the rookie's recent
+   *  strict-before snap share averaged ≥ 0.6 — used as a
+   *  proxy for "high draft capital" because nflverse data
+   *  doesn't ship draft rounds. W1 rookies with no prior
+   *  weeks can't trigger this flag (history is empty); they
+   *  still appear in the "all rookies" bucket. */
+  isHighUsageRookie?: boolean;
 }
 
 export interface EvaluatedRealWeekCandidate extends RealWeekCandidate {
@@ -413,6 +420,13 @@ export function applyScorecardToCandidates(args: {
     scorecard.isRookie =
       sortedHistory.length > 0 &&
       sortedHistory.every((r) => r.season >= c.season);
+    // High-usage proxy for "high draft capital" — see field
+    // comment on StoredCandidateScorecard for why this is the
+    // closest signal we can derive without draft-round data.
+    const snapValues = numericStat(sortedHistory, "snapShare");
+    const meanSnap = snapValues.length > 0 ? mean(snapValues) : 0;
+    scorecard.isHighUsageRookie =
+      scorecard.isRookie === true && meanSnap >= 0.6;
     out.push({ ...c, scorecard });
   }
   return out;

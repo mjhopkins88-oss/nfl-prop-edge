@@ -76,6 +76,10 @@ export interface CalibrationCandidate {
    *  prior season. Diagnostic-only — feeds the rookie
    *  mispricing analysis. */
   isRookie?: boolean;
+  /** True for rookies whose recent strict-before snap share
+   *  averaged ≥ 0.6 — proxy for "high draft capital" (the
+   *  ingested data doesn't carry draft rounds). */
+  isHighUsageRookie?: boolean;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   /** Was already qualified in production? When true, the
@@ -323,6 +327,7 @@ function buildGateResult(args: {
       wrReceptionsSignals: s.wrReceptionsSignals,
       playerPosition: s.playerPosition,
       isRookie: s.isRookie,
+      isHighUsageRookie: s.isHighUsageRookie,
       marketContextScoreClamped: s.marketContextScore,
       marketContextScoreRaw: rawMarketContextScore(c),
       productionQualified: s.qualified,

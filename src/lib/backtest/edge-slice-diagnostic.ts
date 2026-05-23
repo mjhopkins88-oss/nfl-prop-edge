@@ -33,6 +33,10 @@ import {
   buildMispricingHypothesesReport,
   type MispricingHypothesesReport,
 } from "./mispricing-hypotheses";
+import {
+  buildRookieMispricingReport,
+  type RookieMispricingReport,
+} from "./rookie-mispricing-analysis";
 
 export interface EdgeSliceCandidate {
   week: number;
@@ -83,6 +87,9 @@ export interface EdgeSliceCandidate {
   /** True when no strict-before row from a prior season is
    *  attached. Used by the rookie mispricing diagnostic. */
   isRookie?: boolean;
+  /** True for rookies whose recent snap share averaged ≥ 0.6.
+   *  Proxy for "high draft capital" (draft data not ingested). */
+  isHighUsageRookie?: boolean;
   /** Side the live scorecard selected for this candidate.
    *  Needed by the multi-hypothesis diagnostic to filter
    *  UNDER vs OVER candidates. */
@@ -222,6 +229,12 @@ export interface EdgeSliceReport {
    *  reduction / promotion-candidate verdict. Never feeds
    *  production qualification. */
   mispricingHypotheses: MispricingHypothesesReport;
+  /** Diagnostic-only rookie mispricing analysis. Buckets
+   *  rookie plays by early/mid season window and recommended
+   *  side (OVER / UNDER). Tests four spec questions about
+   *  rookie pricing inefficiency. Never feeds production
+   *  qualification. */
+  rookieMispricing: RookieMispricingReport;
   /** Plain-English headline summary for the admin action's
    *  `summary` field. */
   headline: string;
@@ -273,6 +286,7 @@ export function pickCandidatesFromSnapshots(
         wrReceptionsSignals: c.wrReceptionsSignals,
         playerPosition: c.playerPosition,
         isRookie: c.isRookie,
+        isHighUsageRookie: c.isHighUsageRookie,
         recommendedSide: c.recommendedSide,
       });
     }
@@ -489,6 +503,7 @@ function formatReport(args: {
   signalQuality: SignalQualityReport;
   wrReceptionsAnalysis: WrReceptionsAnalysisReport;
   mispricingHypotheses: MispricingHypothesesReport;
+  rookieMispricing: RookieMispricingReport;
 }): string {
   const lines: string[] = [];
   lines.push(
@@ -601,6 +616,8 @@ function formatReport(args: {
   lines.push("");
   lines.push(args.mispricingHypotheses.formatted);
   lines.push("");
+  lines.push(args.rookieMispricing.formatted);
+  lines.push("");
 
   lines.push("=== Answers ===");
   lines.push(
@@ -703,6 +720,7 @@ export function buildEdgeSliceReport(args: {
   const signalQuality = buildSignalQualityReport({ candidates });
   const wrReceptionsAnalysis = buildWrReceptionsAnalysis({ candidates });
   const mispricingHypotheses = buildMispricingHypothesesReport({ candidates });
+  const rookieMispricing = buildRookieMispricingReport({ candidates });
   const headline =
     weeksWithCalibration.length === 0
       ? `No calibration data found for the requested weeks. Re-grade ${args.weeksRequested.map((w) => `W${w}`).join(", ")} first to persist marketContextCalibration.`
@@ -719,6 +737,7 @@ export function buildEdgeSliceReport(args: {
     signalQuality,
     wrReceptionsAnalysis,
     mispricingHypotheses,
+    rookieMispricing,
   });
   return {
     diagnosticOnly: true,
@@ -736,6 +755,7 @@ export function buildEdgeSliceReport(args: {
     signalQuality,
     wrReceptionsAnalysis,
     mispricingHypotheses,
+    rookieMispricing,
     headline,
     formatted,
   };

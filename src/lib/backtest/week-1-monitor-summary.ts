@@ -410,6 +410,7 @@ export interface MarketContextCalibrationCandidate {
   };
   playerPosition?: "QB" | "RB" | "WR" | "TE";
   isRookie?: boolean;
+  isHighUsageRookie?: boolean;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   productionQualified: boolean;
