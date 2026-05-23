@@ -40,6 +40,7 @@ const VALID_ACTIONS: readonly AdminAction[] = [
   "grade-week1-stored",
   "grade-week-stored",
   "edge-slice-diagnostic",
+  "run-season-stored-backtest",
   "verify-persistence",
 ];
 
@@ -89,12 +90,38 @@ export async function POST(request: Request): Promise<NextResponse> {
         )
         .map((w) => Math.trunc(w))
     : undefined;
+  // Season-runner inputs: season, startWeek, endWeek. All
+  // optional — the runner falls back to defaults when omitted.
+  const seasonRaw = (body as { season?: unknown })?.season;
+  const startWeekRaw = (body as { startWeek?: unknown })?.startWeek;
+  const endWeekRaw = (body as { endWeek?: unknown })?.endWeek;
+  const season =
+    typeof seasonRaw === "number" && Number.isFinite(seasonRaw)
+      ? Math.trunc(seasonRaw)
+      : undefined;
+  const startWeek =
+    typeof startWeekRaw === "number" &&
+    Number.isFinite(startWeekRaw) &&
+    startWeekRaw >= 1 &&
+    startWeekRaw <= 22
+      ? Math.trunc(startWeekRaw)
+      : undefined;
+  const endWeek =
+    typeof endWeekRaw === "number" &&
+    Number.isFinite(endWeekRaw) &&
+    endWeekRaw >= 1 &&
+    endWeekRaw <= 22
+      ? Math.trunc(endWeekRaw)
+      : undefined;
   const result = await runAdminAction({
     action,
     confirmText:
       typeof confirmText === "string" ? confirmText : undefined,
     week,
     weeks,
+    season,
+    startWeek,
+    endWeek,
   });
 
   return NextResponse.json(result, {
