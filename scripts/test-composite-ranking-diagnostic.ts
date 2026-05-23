@@ -73,6 +73,7 @@ function makeCandidate(
     profitPerUnit: 0.91,
     productionQualified: false,
     compositeScore: 0,
+    recommendedSide: "OVER",
     ...over,
   };
   base.compositeScore = computeCompositeScore({

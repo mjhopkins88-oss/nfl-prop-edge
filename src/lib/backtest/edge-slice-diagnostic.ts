@@ -29,6 +29,10 @@ import {
   buildWrReceptionsAnalysis,
   type WrReceptionsAnalysisReport,
 } from "./wr-receptions-analysis";
+import {
+  buildMispricingHypothesesReport,
+  type MispricingHypothesesReport,
+} from "./mispricing-hypotheses";
 
 export interface EdgeSliceCandidate {
   week: number;
@@ -72,6 +76,17 @@ export interface EdgeSliceCandidate {
    *  history; the WR receptions analysis layer filters on
    *  presence of this field. */
   wrReceptionsSignals?: WrReceptionsSignals;
+  /** Player position (QB / RB / WR / TE) pulled from the most
+   *  recent strict-before history row. Used by the multi-
+   *  hypothesis diagnostic to filter QB / WR / RB props. */
+  playerPosition?: "QB" | "RB" | "WR" | "TE";
+  /** True when no strict-before row from a prior season is
+   *  attached. Used by the rookie mispricing diagnostic. */
+  isRookie?: boolean;
+  /** Side the live scorecard selected for this candidate.
+   *  Needed by the multi-hypothesis diagnostic to filter
+   *  UNDER vs OVER candidates. */
+  recommendedSide: "OVER" | "UNDER";
 }
 
 const DEFAULT_DATA_QUALITY = 0.5;
@@ -200,6 +215,13 @@ export interface EdgeSliceReport {
    *  "edge found vs not" against pool baseline. Never feeds
    *  production qualification. */
   wrReceptionsAnalysis: WrReceptionsAnalysisReport;
+  /** Diagnostic-only multi-hypothesis mispricing test. Runs
+   *  five concrete sportsbook-inefficiency hypotheses + four
+   *  combinations against the pool, compared to the edge ≥ 4%
+   *  control. Surfaces the best-by-ROI / best-calibration-
+   *  reduction / promotion-candidate verdict. Never feeds
+   *  production qualification. */
+  mispricingHypotheses: MispricingHypothesesReport;
   /** Plain-English headline summary for the admin action's
    *  `summary` field. */
   headline: string;
@@ -249,6 +271,9 @@ export function pickCandidatesFromSnapshots(
         compositeScore,
         signalFeatures: c.signalFeatures,
         wrReceptionsSignals: c.wrReceptionsSignals,
+        playerPosition: c.playerPosition,
+        isRookie: c.isRookie,
+        recommendedSide: c.recommendedSide,
       });
     }
   }
@@ -463,6 +488,7 @@ function formatReport(args: {
   answers: EdgeSliceReport["answers"];
   signalQuality: SignalQualityReport;
   wrReceptionsAnalysis: WrReceptionsAnalysisReport;
+  mispricingHypotheses: MispricingHypothesesReport;
 }): string {
   const lines: string[] = [];
   lines.push(
@@ -573,6 +599,8 @@ function formatReport(args: {
   lines.push("");
   lines.push(args.wrReceptionsAnalysis.formatted);
   lines.push("");
+  lines.push(args.mispricingHypotheses.formatted);
+  lines.push("");
 
   lines.push("=== Answers ===");
   lines.push(
@@ -674,6 +702,7 @@ export function buildEdgeSliceReport(args: {
   const answers = buildAnswers({ slices, compositeSlices });
   const signalQuality = buildSignalQualityReport({ candidates });
   const wrReceptionsAnalysis = buildWrReceptionsAnalysis({ candidates });
+  const mispricingHypotheses = buildMispricingHypothesesReport({ candidates });
   const headline =
     weeksWithCalibration.length === 0
       ? `No calibration data found for the requested weeks. Re-grade ${args.weeksRequested.map((w) => `W${w}`).join(", ")} first to persist marketContextCalibration.`
@@ -689,6 +718,7 @@ export function buildEdgeSliceReport(args: {
     answers,
     signalQuality,
     wrReceptionsAnalysis,
+    mispricingHypotheses,
   });
   return {
     diagnosticOnly: true,
@@ -705,6 +735,7 @@ export function buildEdgeSliceReport(args: {
     answers,
     signalQuality,
     wrReceptionsAnalysis,
+    mispricingHypotheses,
     headline,
     formatted,
   };

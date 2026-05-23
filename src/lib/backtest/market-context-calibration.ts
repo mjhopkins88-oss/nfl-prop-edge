@@ -27,6 +27,7 @@
  */
 
 import type { PropType } from "../types";
+import type { NflPosition } from "../ingestion/nflverse-types";
 import type { RealWeekCandidate } from "./real-week-candidate-builder";
 import type { GradedCandidate } from "./week-1-grading";
 import { rawMarketContextScore } from "./stored-candidate-scorecard";
@@ -67,6 +68,14 @@ export interface CalibrationCandidate {
    *  history; surfaced for the WR receptions analysis section
    *  of the edge-slice diagnostic. Never feeds qualification. */
   wrReceptionsSignals?: WrReceptionsSignals;
+  /** Player's position pulled from the most recent strict-
+   *  before history row. Diagnostic-only — used by the multi-
+   *  hypothesis diagnostic to filter by position. */
+  playerPosition?: NflPosition;
+  /** True when the player has no strict-before rows from any
+   *  prior season. Diagnostic-only — feeds the rookie
+   *  mispricing analysis. */
+  isRookie?: boolean;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   /** Was already qualified in production? When true, the
@@ -312,6 +321,8 @@ function buildGateResult(args: {
       volatilityLevel: s.volatilityLevel,
       signalFeatures: s.signalFeatures,
       wrReceptionsSignals: s.wrReceptionsSignals,
+      playerPosition: s.playerPosition,
+      isRookie: s.isRookie,
       marketContextScoreClamped: s.marketContextScore,
       marketContextScoreRaw: rawMarketContextScore(c),
       productionQualified: s.qualified,

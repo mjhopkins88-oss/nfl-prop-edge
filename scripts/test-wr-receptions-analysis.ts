@@ -88,6 +88,7 @@ function makeCandidate(
     compositeScore: 0.3,
     signalFeatures: undefined,
     wrReceptionsSignals: makeWrSignals(),
+    recommendedSide: "OVER",
     ...over,
   };
 }

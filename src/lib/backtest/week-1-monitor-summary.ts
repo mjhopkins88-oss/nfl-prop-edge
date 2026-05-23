@@ -408,6 +408,8 @@ export interface MarketContextCalibrationCandidate {
     defensiveMatchupAvailable: boolean;
     teamHistoryAvailable: boolean;
   };
+  playerPosition?: "QB" | "RB" | "WR" | "TE";
+  isRookie?: boolean;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   productionQualified: boolean;
