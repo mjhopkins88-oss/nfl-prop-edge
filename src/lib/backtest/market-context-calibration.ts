@@ -31,6 +31,7 @@ import type { RealWeekCandidate } from "./real-week-candidate-builder";
 import type { GradedCandidate } from "./week-1-grading";
 import { rawMarketContextScore } from "./stored-candidate-scorecard";
 import type { SignalFeatures } from "./signal-features";
+import type { WrReceptionsSignals } from "./wr-receptions-signals";
 
 export const PRODUCTION_MARKET_CONTEXT_GATE = 0.45;
 
@@ -61,6 +62,11 @@ export interface CalibrationCandidate {
    *  signal-quality audit; never feeds qualification. Optional
    *  so older persisted calibrations still load. */
   signalFeatures?: SignalFeatures;
+  /** WR-receptions-specific diagnostic signals. Populated only
+   *  when the candidate is a WR receptions prop with enough
+   *  history; surfaced for the WR receptions analysis section
+   *  of the edge-slice diagnostic. Never feeds qualification. */
+  wrReceptionsSignals?: WrReceptionsSignals;
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   /** Was already qualified in production? When true, the
@@ -305,6 +311,7 @@ function buildGateResult(args: {
       dataQualityScore: s.dataQualityScore,
       volatilityLevel: s.volatilityLevel,
       signalFeatures: s.signalFeatures,
+      wrReceptionsSignals: s.wrReceptionsSignals,
       marketContextScoreClamped: s.marketContextScore,
       marketContextScoreRaw: rawMarketContextScore(c),
       productionQualified: s.qualified,

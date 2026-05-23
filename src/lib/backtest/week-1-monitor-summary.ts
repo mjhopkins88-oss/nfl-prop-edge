@@ -397,6 +397,17 @@ export interface MarketContextCalibrationCandidate {
     historyRowsUsed: number;
     hasNeutralFallback: boolean;
   };
+  wrReceptionsSignals?: {
+    roleChange: number;
+    routeParticipationSlope: number;
+    targetShareVolatility: number;
+    teamProe: number;
+    defensiveMatchup?: number;
+    historyRowsUsed: number;
+    hasNeutralFallback: boolean;
+    defensiveMatchupAvailable: boolean;
+    teamHistoryAvailable: boolean;
+  };
   marketContextScoreClamped: number;
   marketContextScoreRaw: number;
   productionQualified: boolean;
