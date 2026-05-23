@@ -39,6 +39,7 @@ import {
 import { selectedEdge, selectedModelProbability } from "../model/prop-opportunity";
 import type {
   NflPlayerWeekStat,
+  NflPosition,
   NflTeamWeekStat,
 } from "../ingestion/nflverse-types";
 import type { PropType } from "../types";
@@ -105,6 +106,24 @@ export interface StoredCandidateScorecard {
    *  only when the candidate is a WR RECEPTIONS prop with
    *  enough strict-before history. Never feeds qualification. */
   wrReceptionsSignals?: WrReceptionsSignals;
+  /** Player's position derived from the most recent strict-
+   *  before history row. Surfaced for the multi-hypothesis
+   *  diagnostic so it can filter by QB / RB / WR / TE without
+   *  re-loading rosters. Undefined when no history is
+   *  attached (rookie in W1 with no prior weeks). */
+  playerPosition?: NflPosition;
+  /** True when the player has no strict-before rows from a
+   *  PRIOR season (i.e. every attached row is from the
+   *  current season). Surfaced for the rookie mispricing
+   *  diagnostic. Never feeds qualification. */
+  isRookie?: boolean;
+  /** True when `isRookie` is true AND the rookie's recent
+   *  strict-before snap share averaged ≥ 0.6 — used as a
+   *  proxy for "high draft capital" because nflverse data
+   *  doesn't ship draft rounds. W1 rookies with no prior
+   *  weeks can't trigger this flag (history is empty); they
+   *  still appear in the "all rookies" bucket. */
+  isHighUsageRookie?: boolean;
 }
 
 export interface EvaluatedRealWeekCandidate extends RealWeekCandidate {
@@ -387,6 +406,27 @@ export function applyScorecardToCandidates(args: {
       history,
       teamHistory: args.teamHistory,
     });
+    // Position + rookie flag — pulled from the same strict-
+    // before history the scorecard already consumed. Both feed
+    // diagnostic-only filters in the multi-hypothesis and
+    // rookie-mispricing reports.
+    const sortedHistory = [...history].sort(
+      (a, b) => a.season - b.season || a.week - b.week,
+    );
+    scorecard.playerPosition =
+      sortedHistory.length > 0
+        ? sortedHistory[sortedHistory.length - 1].position
+        : undefined;
+    scorecard.isRookie =
+      sortedHistory.length > 0 &&
+      sortedHistory.every((r) => r.season >= c.season);
+    // High-usage proxy for "high draft capital" — see field
+    // comment on StoredCandidateScorecard for why this is the
+    // closest signal we can derive without draft-round data.
+    const snapValues = numericStat(sortedHistory, "snapShare");
+    const meanSnap = snapValues.length > 0 ? mean(snapValues) : 0;
+    scorecard.isHighUsageRookie =
+      scorecard.isRookie === true && meanSnap >= 0.6;
     out.push({ ...c, scorecard });
   }
   return out;

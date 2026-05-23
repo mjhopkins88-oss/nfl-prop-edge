@@ -84,6 +84,7 @@ function makeCandidate(
     productionQualified: false,
     compositeScore: 0.3,
     signalFeatures: makeFeatures(),
+    recommendedSide: "OVER",
     ...over,
   };
 }
