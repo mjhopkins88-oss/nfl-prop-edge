@@ -30,6 +30,7 @@ export type AdminAction =
   | "grade-week1-stored"
   | "grade-week-stored"
   | "edge-slice-diagnostic"
+  | "run-season-stored-backtest"
   | "verify-persistence";
 
 export type AdminResult = "success" | "failure" | "skipped";

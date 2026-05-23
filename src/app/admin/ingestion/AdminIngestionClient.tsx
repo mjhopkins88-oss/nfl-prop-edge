@@ -23,6 +23,7 @@ type ActionName =
   | "grade-week1-stored"
   | "grade-week-stored"
   | "edge-slice-diagnostic"
+  | "run-season-stored-backtest"
   | "verify-persistence";
 
 interface StatusResponse {
@@ -148,6 +149,11 @@ export function AdminIngestionClient() {
   // Edge-slice diagnostic — comma-separated weeks list. Default
   // covers the same weeks the CLI script defaults to (1, 2).
   const [edgeSliceWeeksInput, setEdgeSliceWeeksInput] = useState("1,2");
+  // Season-stored backtest inputs — startWeek + endWeek for the
+  // run-season-stored-backtest action. Defaults match the
+  // current sandbox state (only W1-W2 ingested).
+  const [seasonStartWeekInput, setSeasonStartWeekInput] = useState("1");
+  const [seasonEndWeekInput, setSeasonEndWeekInput] = useState("2");
 
   const refreshStatus = useCallback(
     async (week?: number) => {
@@ -189,6 +195,7 @@ export function AdminIngestionClient() {
       confirmText?: string,
       week?: number,
       weeks?: number[],
+      seasonRange?: { season?: number; startWeek?: number; endWeek?: number },
     ) => {
       if (!token) {
         setStatusErr("Enter the admin token first.");
@@ -203,7 +210,15 @@ export function AdminIngestionClient() {
             "content-type": "application/json",
             "x-admin-ingest-token": token,
           },
-          body: JSON.stringify({ action, confirmText, week, weeks }),
+          body: JSON.stringify({
+            action,
+            confirmText,
+            week,
+            weeks,
+            season: seasonRange?.season,
+            startWeek: seasonRange?.startWeek,
+            endWeek: seasonRange?.endWeek,
+          }),
         });
         const json = (await res.json()) as ActionResponse;
         setLastResult(json);
@@ -420,6 +435,16 @@ export function AdminIngestionClient() {
         onRun={runAction}
       />
 
+      <SeasonStoredBacktestSection
+        token={token}
+        busy={busy}
+        startWeekInput={seasonStartWeekInput}
+        endWeekInput={seasonEndWeekInput}
+        onStartWeekChange={setSeasonStartWeekInput}
+        onEndWeekChange={setSeasonEndWeekInput}
+        onRun={runAction}
+      />
+
       {lastResult ? <ResultPanel result={lastResult} /> : null}
     </div>
   );
@@ -441,6 +466,7 @@ function EdgeSliceDiagnosticSection({
     confirmText?: string,
     week?: number,
     weeks?: number[],
+    seasonRange?: { season?: number; startWeek?: number; endWeek?: number },
   ) => Promise<void>;
 }) {
   const parsedWeeks = weeksInput
@@ -514,6 +540,130 @@ function EdgeSliceDiagnosticSection({
       <p className="mt-2 text-[10px] text-zinc-500">
         Output renders in the result panel below. Production
         threshold (0.45) is unchanged.
+      </p>
+    </section>
+  );
+}
+
+function SeasonStoredBacktestSection({
+  token,
+  busy,
+  startWeekInput,
+  endWeekInput,
+  onStartWeekChange,
+  onEndWeekChange,
+  onRun,
+}: {
+  token: string;
+  busy: ActionName | null;
+  startWeekInput: string;
+  endWeekInput: string;
+  onStartWeekChange: (s: string) => void;
+  onEndWeekChange: (s: string) => void;
+  onRun: (
+    action: ActionName,
+    confirmText?: string,
+    week?: number,
+    weeks?: number[],
+    seasonRange?: { season?: number; startWeek?: number; endWeek?: number },
+  ) => Promise<void>;
+}) {
+  const parsedStart = Number(startWeekInput.trim());
+  const parsedEnd = Number(endWeekInput.trim());
+  const startOk = Number.isFinite(parsedStart) && parsedStart >= 1 && parsedStart <= 22;
+  const endOk = Number.isFinite(parsedEnd) && parsedEnd >= 1 && parsedEnd <= 22;
+  const rangeOk = startOk && endOk && parsedStart <= parsedEnd;
+  return (
+    <section
+      className="rounded-lg border border-zinc-700 bg-zinc-900 p-4"
+      data-testid="admin-season-backtest-section"
+    >
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">
+        Season Stored Backtest
+      </h2>
+      <p className="mt-1 text-xs text-zinc-500">
+        Runs the per-week stored-data grading pipeline for every
+        week in the range, then merges all weeks into a season
+        aggregate. Each week is graded INDEPENDENTLY using only
+        data available before that week (strict-before is
+        enforced inside the pipeline + re-confirmed by the
+        as-of fairness check). No paid API call, no threshold
+        change, no model logic change. Re-runs replace each
+        week&apos;s stored row.
+      </p>
+      <div className="mt-3 flex flex-wrap items-baseline gap-3">
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="season-start-week"
+        >
+          Start week
+        </label>
+        <input
+          id="season-start-week"
+          type="number"
+          min={1}
+          max={22}
+          value={startWeekInput}
+          onChange={(e) => onStartWeekChange(e.target.value)}
+          disabled={!token || busy !== null}
+          className="w-20 rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100"
+          data-testid="admin-season-start-week-input"
+        />
+        <label
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400"
+          htmlFor="season-end-week"
+        >
+          End week
+        </label>
+        <input
+          id="season-end-week"
+          type="number"
+          min={1}
+          max={22}
+          value={endWeekInput}
+          onChange={(e) => onEndWeekChange(e.target.value)}
+          disabled={!token || busy !== null}
+          className="w-20 rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm font-mono text-zinc-100"
+          data-testid="admin-season-end-week-input"
+        />
+        <span className="text-[10px] text-zinc-500">
+          {rangeOk
+            ? `Will grade W${parsedStart}-W${parsedEnd} (${parsedEnd - parsedStart + 1} weeks)`
+            : "Range invalid"}
+        </span>
+      </div>
+      <button
+        onClick={() =>
+          void onRun(
+            "run-season-stored-backtest",
+            undefined,
+            undefined,
+            undefined,
+            rangeOk
+              ? {
+                  startWeek: parsedStart,
+                  endWeek: parsedEnd,
+                }
+              : undefined,
+          )
+        }
+        disabled={!token || busy !== null || !rangeOk}
+        className={
+          "mt-3 rounded px-3 py-1.5 text-xs font-semibold " +
+          (!token || busy !== null || !rangeOk
+            ? "bg-zinc-800 text-zinc-600"
+            : "bg-sea-600 text-white hover:bg-sea-500")
+        }
+        data-testid="admin-season-backtest-run-button"
+      >
+        {busy === "run-season-stored-backtest"
+          ? "Running Season Backtest…"
+          : "Run Season Stored Backtest"}
+      </button>
+      <p className="mt-2 text-[10px] text-zinc-500">
+        Output renders in the result panel below. Production
+        edge threshold (4%) and marketContext gate (0.45) are
+        unchanged.
       </p>
     </section>
   );

@@ -38,7 +38,11 @@ import {
   bucketScoresFromEvaluatedCandidates,
 } from "../backtest/diagnostic-qualification-audit";
 import { buildEdgeSliceReport } from "../backtest/edge-slice-diagnostic";
-import { loadAllStoredMonitorSnapshots } from "../backtest/week-1-monitor-summary";
+import {
+  loadAllStoredMonitorSnapshots,
+  loadStoredWeek1MonitorSnapshot,
+} from "../backtest/week-1-monitor-summary";
+import { runSeasonStoredBacktest } from "../backtest/season-stored-backtest-runner";
 import {
   validateAsOfFairness,
   formatAsOfReport,
@@ -165,6 +169,11 @@ export interface AdminRunArgs {
   /** Weeks list for actions that report across multiple weeks
    *  (e.g., `edge-slice-diagnostic`). Defaults to [1, 2]. */
   weeks?: number[];
+  /** Season-runner inputs. Defaults below: season 2025,
+   *  startWeek 1, endWeek = highest stored week. */
+  season?: number;
+  startWeek?: number;
+  endWeek?: number;
   /** Repo root override for tests. */
   repoRoot?: string;
   /** Injected for tests; defaults to a real spawn-based runner. */
@@ -1909,6 +1918,74 @@ export async function runAdminAction(
       };
       recordActionResult({
         action: "edge-slice-diagnostic",
+        result: "success",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "run-season-stored-backtest": {
+      // Loops the per-week stored grading pipeline across the
+      // requested season range and produces a season-aggregate
+      // report. Each week is graded INDEPENDENTLY using only
+      // data available before that week — strict-before is
+      // enforced inside the pipeline. No paid API, no
+      // threshold change, no model logic change.
+      const season = args.season ?? 2025;
+      const startWeek = Math.max(1, Math.trunc(args.startWeek ?? 1));
+      // Default endWeek = highest week that already has a
+      // stored backtest row (so the season run never silently
+      // tries to grade weeks with no ingested odds). When no
+      // rows exist, falls back to startWeek so the run is a
+      // single-week no-op rather than blowing up.
+      let endWeek: number;
+      if (args.endWeek !== undefined) {
+        endWeek = Math.min(22, Math.trunc(args.endWeek));
+      } else {
+        const allSnaps = await loadAllStoredMonitorSnapshots({
+          season,
+          client: persistence,
+        });
+        endWeek =
+          allSnaps.length > 0
+            ? Math.max(...allSnaps.map((s) => s.week))
+            : startWeek;
+      }
+      if (startWeek > endWeek || startWeek < 1 || endWeek > 22) {
+        return {
+          action: "run-season-stored-backtest",
+          ok: false,
+          status: "failure",
+          summary: `Invalid week range [${startWeek}, ${endWeek}] for season ${season}.`,
+        };
+      }
+      const seasonResult = await runSeasonStoredBacktest({
+        season,
+        startWeek,
+        endWeek,
+        repoRoot,
+        persistence,
+      });
+      const result: AdminActionResult = {
+        action: "run-season-stored-backtest",
+        ok: true,
+        status: "success",
+        summary: seasonResult.headline,
+        detail: seasonResult.aggregate.formatted,
+        data: {
+          season: seasonResult.season,
+          startWeek: seasonResult.startWeek,
+          endWeek: seasonResult.endWeek,
+          weeksRequested: seasonResult.weeksRequested,
+          weeksGraded: seasonResult.weeksGraded,
+          weeksFailed: seasonResult.weeksFailed,
+          perWeek: seasonResult.perWeek,
+          aggregate: seasonResult.aggregate,
+        },
+      };
+      recordActionResult({
+        action: "run-season-stored-backtest",
         result: "success",
         summary: result.summary,
         repoRoot,
