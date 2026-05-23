@@ -25,6 +25,7 @@ export type AdminAction =
   | "paid-week1"
   | "paid-week-subset"
   | "paid-week-full"
+  | "paid-season-full"
   | "migrate-odds-to-canonical"
   | "stored-backtest"
   | "grade-week1-stored"

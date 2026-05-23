@@ -44,6 +44,11 @@ import {
 } from "../backtest/week-1-monitor-summary";
 import { runSeasonStoredBacktest } from "../backtest/season-stored-backtest-runner";
 import {
+  buildSeasonOddsCoverage,
+  formatSeasonOddsCoverage,
+  type SeasonOddsCoverage,
+} from "../backtest/season-odds-coverage";
+import {
   validateAsOfFairness,
   formatAsOfReport,
 } from "../backtest/as-of-validation";
@@ -112,6 +117,25 @@ export function paidSubsetConfirmText(week: number): string {
 export function paidFullConfirmText(week: number, estimatedCredits: number): string {
   return `RUN FULL WEEK ${week} INGESTION ${estimatedCredits} CREDITS`;
 }
+
+/** Season-wide confirmation for `paid-season-full`. The total
+ *  credit number is embedded so the operator types it
+ *  explicitly — a stale confirm string from a previous run
+ *  with different coverage cannot replay. */
+export function paidSeasonFullConfirmText(args: {
+  season: number;
+  startWeek: number;
+  endWeek: number;
+  totalCredits: number;
+}): string {
+  return `RUN FULL SEASON ${args.season} W${args.startWeek}-W${args.endWeek} INGESTION ${args.totalCredits} CREDITS`;
+}
+
+/** Hard cap on what a single `paid-season-full` execute can
+ *  spend. Anything above this returns a skip with an
+ *  explanatory error — operators must shrink the range
+ *  (or run per-week paid-week-full manually) to proceed. */
+export const ADMIN_SEASON_FULL_MAX_CREDITS = 10_000;
 
 /** Per-week estimated credit cost for the FULL ingestion.
  *  Week 1 = 647 (audited). Other weeks use the same default
@@ -1181,6 +1205,270 @@ export async function runAdminAction(
       });
       recordActionResult({
         action: "paid-week-full",
+        result: ok ? "success" : "failure",
+        summary: result.summary,
+        repoRoot,
+      });
+      return result;
+    }
+
+    case "paid-season-full": {
+      // Season-wide bulk historical odds ingestion. Defaults to
+      // DRY-RUN — no paid API call happens unless every gate
+      // passes AND the operator types the exact season-wide
+      // confirmation string (which embeds the computed credit
+      // total for the missing weeks).
+      //
+      // Loops the existing `paid-week-full` action for each
+      // missing week. Weeks already covered by StoredPropMarket
+      // are skipped so we don't re-spend on them.
+      const season = args.season ?? 2025;
+      const startWeek = Math.max(1, Math.trunc(args.startWeek ?? 1));
+      const endWeek = Math.min(22, Math.trunc(args.endWeek ?? startWeek));
+      if (startWeek > endWeek || startWeek < 1 || endWeek > 22) {
+        return {
+          action: "paid-season-full",
+          ok: false,
+          status: "failure",
+          summary: `Invalid week range [${startWeek}, ${endWeek}] for season ${season}.`,
+        };
+      }
+      const requestedWeeks: number[] = [];
+      for (let w = startWeek; w <= endWeek; w++) requestedWeeks.push(w);
+      // Refuse to consider weeks outside the supported allow-
+      // list — keeps the gating identical to per-week
+      // paid-week-full.
+      const unsupported = requestedWeeks.filter(
+        (w) => !SUPPORTED_PAID_INGESTION_WEEKS.includes(w),
+      );
+      if (unsupported.length > 0) {
+        return {
+          action: "paid-season-full",
+          ok: false,
+          status: "failure",
+          summary: `Unsupported weeks for paid ingestion: ${unsupported.map((w) => `W${w}`).join(", ")}. Allowed: ${SUPPORTED_PAID_INGESTION_WEEKS.join(", ")}.`,
+        };
+      }
+      const coverage = await buildSeasonOddsCoverage({
+        season,
+        weeks: requestedWeeks,
+        persistence,
+      });
+      const missingWeeks = coverage.weeksMissing;
+      const totalCredits = missingWeeks.reduce(
+        (acc, w) => acc + estimatedFullCreditsForWeek(w),
+        0,
+      );
+      const expectedConfirm = paidSeasonFullConfirmText({
+        season,
+        startWeek,
+        endWeek,
+        totalCredits,
+      });
+      // Coverage diagnostic — always part of the result detail
+      // so the operator sees what would be ingested.
+      const coverageBlock = formatSeasonOddsCoverage(coverage);
+
+      // DRY-RUN: no confirmText OR persistence unavailable.
+      // Return the preview + the exact confirm string the
+      // operator needs to type to execute. NO API call.
+      if (args.confirmText === undefined || args.confirmText === "") {
+        const lines: string[] = [];
+        lines.push("=== PAID SEASON FULL — DRY RUN PREVIEW ===");
+        lines.push(coverageBlock);
+        lines.push("");
+        if (missingWeeks.length === 0) {
+          lines.push(
+            "Every requested week already has stored odds — nothing to ingest. No paid call needed.",
+          );
+        } else {
+          lines.push(
+            `Missing weeks: ${missingWeeks.map((w) => `W${w}`).join(", ")}`,
+          );
+          lines.push(`Total credit estimate (missing weeks only): ${totalCredits}`);
+          lines.push(
+            `Per-week credit estimates: ${missingWeeks
+              .map((w) => `W${w}=${estimatedFullCreditsForWeek(w)}`)
+              .join(", ")}`,
+          );
+          if (totalCredits > ADMIN_SEASON_FULL_MAX_CREDITS) {
+            lines.push(
+              `\nABORT: total ${totalCredits} credits exceeds the safety cap (${ADMIN_SEASON_FULL_MAX_CREDITS}). ` +
+                `Shrink the week range or run paid-week-full per week.`,
+            );
+          } else {
+            lines.push(
+              `\nTo execute, type this confirmText EXACTLY: "${expectedConfirm}"`,
+            );
+            lines.push(
+              "Also required: ALLOW_REAL_ODDS_API_CALLS=true, ODDS_API_KEY set, prior paid-smoke success.",
+            );
+          }
+        }
+        const result: AdminActionResult = {
+          action: "paid-season-full",
+          ok: true,
+          status: "success",
+          summary: `Dry-run: ${missingWeeks.length} missing week(s) → ${totalCredits} credits. ${missingWeeks.length === 0 ? "Nothing to ingest." : `Confirm with: "${expectedConfirm}"`}`,
+          detail: lines.join("\n"),
+          data: {
+            mode: "dry-run",
+            season,
+            startWeek,
+            endWeek,
+            coverage,
+            missingWeeks,
+            totalCredits,
+            expectedConfirm,
+            safetyCap: ADMIN_SEASON_FULL_MAX_CREDITS,
+          },
+        };
+        recordActionResult({
+          action: "paid-season-full",
+          result: "success",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+
+      // EXECUTE path — every gate must pass before any per-
+      // week call fires.
+      if (!coverage.persistenceAvailable) {
+        return recordSkip(
+          "paid-season-full",
+          "Persistence not available — refuse to execute paid ingestion when DB is unreachable.",
+          repoRoot,
+        );
+      }
+      if (missingWeeks.length === 0) {
+        const result: AdminActionResult = {
+          action: "paid-season-full",
+          ok: true,
+          status: "success",
+          summary: `Nothing to ingest — every requested week already has stored odds.`,
+          detail: coverageBlock,
+          data: { mode: "no-op", season, startWeek, endWeek, coverage },
+        };
+        recordActionResult({
+          action: "paid-season-full",
+          result: "success",
+          summary: result.summary,
+          repoRoot,
+        });
+        return result;
+      }
+      if (totalCredits > ADMIN_SEASON_FULL_MAX_CREDITS) {
+        return recordSkip(
+          "paid-season-full",
+          `Total ${totalCredits} credits exceeds safety cap ${ADMIN_SEASON_FULL_MAX_CREDITS}. Shrink the range.`,
+          repoRoot,
+        );
+      }
+      const seasonGate = checkPaidGates({
+        confirmText: args.confirmText,
+        expectedConfirm,
+        requirePriorSmoke: true,
+        repoRoot,
+      });
+      if (seasonGate) return recordSkip("paid-season-full", seasonGate, repoRoot);
+
+      // Gates passed — loop the missing weeks. Each per-week
+      // call honors its own per-week confirmation (auto-
+      // generated here) so the per-week handler's gating
+      // still fires; the operator's single season-wide
+      // confirm authorizes the whole loop.
+      const perWeekResults: Array<{
+        week: number;
+        ok: boolean;
+        summary: string;
+        creditsUsed?: number;
+        creditsRemaining?: number | null;
+      }> = [];
+      let aborted = false;
+      let abortReason: string | undefined;
+      let creditsSpent = 0;
+      for (const week of missingWeeks) {
+        const credits = estimatedFullCreditsForWeek(week);
+        const perWeekConfirm = paidFullConfirmText(week, credits);
+        const perWeekResult = await runAdminAction({
+          action: "paid-week-full",
+          confirmText: perWeekConfirm,
+          week,
+          repoRoot,
+          spawner,
+          persistence,
+        });
+        perWeekResults.push({
+          week,
+          ok: perWeekResult.ok === true,
+          summary: perWeekResult.summary,
+          creditsUsed: perWeekResult.creditsUsed,
+          creditsRemaining: perWeekResult.creditsRemaining,
+        });
+        creditsSpent += perWeekResult.creditsUsed ?? 0;
+        if (!perWeekResult.ok) {
+          aborted = true;
+          abortReason = `W${week} failed: ${perWeekResult.summary}`;
+          break;
+        }
+        // Defensive: if the per-week response reports
+        // suspiciously-low remaining credits, abort BEFORE
+        // the next week's spend. The threshold is a safety
+        // margin — operators can rerun later when topped up.
+        const remaining = perWeekResult.creditsRemaining;
+        if (typeof remaining === "number" && remaining < 1000) {
+          aborted = true;
+          abortReason = `Remaining credits (${remaining}) below 1000 safety floor; aborting loop after W${week}.`;
+          break;
+        }
+      }
+      const successCount = perWeekResults.filter((r) => r.ok).length;
+      const lines: string[] = [];
+      lines.push("=== PAID SEASON FULL — EXECUTE RESULTS ===");
+      lines.push(coverageBlock);
+      lines.push("");
+      lines.push(`Season-wide confirm: "${expectedConfirm}"`);
+      lines.push(
+        `Per-week ingestion results (${successCount}/${perWeekResults.length} succeeded):`,
+      );
+      for (const r of perWeekResults) {
+        lines.push(
+          `  W${r.week}: ${r.ok ? "OK" : "FAIL"} · used=${r.creditsUsed ?? "?"} remaining=${r.creditsRemaining ?? "?"} · ${r.summary}`,
+        );
+      }
+      if (aborted) {
+        lines.push("");
+        lines.push(`ABORTED: ${abortReason}`);
+      }
+      lines.push("");
+      lines.push(`Total credits spent (this run): ${creditsSpent}`);
+      const ok = !aborted && successCount === perWeekResults.length;
+      const result: AdminActionResult = {
+        action: "paid-season-full",
+        ok,
+        status: ok ? "success" : "failure",
+        summary: ok
+          ? `Season ${season} W${startWeek}-W${endWeek}: ingested ${successCount}/${missingWeeks.length} missing weeks (${creditsSpent} credits spent).`
+          : `Season ${season} W${startWeek}-W${endWeek}: ingested ${successCount}/${missingWeeks.length} missing weeks before aborting. ${abortReason ?? ""}`.trim(),
+        detail: lines.join("\n"),
+        data: {
+          mode: "execute",
+          season,
+          startWeek,
+          endWeek,
+          coverage,
+          missingWeeks,
+          perWeekResults,
+          aborted,
+          abortReason,
+          creditsSpent,
+          totalCreditsEstimated: totalCredits,
+        },
+        creditsUsed: creditsSpent,
+      };
+      recordActionResult({
+        action: "paid-season-full",
         result: ok ? "success" : "failure",
         summary: result.summary,
         repoRoot,
